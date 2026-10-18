@@ -134,6 +134,7 @@ def index(request: Request) -> HTMLResponse:
             request=request,
             name="intranet_preflight.html",
             context={"intranet_origin": origin, "app_version": APP_VERSION,
+                     "app_title": settings.get("app_title") or APP_NAME,
                      "fallback_url": f"{fallback.path}?{fallback.query}"},
             headers={"Cache-Control": "no-store"},
         )

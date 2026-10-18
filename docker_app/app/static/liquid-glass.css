@@ -1260,12 +1260,8 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 .detail-head-actions.detail-action-bar { justify-content: flex-start; flex-wrap: wrap; }
 .detail-head-copy .detail-content-toggle { font-size: clamp(19px, 2vw, 27px); }
 .detail-density-control { grid-template-columns: auto minmax(80px, 140px) auto; }
-.viewer-context { position: absolute; z-index: 8; top: 14px; left: 16px; right: 16px; display: flex; gap: 16px; align-items: center; color: #fff; background: rgba(10, 17, 29, .85); padding: 10px 14px; border-radius: var(--radius-control); pointer-events: none; }
-.viewer-context strong { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.viewer-context span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .viewer-floating .secondary-button { color: #f4f7ff; background: #273c60; border: 1px solid #7285a5; }
 .viewer-floating .secondary-button:disabled { color: #c3cbd9; opacity: .65; }
-.viewer-action-row { margin-top: 10px; }
 .subscription-icon-grid { gap: 20px; }
 .subscription-sync-note { display: block; font-size: 11px; }
 .settings-groups { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
@@ -1444,10 +1440,16 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 .detail-density-control { gap: 6px; padding: 5px 8px; border-radius: var(--radius-control); grid-template-columns: auto 88px auto; font-size: 12px; }
 .source-preview-head { padding: 12px 14px; gap: 10px; }
 .source-preview-head h3 { margin: 0; font-size: 17px; }
-.viewer-context { padding: 7px 10px; font-size: 13px; border-radius: var(--radius-control); }
-.viewer-floating.viewer-floating-right { left: 50%; right: auto; top: auto; bottom: 16px; transform: translateX(-50%); display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 6px; width: max-content; max-width: calc(100% - 32px); padding: 6px; border-radius: var(--radius-card); background: rgba(10, 17, 29, .9); }
-.viewer-floating .secondary-button, .viewer-floating .primary-button { min-height: 34px; padding: 7px 10px; font-size: 12px; border-radius: var(--radius-control); }
-.viewer-floating .danger-button { margin-left: 8px; }
+.viewer-floating.viewer-floating-right { --viewer-control-size: 36px; left: auto; right: max(16px, env(safe-area-inset-right)); top: auto; bottom: max(16px, env(safe-area-inset-bottom)); transform: none; display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; width: max-content; max-width: calc(100% - 32px); padding: 6px; border: 1px solid rgba(217, 232, 255, .24); border-radius: var(--radius-card); background: rgba(18, 31, 51, .52); box-shadow: 0 4px 16px rgba(0, 8, 24, .15); backdrop-filter: blur(16px) saturate(1.15); -webkit-backdrop-filter: blur(16px) saturate(1.15); }
+.viewer-floating .secondary-button, .viewer-floating .primary-button { display: inline-flex; align-items: center; justify-content: center; height: var(--viewer-control-size); min-height: var(--viewer-control-size); margin: 0; padding: 7px 10px; font-size: 12px; line-height: 1; border-radius: var(--radius-control); }
+.viewer-floating .secondary-button { background: rgba(224, 238, 255, .09); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.viewer-floating .viewer-icon-button { width: var(--viewer-control-size); flex: 0 0 var(--viewer-control-size); padding: 0; }
+.viewer-control-icon { display: block; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.viewer-pagination { display: flex; align-items: center; gap: 4px; }
+.viewer-position { min-width: 42px; color: #edf4ff; text-align: center; font-size: 12px; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.viewer-floating .viewer-action-row { align-items: center; margin: 0; gap: 6px; }
+.viewer-floating .viewer-action-row .confirm-anchor { justify-content: center; white-space: normal; line-height: 1.25; }
+
 .heading-with-help { display: flex; align-items: center; gap: 7px; }
 .help-button { display: inline-grid; place-items: center; flex: 0 0 auto; width: 22px; height: 22px; min-height: 0; padding: 0; border: 1px solid #9cacc4; border-radius: var(--radius-control); background: transparent; color: #52698d; font-size: 12px; font-weight: 650; line-height: 1; cursor: help; box-shadow: none; }
 .help-button:hover, .help-button:focus-visible { color: #2458ba; border-color: #4266bc; background: #edf3ff; }
@@ -1479,7 +1481,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
     .workspace .density-chip input[type="range"] { width: 72px; }
     .workspace .density-chip .range-caption { display: inline; }
     .workspace .gallery-sort-label select { max-width: 170px; }
-    .viewer-floating.viewer-floating-right { bottom: max(10px, env(safe-area-inset-bottom)); flex-wrap: wrap; max-width: calc(100% - 20px); }
+    .viewer-floating.viewer-floating-right { left: auto; right: max(10px, env(safe-area-inset-right)); bottom: max(10px, env(safe-area-inset-bottom)); max-width: calc(100% - 20px); }
 }
 @media (pointer: coarse) {
     .workspace .primary-button, .workspace .secondary-button, .workspace .chip-button, .workspace .chip-button.subtle, .segmented-pill button, .sidebar-link { min-height: 44px; }
@@ -1493,3 +1495,8 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 body[data-intranet-access="local"] > .intranet-edge { display: block; }
 .intranet-current-status { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
 body[data-intranet-access="local"] .intranet-current-status { color: #167b61; }
+
+.shared-ip-line { display: grid; grid-template-columns: minmax(110px, .9fr) minmax(0, 1fr); gap: 10px; align-items: center; min-height: 36px; margin-bottom: 9px; font-size: 13px; }
+.shared-ip-line output { min-width: 0; padding: 7px 0; color: var(--muted); overflow-wrap: anywhere; }
+
+@media (pointer: coarse) { .viewer-floating.viewer-floating-right { --viewer-control-size: 44px; } }

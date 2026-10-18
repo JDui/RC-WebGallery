@@ -1,18 +1,32 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+    {% set ui_revision = app_version ~ '-network-polish-2' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>正在连接内网图库</title>
-    <link rel="stylesheet" href="/static/intranet.css?v={{ app_version }}">
+    <meta name="theme-color" content="#eaf0fb">
+    <title>正在连接内网 · {{ app_title }}</title>
+    <link rel="stylesheet" href="/static/ui-tokens.css?v={{ ui_revision }}">
+    <link rel="stylesheet" href="/static/intranet.css?v={{ ui_revision }}">
 </head>
 <body data-intranet-origin="{{ intranet_origin }}">
-    <main>
-        <h1>正在检测内网连接</h1>
-        <p role="status">连接成功后切换到内网地址；无法连接时继续访问当前地址。</p>
-        <a id="intranet-fallback" href="{{ fallback_url }}">继续访问当前地址</a>
-        <noscript><p>自动跳转需要 JavaScript，请使用上方链接继续。</p></noscript>
+    <main class="connection-card" aria-labelledby="connection-title">
+        <header class="connection-brand">
+            <span class="connection-mark" aria-hidden="true">
+                <svg viewBox="0 0 32 32" fill="none"><rect x="6" y="5" width="19" height="17" rx="4" transform="rotate(-12 16 16)"/><rect x="7" y="9" width="19" height="17" rx="4"/><path d="m9 22 5-5 4 4 3-3 3 4"/></svg>
+            </span>
+            <span>{{ app_title }}</span>
+        </header>
+        <h1 id="connection-title">正在检测内网</h1>
+        <p class="connection-copy" role="status">连接成功后自动进入图库</p>
+        <div class="connection-target">
+            <span>内网地址</span>
+            <bdi dir="ltr">{{ intranet_origin }}</bdi>
+        </div>
+        <div class="connection-progress" aria-hidden="true"><span></span></div>
+        <a class="connection-fallback" id="intranet-fallback" href="{{ fallback_url }}" title="无需等待检测，直接通过当前地址访问图库">使用当前地址<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
+        <noscript><p class="connection-notice">自动跳转需要 JavaScript，请使用上方按钮继续。</p></noscript>
     </main>
-    <script src="/static/intranet.js?v={{ app_version }}"></script>
+    <script src="/static/intranet.js?v={{ ui_revision }}"></script>
 </body>
 </html>

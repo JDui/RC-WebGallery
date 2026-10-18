@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-intranet-radius-4' %}
+    {% set ui_revision = app_version ~ '-network-polish-2' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -13,6 +13,7 @@
       }
     </script>
     <meta name="theme-color" content="#eaf0fb">
+    <link rel="stylesheet" href="/static/ui-tokens.css?v={{ ui_revision }}">
     <link rel="stylesheet" href="/static/app.css?v={{ ui_revision }}">
     <link rel="stylesheet" href="/static/liquid-glass.css?v={{ ui_revision }}">
     <script defer src="/static/app.js?v={{ ui_revision }}"></script>
@@ -34,6 +35,10 @@
             <symbol id="icon-review" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8.5 12 2.5 2.5 4.5-5"/></symbol>
             <symbol id="icon-logs" viewBox="0 0 24 24"><path d="M4 5h16l-6 7v6l-4 2v-8L4 5Z"/></symbol>
             <symbol id="icon-tasks" viewBox="0 0 24 24"><path d="m3 6 1.5 1.5L7 5M10 6h11M3 12h4M10 12h11M3 18h4M10 18h11"/></symbol>
+            <symbol id="icon-previous" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6"/></symbol>
+            <symbol id="icon-next" viewBox="0 0 24 24"><path d="m10 6 6 6-6 6"/></symbol>
+            <symbol id="icon-back" viewBox="0 0 24 24"><path d="M19 12H5m6-6-6 6 6 6"/></symbol>
+            <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
             <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></symbol>
             <symbol id="icon-settings" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2" fill="var(--surface-strong)"/><circle cx="16" cy="12" r="2" fill="var(--surface-strong)"/><circle cx="10" cy="18" r="2" fill="var(--surface-strong)"/></symbol>
         </defs>
@@ -957,6 +962,10 @@
                         <label>请求间隔(秒) <input class="ui-field" type="number" min="0" step="0.1" x-model.number="settings.site_request_sleep"></label>
                         <label>单贴文最大媒体数 <input class="ui-field" type="number" min="1" max="500" x-model.number="settings.site_max_media_per_post"></label>
                         <label>默认起始日期 <input class="ui-field" type="date" x-model="settings.site_default_start_date"></label>
+                    </article>
+
+                    <article class="settings-card proxy-settings-card" x-show="settingsGroup === 'network'" data-settings-group="network">
+                        <h4 class="heading-with-help">采集代理<button type="button" class="help-button" aria-label="采集代理说明" data-tooltip="仅用于站点解析和媒体下载，不影响浏览器访问、哔哩哔哩登录或动态拉取。代理 IP 和内网 IP 可分别配置。">?</button></h4>
                         <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.site_proxy_enabled"> 启用 Clash 代理</label>
                         <label>代理 IP <input class="ui-field" type="text" x-model="settings.site_proxy_host" placeholder="127.0.0.1"></label>
                         <label>代理端口 <input class="ui-field" type="number" min="1" max="65535" step="1" x-model.number="settings.site_proxy_port"></label>
@@ -966,9 +975,9 @@
                         <h4 class="heading-with-help">内网访问<button type="button" class="help-button" aria-label="内网访问说明" data-tooltip="设置写入 config.json；也可直接编辑该文件，刷新页面生效。默认关闭，无法直连时保留原地址。">?</button></h4>
                         <div class="intranet-current-status" data-tooltip="彩虹边缘表示当前地址为内网 IP，与自动跳转开关独立。">{{ '当前内网直连' if intranet_access == 'local' else '当前通过其他地址访问' }}</div>
                         <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.intranet_auto_redirect_enabled"> 自动跳转内网</label>
-                        <label class="toggle-row switch-row" data-tooltip="共用站点采集的代理 IP，但使用下方独立的服务端口；无需启用采集代理。"><input type="checkbox" x-model="settings.intranet_use_proxy_host"> 共用代理 IP</label>
+                        <label class="toggle-row switch-row" data-tooltip="使用本页的代理 IP，服务端口仍单独配置；取消共用后恢复独立内网 IP，原值不会丢失。"><input type="checkbox" x-model="settings.intranet_use_proxy_host"> 共用代理 IP</label>
                         <label x-show="!settings.intranet_use_proxy_host">内网 IP <input class="ui-field" type="text" x-model="settings.intranet_redirect_host" placeholder="192.168.31.221" :required="settings.intranet_auto_redirect_enabled && !settings.intranet_use_proxy_host" :disabled="settings.intranet_use_proxy_host"></label>
-                        <label x-show="settings.intranet_use_proxy_host">代理 IP <input class="ui-field" type="text" :value="settings.site_proxy_host || '未配置'" disabled aria-label="共用的代理 IP" data-tooltip="在“同步”页签的“站点同步”卡片中修改代理 IP。"></label>
+                        <div class="shared-ip-line" x-show="settings.intranet_use_proxy_host" x-cloak><span>内网 IP</span><output aria-label="共用的内网 IP" x-text="settings.site_proxy_host || '未配置'"></output></div>
                         <label>服务端口 <input class="ui-field" type="number" min="1" max="65535" step="1" x-model.number="settings.intranet_redirect_port" :required="settings.intranet_auto_redirect_enabled" data-tooltip="填写 NAS 的网页访问端口，例如 7777，与代理端口独立。"></label>
                         <label>访问协议 <select class="ui-field" x-model="settings.intranet_redirect_protocol"><option value="http">HTTP</option><option value="https">HTTPS</option></select></label>
                     </article>
@@ -1667,27 +1676,25 @@
 
         <div class="viewer-backdrop" data-testid="viewer-backdrop" data-modal-layer="viewer" role="dialog" aria-label="图片查看器" tabindex="-1" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @click.self="closeViewer()" @wheel.prevent.stop @touchmove.prevent.stop x-cloak>
             <div class="viewer-shell viewer-shell-full" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @click="viewerShellClick($event)" @wheel.prevent.stop @touchmove.prevent.stop>
-                <div class="viewer-context" role="status">
-                    <strong x-text="viewerPositionText()"></strong>
-                    <span :title="viewer.folder?.title" x-text="viewer.folder?.title || viewer.folder?.folder_name"></span>
-                </div>
-                <div class="viewer-floating viewer-floating-right" @click.stop @wheel.prevent.stop @touchmove.prevent.stop>
-                    <button class="secondary-button confirm-anchor viewer-action-button" x-show="viewer.pair?.livephoto" @click="cyclePlayback()" x-text="`播放模式: ${playbackModeLabel()}`"></button>
-                    <button class="secondary-button confirm-anchor viewer-action-button" x-show="viewer.folder?.folder_name" @click="openViewerFolder()">返回动态</button>
-                    <button class="secondary-button confirm-anchor viewer-action-button" :disabled="!canShowPreviousPair()" @click="showPreviousPair()">上一张</button>
-                    <button class="secondary-button confirm-anchor viewer-action-button" :disabled="!canShowNextPair()" @click="showNextPair()">下一张</button>
-                        <template x-if="deletePairConfirmStep < 1">
-                        <div class="button-row confirm-row viewer-action-row">
-                            <button class="secondary-button danger-button confirm-anchor viewer-action-button" @click="askDeleteViewerPair()" x-text="deletePairButtonLabel()"></button>
-                        </div>
-                        </template>
-                        <template x-if="deletePairConfirmStep >= 1">
-                        <div class="button-row confirm-row viewer-action-row viewer-action-confirm">
-                            <button class="primary-button danger-confirm confirm-anchor" @click="confirmDeleteViewerPair()">确认永久删除，不可恢复</button>
-                        </div>
-                        </template>
-                        <button class="secondary-button confirm-anchor viewer-action-button" data-modal-close @click="closeViewer()">关闭</button>
+                <div class="viewer-floating viewer-floating-right" role="toolbar" aria-label="图片操作" @click.stop @wheel.prevent.stop @touchmove.prevent.stop>
+                    <button type="button" class="secondary-button viewer-action-button" x-show="viewer.pair?.livephoto" @click="cyclePlayback()" :aria-label="`播放模式：${playbackModeLabel()}`" :data-tooltip="`播放模式：${playbackModeLabel()}，点击切换`" x-text="playbackModeLabel()"></button>
+                    <button type="button" class="secondary-button viewer-icon-button" x-show="viewer.folder?.folder_name" @click="openViewerFolder()" aria-label="返回动态" data-tooltip="返回动态"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-back"></use></svg></button>
+                    <div class="viewer-pagination" role="group" aria-label="图片翻页">
+                        <button type="button" class="secondary-button viewer-icon-button" :disabled="!canShowPreviousPair()" @click="showPreviousPair()" aria-label="上一张" data-tooltip="上一张（←）"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-previous"></use></svg></button>
+                        <span class="viewer-position" role="status" aria-label="当前图片序号" x-text="viewerPositionText()"></span>
+                        <button type="button" class="secondary-button viewer-icon-button" :disabled="!canShowNextPair()" @click="showNextPair()" aria-label="下一张" data-tooltip="下一张（→）"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-next"></use></svg></button>
                     </div>
+                    <template x-if="deletePairConfirmStep < 1">
+                        <button type="button" class="secondary-button danger-button viewer-icon-button" @click="askDeleteViewerPair()" aria-label="删除当前图片" data-tooltip="永久删除当前图片，不可恢复"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-trash"></use></svg></button>
+                    </template>
+                    <template x-if="deletePairConfirmStep >= 1">
+                        <div class="button-row confirm-row viewer-action-row viewer-action-confirm">
+                            <button type="button" class="primary-button danger-confirm confirm-anchor" @click="confirmDeleteViewerPair()">确认永久删除，不可恢复</button>
+                            <button type="button" class="secondary-button" @click="cancelDeleteViewerPair()">取消</button>
+                        </div>
+                    </template>
+                    <button type="button" class="secondary-button viewer-icon-button" data-modal-close @click="closeViewer()" aria-label="关闭" title="关闭（Esc）"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
+                </div>
                 <article class="viewer-stage-wrap" :class="{ live: viewer.pair?.livephoto, closing: viewerClosing, 'switch-left': viewerSwitchDirection === 'left', 'switch-right': viewerSwitchDirection === 'right', 'is-swapping': viewerSwapPending }" x-show="viewer.pair || viewerClosing" x-cloak>
                     <div
                         class="viewer-media stage"

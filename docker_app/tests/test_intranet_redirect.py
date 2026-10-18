@@ -100,6 +100,14 @@ def test_settings_api_and_file_share_one_source(tmp_path, monkeypatch):
     assert saved == {"app_title": "demo"}
     assert json.loads((tmp_path / "config.json").read_text())["other_setting"] == "preserved"
     assert redirect_origin(tmp_path, stored) == "http://192.168.31.222:7777"
+    independent = client.put("/api/settings", json={"intranet_use_proxy_host": False, "intranet_redirect_host": "192.168.31.221"})
+    assert independent.status_code == 200
+    assert independent.json()["site_proxy_host"] == "192.168.31.222"
+    assert redirect_origin(tmp_path, stored) == "http://192.168.31.221:7777"
+    assert client.put("/api/settings", json={"intranet_use_proxy_host": True}).status_code == 200
+    assert redirect_origin(tmp_path, stored) == "http://192.168.31.222:7777"
+    assert client.put("/api/settings", json={"intranet_use_proxy_host": False}).status_code == 200
+    assert redirect_origin(tmp_path, stored) == "http://192.168.31.221:7777"
     write_config(tmp_path, intranet_auto_redirect_enabled=False)
     assert client.get("/api/settings").json()["intranet_auto_redirect_enabled"] is False
     assert 'data-intranet-origin' not in client.get("/").text

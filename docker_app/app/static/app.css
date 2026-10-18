@@ -1,16 +1,4 @@
 :root {
-    --radius-control: 10px;
-    --radius-inset: 8px;
-    --radius-card: 12px;
-    --radius-panel: 18px;
-    --radius-control-group: calc(var(--radius-control) + 3px);
-    --radius-pill: 999px;
-    --radius-round: 50%;
-    --radius-xl: var(--radius-panel);
-    --radius-lg: var(--radius-card);
-    --radius-md: var(--radius-control);
-    --radius-sm: var(--radius-inset);
-
     --bg-base: #eef2f6;
     --bg-tint: #f6f8fb;
     --surface: rgba(255, 255, 255, 0.8);
