@@ -1056,7 +1056,7 @@ function galleryApp() {
     },
 
     settingsFingerprint() {
-      const {auth, ...values} = this.settings || {};
+      const {auth, intranet_config_error, ...values} = this.settings || {};
       return JSON.stringify([values, this.keywordText]);
     },
 
@@ -1200,6 +1200,7 @@ function galleryApp() {
         this.loadSubscriptions(),
       ]);
       this.settings = settings || {};
+      this.settingsError = settings?.intranet_config_error || "";
     },
 
     scheduleStatusRefresh() {
@@ -6429,6 +6430,7 @@ function galleryApp() {
         this.api("/api/settings/storage-stats"),
       ]);
       this.settings = settings;
+      this.settingsError = settings.intranet_config_error || "";
       document.title = settings.app_title || document.title;
       this.galleryIndexStatus = health.gallery_index || {};
       this.storageStats = storageStats.stats || {};
@@ -6560,7 +6562,7 @@ function galleryApp() {
       }
       this.settingsSaving = true;
       try {
-        const { auth, ...settingsPayload } = this.settings || {};
+        const { auth, intranet_config_error, ...settingsPayload } = this.settings || {};
         const payload = {
           ...settingsPayload,
           scheduler_enabled: Boolean(settingsPayload.scheduler_enabled),
@@ -6598,9 +6600,10 @@ function galleryApp() {
         document.title = this.settings.app_title || document.title;
         await Promise.all([this.refreshMeta(), this.loadSettings()]);
         this.scheduleIdleWork(() => this.refreshDuplicates().catch(() => {}), 500);
-        this.notify("success", "设置已保存", "新的拉取和过滤参数已经生效。");
+        this.notify("success", "设置已保存", "配置已写入，内网跳转将在下次打开或刷新页面时生效。");
       } catch (error) {
         this.settingsError = error.message || "保存失败，当前改动仍然保留，请重试";
+        if (this.settingsError.includes("内网") || this.settingsError.includes("config.json")) this.settingsGroup = "network";
         this.notify("error", "设置未保存", this.settingsError);
       } finally {
         this.settingsSaving = false;

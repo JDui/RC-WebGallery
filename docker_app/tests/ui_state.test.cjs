@@ -30,6 +30,7 @@ test('settings dirty state excludes transient authentication metadata', () => {
   const state = app(); state.settings = {app_title:'demo', auth:{ok:true}};
   state.settingsBaseline = state.settingsFingerprint();
   state.settings.auth = {ok:false}; assert.equal(state.settingsDirty(), false);
+  state.settings.intranet_config_error = "file error"; assert.equal(state.settingsDirty(), false);
   state.settings.app_title = 'changed'; assert.equal(state.settingsDirty(), true);
 });
 

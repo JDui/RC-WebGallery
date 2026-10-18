@@ -1,6 +1,6 @@
 # B 站动态相簿 BiliGalleryRC
 
-BiliGalleryRC v10.2 是一个面向个人收藏场景的 B 站动态相簿。它负责把动态图片与 Live Photo 整理到本地图库，并提供浏览、筛选、审核和后台维护能力；Web 应用位于 <code>docker_app/</code>，也可通过 Docker Compose 部署到 AMD64 NAS。
+BiliGalleryRC v10.3 是一个面向个人收藏场景的 B 站动态相簿。它负责把动态图片与 Live Photo 整理到本地图库，并提供浏览、筛选、审核和后台维护能力；Web 应用位于 <code>docker_app/</code>，也可通过 Docker Compose 部署到 AMD64 NAS。
 
 ## 功能特性
 
@@ -78,12 +78,12 @@ Compose 中的关键环境变量如下：
 
 ### AMD64 NAS 使用预构建镜像
 
-v10.2 的 AMD64 镜像包不纳入 Git 工作树。请从[项目 Releases 页面](https://github.com/JDui/bili-gallery/releases)或其他正式发布交付物取得对应版本的 tar 包和 <code>.sha256</code> 校验文件；页面上的版本和资产名称以实际发布内容为准。将取得的镜像包和 <code>docker_app/docker-compose.nas-amd64.yml</code> 复制到 NAS 后，在部署目录执行：
+v10.3 的 AMD64 镜像包不纳入 Git 工作树。请从[项目 Releases 页面](https://github.com/JDui/bili-gallery/releases)或其他正式发布交付物取得对应版本的 tar 包和 <code>.sha256</code> 校验文件；页面上的版本和资产名称以实际发布内容为准。将取得的镜像包和 <code>docker_app/docker-compose.nas-amd64.yml</code> 复制到 NAS 后，在部署目录执行：
 
 ~~~bash
-sha256sum -c zzs-bili-gallery_v10.2_amd64.tar.sha256
-docker load -i zzs-bili-gallery_v10.2_amd64.tar
-docker image inspect zzs-bili-gallery:10.2-amd64 --format '{{.Id}}'
+sha256sum -c zzs-bili-gallery_v10.3_amd64.tar.sha256
+docker load -i zzs-bili-gallery_v10.3_amd64.tar
+docker image inspect zzs-bili-gallery:10.3-amd64 --format '{{.Id}}'
 ~~~
 
 启动前必须编辑 <code>docker_app/docker-compose.nas-amd64.yml</code> 的 <code>volumes</code>。文件中的示例宿主机路径是占位配置，请改成 NAS 上真实、可写的目录，并保留容器目标路径：
@@ -111,7 +111,7 @@ NAS Compose 已将容器端口 <code>7860</code> 映射到宿主机 <code>7860</
 docker compose -f docker_app/docker-compose.nas-amd64.yml down
 
 # 载入新 tar 后重建容器
-docker load -i zzs-bili-gallery_v10.2_amd64.tar
+docker load -i zzs-bili-gallery_v10.3_amd64.tar
 docker compose -f docker_app/docker-compose.nas-amd64.yml up -d
 ~~~
 
@@ -167,7 +167,7 @@ PYTHONPATH=. .venv/bin/pytest -q
 页面审查截图使用隔离占位数据。<code>review_capture.sh</code> 当前针对 macOS 的 Lima Docker 流程：需要本机已有可运行的 <code>limactl</code>、Lima 的 <code>lima-docker</code> context、Docker、Playwright 浏览器和审查镜像；脚本会在 <code>docker_app/review/&lt;时间戳&gt;/</code> 下生成临时运行目录与截图：
 
 ~~~bash
-bash docker_app/scripts/review_capture.sh zzs-bili-gallery:10.2-amd64
+bash docker_app/scripts/review_capture.sh zzs-bili-gallery:10.3-amd64
 ~~~
 
 脚本内部调用 <code>seed_review_data.py</code>，不会读取真实 <code>storage/</code>。如果只需要生成占位数据库和媒体，可单独执行：
@@ -177,11 +177,15 @@ docker_app/.venv/bin/python docker_app/scripts/seed_review_data.py \
   --storage-root /tmp/bili-gallery-review
 ~~~
 
-当前应用版本由 <code>docker_app/app/version.py</code> 中的 <code>APP_VERSION = "10.2"</code> 定义；对应 NAS 镜像标签为 <code>zzs-bili-gallery:10.2-amd64</code>，镜像包文件名为 <code>zzs-bili-gallery_v10.2_amd64.tar</code>。
+当前应用版本由 <code>docker_app/app/version.py</code> 中的 <code>APP_VERSION = "10.3"</code> 定义；对应 NAS 镜像标签为 <code>zzs-bili-gallery:10.3-amd64</code>，镜像包文件名为 <code>zzs-bili-gallery_v10.3_amd64.tar</code>。
 
 ## 内网自动跳转
 
-应用启动时会在持久化配置目录创建 `config.json`，默认关闭。源码部署路径为 `storage/config/config.json`；NAS Compose 中为容器内的 `/storage/config/config.json`（对应你挂载的宿主机配置目录）。可参考 [配置示例](docker_app/config.example.json)：
+在“设置 → 网络 → 内网访问”中可开关自动跳转、选择共用代理 IP 或填写独立 IP、服务端口和协议，点击“保存”后写入同一份 `config.json`。默认关闭。也支持直接编辑配置文件；设置页重新打开后读取文件最新值。
+
+当前网页通过 RFC1918 IPv4 或 IPv6 ULA 地址访问时，页面四周显示彩虹边缘；该提示与自动跳转开关独立，不代表代理状态。域名访问和回环地址不显示。边缘使用静态渐变，不增加持续动画开销。
+
+应用启动时会在持久化配置目录创建 `config.json`。源码部署路径为 `storage/config/config.json`；NAS Compose 中为容器内的 `/storage/config/config.json`（对应你挂载的宿主机配置目录）。可参考 [配置示例](docker_app/config.example.json)：
 
 ```json
 {
@@ -211,3 +215,5 @@ docker_app/.venv/bin/python docker_app/scripts/seed_review_data.py \
 - 搜索、垃圾桶、订阅及设置中的文本、日期、数字和选择控件共用 `ui-field` 样式，统一边框、圆角、聚焦和禁用状态；桌面侧栏宽度缩为 236px，折叠为 72px，手机抽屉上限为 280px。桌面按钮默认 36px、分段选项 30px，取消固定按钮宽度；说明收纳到悬停提示，支持键盘聚焦、Escape 关闭及触屏点击。设置分组与保存区合并，任务、空状态和订阅卡片使用紧凑间距。
 
 前端状态及跳转分支回归可运行 `node --test docker_app/tests/ui_state.test.cjs docker_app/tests/ui_help.test.cjs`；Python 回归在 `docker_app` 目录运行 `python3 -m pytest -q`。
+
+界面圆角统一使用基础样式中的令牌：按钮和表单控件 10px、卡片 12px、外框及弹窗 18px、内嵌缩略图和标签 8px。组合按钮外框按内层圆角加内边距计算；开关、进度轨道和圆形状态点保留功能形状。

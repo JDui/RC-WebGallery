@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-compact-9' %}
+    {% set ui_revision = app_version ~ '-intranet-radius-4' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -20,7 +20,8 @@
     <script defer src="/static/liquid-glass.js?v={{ ui_revision }}"></script>
     <script defer src="/static/vendor/alpinejs.min.js?v={{ app_version }}"></script>
 </head>
-<body x-data="galleryApp()">
+<body x-data="galleryApp()" data-intranet-access="{{ intranet_access }}">
+    <div class="intranet-edge" aria-hidden="true"></div>
     <svg class="ui-icon-definitions" xmlns="http://www.w3.org/2000/svg" width="0" height="0" aria-hidden="true" focusable="false">
         <defs>
             <symbol id="icon-all" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
@@ -808,12 +809,12 @@
                 <template x-for="item in visibleTaskRuns()" :key="item.id">
                     <article class="panel-card">
                         <div class="panel-card-main">
-                            <h4 :data-tooltip="taskSummary(item)" tabindex="0" x-text="`${taskModeLabel(item.task_type)} #${item.id}`"></h4>
+                            <h4 x-text="`${taskModeLabel(item.task_type)} #${item.id}`"></h4>
                             <p x-show="['failed', 'cancelled', 'paused'].includes(item.status)" x-text="taskSummary(item)"></p>
                             <div class="inline-tags">
-                                <span class="inline-tag" :data-tooltip="item.status === 'running' ? '记录未写入结束状态，是否仍在执行请以当前任务为准。' : ''" tabindex="0" x-text="taskStatusText(item.status)"></span>
-                                <span class="inline-tag"  :title="item.created_at" x-text="`开始：${displayDate(item.created_at)}`"></span>
-                                <span class="inline-tag" x-show="item.finished_at" :title="item.finished_at" x-text="`完成：${displayDate(item.finished_at)}`"></span>
+                                <span class="inline-tag" x-text="taskStatusText(item.status)"></span>
+                                <span class="inline-tag" x-text="`开始：${displayDate(item.created_at)}`"></span>
+                                <span class="inline-tag" x-show="item.finished_at" x-text="`完成：${displayDate(item.finished_at)}`"></span>
                                 <span class="inline-tag" x-show="item.finished_at" x-text="taskDuration(item)"></span>
                             </div>
                         </div>
@@ -898,7 +899,7 @@
             <section class="panel-view settings-pane" data-testid="section-settings" x-show="currentView === 'settings'" x-cloak>
                 <div class="settings-save-bar">
                     <nav class="settings-groups" aria-label="设置分组">
-                        <template x-for="group in [{key:'sync',name:'同步',label:'同步与来源'},{key:'filter',name:'过滤',label:'过滤与重复'},{key:'media',name:'界面',label:'界面与媒体'},{key:'account',name:'账号',label:'账号'},{key:'maintenance',name:'维护',label:'维护与清理'}]" :key="group.key">
+                        <template x-for="group in [{key:'sync',name:'同步',label:'同步与来源'},{key:'network',name:'网络',label:'网络与内网访问'},{key:'filter',name:'过滤',label:'过滤与重复'},{key:'media',name:'界面',label:'界面与媒体'},{key:'account',name:'账号',label:'账号'},{key:'maintenance',name:'维护',label:'维护与清理'}]" :key="group.key">
                             <button class="chip-button" :aria-label="group.label" :data-tooltip="group.label" :aria-pressed="settingsGroup === group.key" :class="{active:settingsGroup === group.key}" @click="settingsGroup = group.key" x-text="group.name"></button>
                         </template>
                     </nav>
@@ -959,6 +960,17 @@
                         <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.site_proxy_enabled"> 启用 Clash 代理</label>
                         <label>代理 IP <input class="ui-field" type="text" x-model="settings.site_proxy_host" placeholder="127.0.0.1"></label>
                         <label>代理端口 <input class="ui-field" type="number" min="1" max="65535" step="1" x-model.number="settings.site_proxy_port"></label>
+                    </article>
+
+                    <article class="settings-card intranet-settings-card" x-show="settingsGroup === 'network'" data-settings-group="network">
+                        <h4 class="heading-with-help">内网访问<button type="button" class="help-button" aria-label="内网访问说明" data-tooltip="设置写入 config.json；也可直接编辑该文件，刷新页面生效。默认关闭，无法直连时保留原地址。">?</button></h4>
+                        <div class="intranet-current-status" data-tooltip="彩虹边缘表示当前地址为内网 IP，与自动跳转开关独立。">{{ '当前内网直连' if intranet_access == 'local' else '当前通过其他地址访问' }}</div>
+                        <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.intranet_auto_redirect_enabled"> 自动跳转内网</label>
+                        <label class="toggle-row switch-row" data-tooltip="共用站点采集的代理 IP，但使用下方独立的服务端口；无需启用采集代理。"><input type="checkbox" x-model="settings.intranet_use_proxy_host"> 共用代理 IP</label>
+                        <label x-show="!settings.intranet_use_proxy_host">内网 IP <input class="ui-field" type="text" x-model="settings.intranet_redirect_host" placeholder="192.168.31.221" :required="settings.intranet_auto_redirect_enabled && !settings.intranet_use_proxy_host" :disabled="settings.intranet_use_proxy_host"></label>
+                        <label x-show="settings.intranet_use_proxy_host">代理 IP <input class="ui-field" type="text" :value="settings.site_proxy_host || '未配置'" disabled aria-label="共用的代理 IP" data-tooltip="在“同步”页签的“站点同步”卡片中修改代理 IP。"></label>
+                        <label>服务端口 <input class="ui-field" type="number" min="1" max="65535" step="1" x-model.number="settings.intranet_redirect_port" :required="settings.intranet_auto_redirect_enabled" data-tooltip="填写 NAS 的网页访问端口，例如 7777，与代理端口独立。"></label>
+                        <label>访问协议 <select class="ui-field" x-model="settings.intranet_redirect_protocol"><option value="http">HTTP</option><option value="https">HTTPS</option></select></label>
                     </article>
 
                     <article class="settings-card thumbnail-settings-card" x-show="settingsGroup === 'media'" data-settings-group="media">

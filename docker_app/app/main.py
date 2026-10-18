@@ -31,7 +31,15 @@ from app.services.storage import StorageService
 from app.services.thumbnailer import ThumbnailService
 from app.services.task_priority import TaskPriorityCoordinator, TaskPriorityMiddleware
 from app.services.utils import format_pub_time, loads_json
-from app.services.intranet import HEALTH_HEADERS, ensure_config, redirect_origin
+from app.services.intranet import (
+    DEFAULT_CONFIG as INTRANET_DEFAULTS,
+    HEALTH_HEADERS,
+    ensure_config,
+    is_local_host,
+    read_config as read_intranet_config,
+    redirect_origin,
+    save_config as save_intranet_config,
+)
 from app.version import APP_NAME, APP_TITLE, APP_VERSION
 
 config = load_config()
@@ -136,6 +144,7 @@ def index(request: Request) -> HTMLResponse:
             "app_title": settings.get("app_title") or APP_TITLE,
             "app_name": APP_NAME,
             "app_version": APP_VERSION,
+            "intranet_access": "local" if is_local_host(request.url.hostname or "") else "external",
         },
         headers={"Cache-Control": "no-store"},
     )
@@ -1151,17 +1160,28 @@ def restore_trash(item_id: int, payload: dict[str, Any] = Body(default={})) -> d
 @app.get("/api/settings")
 def get_settings() -> dict[str, Any]:
     settings = db.get_settings()
+    try:
+        settings.update(read_intranet_config(config.config_dir))
+    except ValueError as exc:
+        settings.update(INTRANET_DEFAULTS)
+        settings["intranet_config_error"] = str(exc)
     settings["auth"] = auth.check_cookie()
     return settings
 
 
 @app.put("/api/settings")
 def update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    payload = {key: value for key, value in payload.items() if key not in {"auth"}}
+    payload = {key: value for key, value in payload.items() if key not in {"auth", "intranet_config_error"}}
+    intranet_payload = {key: payload.pop(key) for key in INTRANET_DEFAULTS if key in payload}
+    try:
+        intranet = (save_intranet_config(config.config_dir, intranet_payload, {**db.get_settings(), **payload})
+                    if intranet_payload else read_intranet_config(config.config_dir))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     settings = db.save_settings(payload)
     thumbnailer.apply_settings(settings)
     scheduler.reload()
-    return settings
+    return {**settings, **intranet}
 
 
 @app.get("/api/settings/storage-stats")
