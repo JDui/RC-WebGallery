@@ -22,6 +22,14 @@ function galleryApp() {
     selectedSubscriptionUids: [],
     searchDraft: localStorage.getItem("gallery_search_query") || "",
     searchQuery: localStorage.getItem("gallery_search_query") || "",
+    searchResultCount: null,
+    searchResultSignature: "",
+    settingsGroup: "sync",
+    settingsBaseline: "",
+    settingsSaving: false,
+    settingsError: "",
+    trashSearch: "",
+    modalFocusStack: [],
     sourceKind: ["all", "up", "site"].includes(localStorage.getItem("gallery_source_kind"))
       ? localStorage.getItem("gallery_source_kind")
       : "all",
@@ -325,6 +333,12 @@ function galleryApp() {
         this.$watch(key, () => this.$nextTick(() => window.GalleryGlass?.refresh()));
       });
       this.updateViewportMode();
+      ["detail.open", "viewer.open", "taskInspector.open", "sourcePreview.open"].forEach((key) => {
+        this.$watch(key, () => this.$nextTick(() => this.syncModalAccessibility()));
+      });
+      window.addEventListener("beforeunload", (event) => {
+        if (this.settingsDirty()) { event.preventDefault(); event.returnValue = ""; }
+      });
       this.resetSiteSourceForm();
       window.addEventListener("scroll", () => this.scheduleScrollEffects(), { passive: true });
       window.addEventListener("keydown", (event) => this.handleKeydown(event));
@@ -859,6 +873,7 @@ function galleryApp() {
     },
 
     handleKeydown(event) {
+      this.trapModalTab(event);
       if (event.key === "Escape") {
         this.handleEscape();
         return;
@@ -979,11 +994,11 @@ function galleryApp() {
       const counts = this.meta.counts || {};
       return [
         {
-          label: "全部",
+          label: "动态总数",
           value: counts.all || 0,
         },
         {
-          label: "动态",
+          label: "Live Photo",
           value: counts.livephoto || 0,
         },
         {
@@ -992,9 +1007,103 @@ function galleryApp() {
         },
         {
           label: "待审核",
-          value: this.reviewItems.length || 0,
+          value: this.sidebarCounts.review ?? (this.reviewItems.length || 0),
         },
       ];
+    },
+
+    searchSignature() {
+      return JSON.stringify([this.searchQuery, this.sourceKind, [...this.selectedSubscriptionUids].sort(),
+        this.galleryViewMode, this.sortOrder, this.timeFilterApplied.startMonth, this.timeFilterApplied.endMonth]);
+    },
+
+    searchResultText() {
+      if (this.galleryLoading || this.searchResultSignature !== this.searchSignature()) return "正在搜索…";
+      return `找到 ${this.searchResultCount ?? 0} ${this.galleryViewMode === "pair" ? "组图片" : "条动态"}`;
+    },
+
+    displayDate(value, dateOnly = false) {
+      const date = this.parseDateValue(value);
+      if (!date) return "暂无记录";
+      const options = { year: "numeric", month: "2-digit", day: "2-digit" };
+      if (!dateOnly && !/00:00:00(?:[+Z]|$)/.test(String(value))) {
+        options.hour = "2-digit";
+        options.minute = "2-digit";
+      }
+      return new Intl.DateTimeFormat("zh-CN", options).format(date);
+    },
+
+    futureDate(value) {
+      const date = this.parseDateValue(value);
+      return !!date && date.getTime() > Date.now() + 86400000;
+    },
+
+    taskStatusText(value) {
+      return ({success: "已完成", failed: "失败", running: "未结束记录", cancelled: "已取消", paused: "已暂停", queued: "等待中"})[value] || value;
+    },
+
+    taskDuration(item) {
+      const start = this.parseDateValue(item.created_at);
+      const end = this.parseDateValue(item.finished_at);
+      if (!start || !end) return "";
+      const seconds = Math.max(0, Math.round((end - start) / 1000));
+      return seconds < 60 ? `耗时 ${seconds} 秒` : `耗时 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+    },
+
+    viewerPositionText() {
+      const sequence = this.resolvedViewerSequence();
+      return `${this.currentViewerSequenceIndex(sequence) + 1} / ${sequence.length}`;
+    },
+
+    settingsFingerprint() {
+      const {auth, ...values} = this.settings || {};
+      return JSON.stringify([values, this.keywordText]);
+    },
+
+    settingsDirty() {
+      return !!this.settingsBaseline && this.settingsFingerprint() !== this.settingsBaseline;
+    },
+
+    syncModalAccessibility() {
+      const name = this.sourcePreview.open ? "source" : this.taskInspector.open ? "task" : this.viewer.open ? "viewer" : this.detail.open ? "detail" : "";
+      const active = name ? document.querySelector(`[data-modal-layer="${name}"]`) : null;
+      const stack = this.modalFocusStack;
+      let restore = null;
+      if (stack.length && stack[stack.length - 1].element !== active) {
+        const index = stack.findIndex((entry) => entry.element === active);
+        if (index >= 0 || !active) {
+          while (stack.length > Math.max(0, index + 1)) restore = stack.pop().opener;
+        } else {
+          stack.push({element: active, opener: document.activeElement});
+        }
+      } else if (active && !stack.length) {
+        stack.push({element: active, opener: document.activeElement});
+      }
+      document.querySelectorAll("[data-modal-layer]").forEach((element) => {
+        element.inert = element !== active;
+        element.setAttribute("aria-modal", element === active ? "true" : "false");
+      });
+      const shell = document.querySelector(".shell");
+      if (shell) shell.inert = !!active;
+      if (restore?.isConnected && !restore.closest("[inert]")) restore.focus({preventScroll: true});
+      else if (restore && !active) document.querySelector('.sidebar-link.active')?.focus({preventScroll: true});
+      if (active && !active.contains(document.activeElement)) {
+        (active.querySelector('[data-modal-close]') || active).focus({preventScroll: true});
+      }
+    },
+
+    trapModalTab(event) {
+      if (event.key !== "Tab") return;
+      const active = this.modalFocusStack[this.modalFocusStack.length - 1]?.element;
+      if (!active) return;
+      const elements = [...active.querySelectorAll('button, a[href], input, select, textarea, [tabindex="0"]')]
+        .filter((element) => !element.disabled && !element.closest("[inert]") && element.getClientRects().length);
+      const first = elements[0] || active;
+      const last = elements[elements.length - 1] || active;
+      if (!active.contains(document.activeElement) || (event.shiftKey ? document.activeElement === first || document.activeElement === active : document.activeElement === last || document.activeElement === active)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      }
     },
 
     searchActive() {
@@ -1004,6 +1113,8 @@ function galleryApp() {
     applySearch(query = this.searchDraft) {
       this.searchDraft = String(query || "").trim();
       this.searchQuery = this.searchDraft;
+      this.searchResultCount = null;
+      this.galleryRequestId += 1;
       this.category = "search";
       this.selectedSubscriptionUids = [];
       this.closeGalleryLayers();
@@ -1029,6 +1140,11 @@ function galleryApp() {
     clearSearch() {
       this.searchDraft = "";
       this.searchQuery = "";
+      this.searchResultCount = null;
+      this.galleryRequestId += 1;
+      this.galleryRenderToken += 1;
+      this.galleryLoading = false;
+      this.cancelGalleryBatchWork();
       localStorage.removeItem("gallery_search_query");
       this.category = "search";
       this.gallery = {
@@ -1045,7 +1161,7 @@ function galleryApp() {
 
     sidebarCount(key) {
       if (key === "search") {
-        return this.searchQuery ? this.gallery.total || 0 : "";
+        return this.searchActive() && this.searchQuery && this.searchResultSignature === this.searchSignature() ? (this.searchResultCount ?? "") : "";
       }
       if (key in (this.sidebarCounts || {})) {
         return this.sidebarCounts[key] || 0;
@@ -1211,7 +1327,7 @@ function galleryApp() {
       const shellRect = shell.getBoundingClientRect();
       const sidebarFallback = lengthValue(
         rootStyle.getPropertyValue(this.sidebarCollapsed ? "--sidebar-collapsed" : "--sidebar-width"),
-        this.sidebarCollapsed ? 88 : 292,
+        this.sidebarCollapsed ? 72 : 236,
       );
       const sidebarWidth = lengthValue((shellStyle.gridTemplateColumns || "").split(" ")[0], sidebarFallback);
       const insetTop = Math.round(Math.max(12, lengthValue(shellStyle.paddingTop, 20)));
@@ -1669,9 +1785,7 @@ function galleryApp() {
 
     galleryDensityCaption() {
       const count = this.resolveGalleryColumns();
-      return this.galleryViewMode === "pair"
-        ? `每行约显示 ${count} 组图片，系统会按可用宽度自适应排布`
-        : `每行约显示 ${count} 个动态，系统会按可用宽度自适应排布`;
+      return `期望 ${this.galleryColumnCount} 列，当前窗口 ${count} 列`;
     },
 
     detailContentText() {
@@ -1736,7 +1850,7 @@ function galleryApp() {
     },
 
     setTimeSortMode(mode) {
-      if (!["desc", "asc", "random"].includes(mode)) {
+      if (!["desc", "asc", "random", "imported"].includes(mode)) {
         return;
       }
       this.timeSortMode = mode;
@@ -1858,13 +1972,14 @@ function galleryApp() {
         return haystack.includes(query);
       });
       const valueFor = (item, key) => {
+        if (key === "recent") return this.parseDateValue(item.latest_content_at || item.latest_content_ts)?.getTime() || 0;
         if (key === "posts") return Number(item.folder_count || item.post_count || 0);
         if (key === "assets") return this.subscriptionImageTotal(item);
         return String(item.uname || item.name || item.uid || "").toLowerCase();
       };
       return [...items].sort((left, right) => {
         const mode = this.subscriptionOverviewSort;
-        if (mode === "posts" || mode === "assets") {
+        if (mode === "posts" || mode === "assets" || mode === "recent") {
           return valueFor(right, mode) - valueFor(left, mode);
         }
         return String(valueFor(left, "name")).localeCompare(String(valueFor(right, "name")), "zh-Hans-CN");
@@ -1898,21 +2013,17 @@ function galleryApp() {
     },
 
     subscriptionOverviewDateText(item) {
-      return this.formatDateYMD(item?.latest_content_at || item?.latest_content_ts) || "----/--/--";
+      return `最新内容：${this.formatDateYMD(item?.latest_content_at || item?.latest_content_ts) || "暂无"}`;
     },
 
     subscriptionOverviewDateStyle(item) {
-      const contentDate = this.parseDateValue(item?.latest_content_at || item?.latest_content_ts);
-      const pullDate = this.parseDateValue(this.latestSubscriptionPullAt || item?.latest_pull_at || item?.updated_at);
-      if (!contentDate || !pullDate) {
-        return "color: rgba(102, 115, 134, 0.48);";
-      }
-      const dayMs = 24 * 60 * 60 * 1000;
-      const contentDay = new Date(contentDate.getFullYear(), contentDate.getMonth(), contentDate.getDate()).getTime();
-      const pullDay = new Date(pullDate.getFullYear(), pullDate.getMonth(), pullDate.getDate()).getTime();
-      const ageDays = Math.max(0, (pullDay - contentDay) / dayMs);
-      const alpha = Math.max(0.3, 0.92 - Math.min(ageDays / 180, 1) * 0.62);
-      return `color: rgba(21, 29, 42, ${alpha.toFixed(2)});`;
+      return this.futureDate(item?.latest_content_at || item?.latest_content_ts) ? "color: #934112" : "color: var(--muted)";
+    },
+
+    subscriptionSyncText(item) {
+      if (item.status === "paused" || item.enabled === false) return "已暂停";
+      const value = item.latest_pull_at || item.last_sync_at;
+      return value ? `最近同步：${this.displayDate(value)}` : "单源同步时间未记录";
     },
 
     subscriptionImageTotal(item) {
@@ -2096,10 +2207,15 @@ function galleryApp() {
       if (this.category === "search" && this.searchQuery) {
         params.set("search_query", this.searchQuery);
       }
+      const searchSignature = this.searchActive() ? this.searchSignature() : "";
       const localCacheKey = this.galleryLocalCacheKey(params);
       if (reset && page === 1) {
         const cached = this.readLocalGalleryCache(localCacheKey);
         if (cached) {
+          if (searchSignature) {
+            this.searchResultSignature = searchSignature;
+            this.searchResultCount = Number(cached.total || 0);
+          }
           this.applyGalleryPagePayload({ ...cached, cache_pending_refresh: true }, page, "replace", renderToken);
           this.galleryLoading = false;
         }
@@ -2108,6 +2224,10 @@ function galleryApp() {
         const payload = await this.api(`/api/gallery/items?${params.toString()}`);
         if (requestId !== this.galleryRequestId) {
           return;
+        }
+        if (searchSignature && this.searchActive() && searchSignature === this.searchSignature()) {
+          this.searchResultSignature = searchSignature;
+          this.searchResultCount = Number(payload.total || 0);
         }
         this.writeLocalGalleryCache(localCacheKey, payload);
         this.applyGalleryPagePayload(payload, page, reset ? "replace" : direction, renderToken);
@@ -2556,21 +2676,9 @@ function galleryApp() {
       this.closeGalleryLayers();
       this.timeFilterOpen = false;
       this.scrollViewTop();
-      if (category === "search") {
-        this.searchDraft = "";
-        this.searchQuery = "";
-        localStorage.removeItem("gallery_search_query");
-        this.gallery = {
-          ...this.gallery,
-          items: [],
-          total: 0,
-          page: 1,
-          total_pages: 1,
-          view_mode: this.galleryViewMode,
-        };
-        this.gallerySkeletonCount = 0;
+      if (category === "search" && !this.searchQuery) {
+        this.clearSearch();
         this.displayedGalleryViewMode = this.galleryViewMode;
-        this.scheduleIdleWork(() => this.refreshSidebarCounts([category]).catch(() => {}), 800);
         return;
       }
       this.refreshGalleryImmediately(true);
@@ -3729,6 +3837,7 @@ function galleryApp() {
         desc: "时间倒序",
         asc: "时间正序",
         random: "随机时间",
+        imported: "最近入库",
       }[this.timeSortMode] || "时间倒序";
     },
 
@@ -5575,6 +5684,8 @@ function galleryApp() {
     trashGroups() {
       const groups = new Map();
       for (const item of this.trashItems || []) {
+        const query = this.trashSearch.trim().toLowerCase();
+        if (query && ![item.folder_name, item.folder?.title, item.subscription_name, item.deleted_at].join(" ").toLowerCase().includes(query)) continue;
         const key = this.trashGroupKey(item);
         const uid = String(item?.subscription_uid || "").trim();
         const name = String(item?.subscription_name || "").trim()
@@ -6102,16 +6213,16 @@ function galleryApp() {
 
     cardPrimaryText(item) {
       if (this.isSiteGalleryItem(item)) {
-        return this.truncateCardText(item.title || item.folder_name || "");
+        return item.title || item.folder_name || "";
       }
-      return this.truncateCardText(item.text_prefix || item.title || item.folder_name || "");
+      return item.text_prefix || item.title || item.folder_name || "";
     },
 
     cardSecondaryText(item) {
       if (this.isSiteGalleryItem(item)) {
         return this.truncateCardText(item.text_prefix || item.folder_name || "");
       }
-      return this.truncateCardText(item.title || item.folder_name || "");
+      return item.title || item.folder_name || "";
     },
 
     isSiteGalleryItem(item) {
@@ -6311,6 +6422,7 @@ function galleryApp() {
     },
 
     async loadSettings() {
+      if (this.settingsDirty()) return;
       const [settings, health, storageStats] = await Promise.all([
         this.api("/api/settings"),
         this.api("/api/health"),
@@ -6321,6 +6433,7 @@ function galleryApp() {
       this.galleryIndexStatus = health.gallery_index || {};
       this.storageStats = storageStats.stats || {};
       this.keywordText = (this.settings.ad_filter_keywords || []).join("\n");
+      this.settingsBaseline = this.settingsFingerprint();
       this.lazyLoaded.settings = true;
     },
 
@@ -6384,6 +6497,10 @@ function galleryApp() {
       if (/^\d+$/.test(raw)) {
         return this.parseDateValue(Number(raw));
       }
+      if (/[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/.test(raw)) {
+        const zoned = new Date(raw.replace(" ", "T"));
+        return Number.isNaN(zoned.getTime()) ? null : zoned;
+      }
       const match = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
       if (match) {
         const date = new Date(
@@ -6432,43 +6549,62 @@ function galleryApp() {
     },
 
     async saveSettings() {
-      const { auth, ...settingsPayload } = this.settings || {};
-      const payload = {
-        ...settingsPayload,
-        scheduler_enabled: Boolean(settingsPayload.scheduler_enabled),
-        scheduler_interval_hours: Math.max(1, Number(settingsPayload.scheduler_interval_hours) || 12),
-        site_scheduler_enabled: Boolean(settingsPayload.site_scheduler_enabled),
-        site_scheduler_interval_hours: Math.max(1, Number(settingsPayload.site_scheduler_interval_hours) || 12),
-        site_request_timeout: Math.max(30, Math.min(900, Number(settingsPayload.site_request_timeout) || 300)),
-        site_request_sleep: Math.max(0, Number(settingsPayload.site_request_sleep) || 0),
-        site_max_media_per_post: Math.max(1, Math.min(500, Number(settingsPayload.site_max_media_per_post) || 100)),
-        site_proxy_enabled: Boolean(settingsPayload.site_proxy_enabled),
-        site_proxy_host: String(settingsPayload.site_proxy_host || "127.0.0.1").trim() || "127.0.0.1",
-        site_proxy_port: Math.max(1, Math.min(65535, Number(settingsPayload.site_proxy_port) || 7890)),
-        review_source_open_mode: settingsPayload.review_source_open_mode === "popup" ? "popup" : "browser",
-        duplicate_image_threshold: Math.max(1, Math.min(100, Number(settingsPayload.duplicate_image_threshold) || 2)),
-        app_title: String(settingsPayload.app_title || "BiliGalleryRC").trim() || "BiliGalleryRC",
-        thumb_edge: Math.max(128, Math.min(2048, Number(settingsPayload.thumb_edge) || 576)),
-        thumb_quality: Math.max(1, Math.min(100, Number(settingsPayload.thumb_quality) || 68)),
-        small_thumb_edge: Math.max(64, Math.min(1024, Number(settingsPayload.small_thumb_edge) || 192)),
-        small_thumb_quality: Math.max(1, Math.min(100, Number(settingsPayload.small_thumb_quality) || 48)),
-        tiny_thumb_edge: Math.max(16, Math.min(512, Number(settingsPayload.tiny_thumb_edge) || 32)),
-        tiny_thumb_quality: Math.max(1, Math.min(100, Number(settingsPayload.tiny_thumb_quality) || 28)),
-        ad_filter_keywords: this.keywordText
-          .split("\n")
-          .map((item) => item.trim())
-          .filter(Boolean),
-      };
-      this.notify("info", "正在保存设置", "前端已保留当前改动，后台正在写入。");
-      const savedSettings = await this.api("/api/settings", {
-        method: "PUT",
-        body: JSON.stringify(payload),
-      });
-      this.settings = { ...savedSettings, auth: auth || this.settings.auth };
-      document.title = this.settings.app_title || document.title;
-      await Promise.all([this.refreshMeta(), this.loadSettings()]);
-      this.scheduleIdleWork(() => this.refreshDuplicates().catch(() => {}), 500);
-      this.notify("success", "设置已保存", "新的拉取和过滤参数已经生效。");
+      if (this.settingsSaving) return;
+      this.settingsError = "";
+      const invalid = [...document.querySelectorAll('.settings-pane input')].find((input) => !input.checkValidity());
+      if (invalid) {
+        this.settingsError = `${invalid.closest('label')?.textContent?.trim() || '字段'}：请输入有效范围内的数值`;
+        this.settingsGroup = invalid.closest('[data-settings-group]')?.dataset.settingsGroup || this.settingsGroup;
+        this.$nextTick(() => invalid.reportValidity());
+        return;
+      }
+      this.settingsSaving = true;
+      try {
+        const { auth, ...settingsPayload } = this.settings || {};
+        const payload = {
+          ...settingsPayload,
+          scheduler_enabled: Boolean(settingsPayload.scheduler_enabled),
+          scheduler_interval_hours: Math.max(1, Number(settingsPayload.scheduler_interval_hours) || 12),
+          site_scheduler_enabled: Boolean(settingsPayload.site_scheduler_enabled),
+          site_scheduler_interval_hours: Math.max(1, Number(settingsPayload.site_scheduler_interval_hours) || 12),
+          site_request_timeout: Math.max(30, Math.min(900, Number(settingsPayload.site_request_timeout) || 300)),
+          site_request_sleep: Math.max(0, Number(settingsPayload.site_request_sleep) || 0),
+          site_max_media_per_post: Math.max(1, Math.min(500, Number(settingsPayload.site_max_media_per_post) || 100)),
+          site_proxy_enabled: Boolean(settingsPayload.site_proxy_enabled),
+          site_proxy_host: String(settingsPayload.site_proxy_host || "127.0.0.1").trim() || "127.0.0.1",
+          site_proxy_port: Math.max(1, Math.min(65535, Number(settingsPayload.site_proxy_port) || 7890)),
+          review_source_open_mode: settingsPayload.review_source_open_mode === "popup" ? "popup" : "browser",
+          duplicate_image_threshold: Math.max(1, Math.min(100, Number(settingsPayload.duplicate_image_threshold) || 2)),
+          app_title: String(settingsPayload.app_title || "BiliGalleryRC").trim() || "BiliGalleryRC",
+          thumb_edge: Math.max(128, Math.min(2048, Number(settingsPayload.thumb_edge) || 576)),
+          thumb_quality: Math.max(1, Math.min(100, Number(settingsPayload.thumb_quality) || 68)),
+          small_thumb_edge: Math.max(64, Math.min(1024, Number(settingsPayload.small_thumb_edge) || 192)),
+          small_thumb_quality: Math.max(1, Math.min(100, Number(settingsPayload.small_thumb_quality) || 48)),
+          tiny_thumb_edge: Math.max(16, Math.min(512, Number(settingsPayload.tiny_thumb_edge) || 32)),
+          tiny_thumb_quality: Math.max(1, Math.min(100, Number(settingsPayload.tiny_thumb_quality) || 28)),
+          ad_filter_keywords: this.keywordText
+            .split("\n")
+            .map((item) => item.trim())
+            .filter(Boolean),
+        };
+        this.notify("info", "正在保存设置", "前端已保留当前改动，后台正在写入。");
+        const savedSettings = await this.api("/api/settings", {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        this.settings = { ...savedSettings, auth: auth || this.settings.auth };
+        this.keywordText = (this.settings.ad_filter_keywords || []).join("\n");
+        this.settingsBaseline = this.settingsFingerprint();
+        document.title = this.settings.app_title || document.title;
+        await Promise.all([this.refreshMeta(), this.loadSettings()]);
+        this.scheduleIdleWork(() => this.refreshDuplicates().catch(() => {}), 500);
+        this.notify("success", "设置已保存", "新的拉取和过滤参数已经生效。");
+      } catch (error) {
+        this.settingsError = error.message || "保存失败，当前改动仍然保留，请重试";
+        this.notify("error", "设置未保存", this.settingsError);
+      } finally {
+        this.settingsSaving = false;
+      }
     },
 
     validateButtonLabel() {

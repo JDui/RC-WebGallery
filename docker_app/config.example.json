@@ -1,0 +1,7 @@
+{
+  "intranet_auto_redirect_enabled": false,
+  "intranet_use_proxy_host": false,
+  "intranet_redirect_host": "192.168.31.221",
+  "intranet_redirect_port": 7777,
+  "intranet_redirect_protocol": "http"
+}

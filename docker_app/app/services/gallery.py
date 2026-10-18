@@ -335,6 +335,7 @@ class GalleryService:
             "folder_name": folder["folder_name"],
             "title": folder.get("title") or folder["folder_name"],
             "text_prefix": folder.get("text_prefix") or "",
+            "imported_at": folder.get("created_at"),
             "pub_time": folder.get("pub_time"),
             "pub_ts": int(folder.get("pub_ts") or 0),
             "top_dynamic_id": folder.get("top_dynamic_id"),
@@ -472,7 +473,7 @@ class GalleryService:
                 reverse = sort_order != "asc"
                 items.sort(
                     key=lambda item: (
-                        int(item.get("pub_ts") or 0),
+                        str(item.get("imported_at") or "") if sort_order == "imported" else int(item.get("pub_ts") or 0),
                         str(item.get("folder_name") or item.get("item_key") or ""),
                         int(item.get("pair_index") or 0),
                     ),
@@ -540,7 +541,7 @@ class GalleryService:
             reverse = sort_order != "asc"
             sorted_folders = sorted(
                 folders,
-                key=lambda folder: (int(folder.get("pub_ts") or 0), str(folder.get("folder_name") or "")),
+                key=lambda folder: (str(folder.get("created_at") or "") if sort_order == "imported" else int(folder.get("pub_ts") or 0), str(folder.get("folder_name") or "")),
                 reverse=reverse,
             )
         for folder in sorted_folders:
@@ -557,6 +558,7 @@ class GalleryService:
                         "folder_name": folder["folder_name"],
                         "pair_index": pair["pair_index"],
                         "title": folder.get("title") or folder["folder_name"],
+                        "imported_at": folder.get("created_at"),
                         "pub_time": folder.get("pub_time"),
                         "pub_ts": int(folder.get("pub_ts") or 0),
                         "subscription_uid": str(folder.get("subscription_uid") or ""),

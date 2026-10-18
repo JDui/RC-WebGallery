@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>正在连接内网图库</title>
+    <link rel="stylesheet" href="/static/intranet.css?v={{ app_version }}">
+</head>
+<body data-intranet-origin="{{ intranet_origin }}">
+    <main>
+        <h1>正在检测内网连接</h1>
+        <p role="status">连接成功后切换到内网地址；无法连接时继续访问当前地址。</p>
+        <a id="intranet-fallback" href="{{ fallback_url }}">继续访问当前地址</a>
+        <noscript><p>自动跳转需要 JavaScript，请使用上方链接继续。</p></noscript>
+    </main>
+    <script src="/static/intranet.js?v={{ app_version }}"></script>
+</body>
+</html>

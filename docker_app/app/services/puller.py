@@ -1514,6 +1514,7 @@ class PullManager:
                 "events": self._runtime_events(),
             }
             self.db.finish_task_run(task_id, "success", "图库整理完成", details)
+            self.db.refresh_sidebar_count_cache()
             self._status = {"running": False, "message": "图库已就绪", "mode": "idle", "stats": details}
         except Exception as exc:
             self.db.set_gallery_index_rebuilding(False)

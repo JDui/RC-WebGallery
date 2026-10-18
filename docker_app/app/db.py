@@ -2552,6 +2552,9 @@ class Database:
         )
         random_order = sort_order == "random"
         order_direction = "asc" if sort_order == "asc" else "desc"
+        order_column = "pub_ts"
+        if sort_order == "imported":
+            order_column = "(select created_at from folders where folders.folder_name = folder_index.folder_name)"
         offset = max(page - 1, 0) * page_size
         with self.connect() as conn:
             total = int(
@@ -2580,7 +2583,7 @@ class Database:
                     select *
                     from folder_index
                     where {where_sql}
-                    order by pub_ts {order_direction}, folder_name {order_direction}
+                    order by {order_column} {order_direction}, folder_name {order_direction}
                     limit ? offset ?
                     """,
                     [*params, int(page_size), int(offset)],
@@ -2615,6 +2618,9 @@ class Database:
         )
         random_order = sort_order == "random"
         order_direction = "asc" if sort_order == "asc" else "desc"
+        order_column = "pub_ts"
+        if sort_order == "imported":
+            order_column = "(select created_at from folders where folders.folder_name = pair_index.folder_name)"
         offset = max(page - 1, 0) * page_size
         with self.connect() as conn:
             total = int(
@@ -2643,7 +2649,7 @@ class Database:
                     select *
                     from pair_index
                     where {where_sql}
-                    order by pub_ts {order_direction}, folder_name {order_direction}, pair_index asc
+                    order by {order_column} {order_direction}, folder_name {order_direction}, pair_index asc
                     limit ? offset ?
                     """,
                     [*params, int(page_size), int(offset)],

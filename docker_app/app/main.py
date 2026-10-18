@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import requests
@@ -31,6 +31,7 @@ from app.services.storage import StorageService
 from app.services.thumbnailer import ThumbnailService
 from app.services.task_priority import TaskPriorityCoordinator, TaskPriorityMiddleware
 from app.services.utils import format_pub_time, loads_json
+from app.services.intranet import HEALTH_HEADERS, ensure_config, redirect_origin
 from app.version import APP_NAME, APP_TITLE, APP_VERSION
 
 config = load_config()
@@ -78,6 +79,7 @@ class CacheControlStaticFiles(StaticFiles):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     storage.ensure()
+    ensure_config(config.config_dir)
     db.init()
     thumbnailer.apply_settings(db.get_settings())
     scheduler.start()
@@ -113,15 +115,40 @@ app.mount(
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request) -> HTMLResponse:
     settings = db.get_settings()
+    origin = redirect_origin(config.config_dir, settings)
+    target = urlparse(origin or "")
+    current_port = request.url.port or (443 if request.url.scheme == "https" else 80)
+    target_port = target.port or (443 if target.scheme == "https" else 80)
+    is_target = request.url.scheme == target.scheme and request.url.hostname == target.hostname and current_port == target_port
+    if origin and not is_target and request.query_params.get("_gallery_skip_intranet") != "1":
+        fallback = request.url.include_query_params(_gallery_skip_intranet="1")
+        return templates.TemplateResponse(
+            request=request,
+            name="intranet_preflight.html",
+            context={"intranet_origin": origin, "app_version": APP_VERSION,
+                     "fallback_url": f"{fallback.path}?{fallback.query}"},
+            headers={"Cache-Control": "no-store"},
+        )
     return templates.TemplateResponse(
-        "index.html",
-        {
-            "request": request,
+        request=request,
+        name="index.html",
+        context={
             "app_title": settings.get("app_title") or APP_TITLE,
             "app_name": APP_NAME,
             "app_version": APP_VERSION,
         },
+        headers={"Cache-Control": "no-store"},
     )
+
+
+@app.get("/intranet/health")
+def intranet_health() -> JSONResponse:
+    return JSONResponse({"ok": True, "service": "biligalleryrc"}, headers=HEALTH_HEADERS)
+
+
+@app.options("/intranet/health")
+def intranet_health_options() -> Response:
+    return Response(status_code=204, headers=HEALTH_HEADERS)
 
 
 @app.get("/api/health")

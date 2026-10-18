@@ -18,6 +18,7 @@ LivePhoto/downloaded/
 storage/
 
 # Build/review artifacts
+/temp/
 docker_app/dist/
 docker_app/review/
 

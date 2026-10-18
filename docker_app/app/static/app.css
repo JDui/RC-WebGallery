@@ -18,18 +18,18 @@
     --shadow-soft: 0 1px 1px rgba(18, 28, 45, 0.04), 0 18px 48px rgba(47, 62, 82, 0.12);
     --shadow-card: 0 1px 1px rgba(18, 28, 45, 0.05), 0 14px 34px rgba(55, 70, 91, 0.11);
     --shadow-lift: 0 2px 4px rgba(18, 28, 45, 0.06), 0 24px 52px rgba(46, 61, 82, 0.16);
-    --sidebar-width: 292px;
-    --sidebar-collapsed: 88px;
+    --sidebar-width: 236px;
+    --sidebar-collapsed: 72px;
     --radius-xl: 20px;
     --radius-lg: 14px;
     --radius-md: 10px;
     --radius-card: 8px;
-    --content-button-height: 44px;
-    --content-button-padding-x: 15px;
-    --content-button-gap: 10px;
-    --content-button-font-size: 14px;
-    --confirm-slot-width: clamp(152px, 18vw, 212px);
-    --confirm-slot-wide-width: clamp(208px, 28vw, 284px);
+    --content-button-height: 36px;
+    --content-button-padding-x: 12px;
+    --content-button-gap: 8px;
+    --content-button-font-size: 13px;
+    --confirm-slot-width: 0px;
+    --confirm-slot-wide-width: 0px;
     --layout-sidebar-left: 20px;
     --layout-sidebar-top: 20px;
     --layout-sidebar-width: var(--sidebar-width);
@@ -4029,7 +4029,7 @@ html.is-interacting .detail-thumb::before {
         top: 14px;
         left: 14px;
         z-index: 24;
-        width: min(84vw, 340px);
+        width: min(84vw, 280px);
         height: calc(100dvh - 28px);
         max-height: calc(100vh - 28px);
         transform: translateX(calc(-100% - 20px));
@@ -4251,7 +4251,7 @@ html.is-interacting .detail-thumb::before {
     .shell.compact-layout .sidebar {
         top: 12px;
         left: 12px;
-        width: calc(100vw - 24px);
+        width: min(280px, calc(100vw - 24px));
         height: calc(100dvh - 24px);
         max-height: calc(100vh - 24px);
         padding: 16px 14px;
@@ -4475,8 +4475,8 @@ html.is-interacting .detail-thumb::before {
         --content-button-padding-x: 12px;
         --content-button-gap: 8px;
         --content-button-font-size: 13px;
-        --confirm-slot-width: clamp(144px, 42vw, 196px);
-        --confirm-slot-wide-width: clamp(188px, 54vw, 240px);
+        --confirm-slot-width: 0px;
+        --confirm-slot-wide-width: 0px;
     }
 
     .detail-action-bar .secondary-button,

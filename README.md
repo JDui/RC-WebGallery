@@ -1,6 +1,6 @@
 # B 站动态相簿 BiliGalleryRC
 
-BiliGalleryRC v10.1 是一个面向个人收藏场景的 B 站动态相簿。它负责把动态图片与 Live Photo 整理到本地图库，并提供浏览、筛选、审核和后台维护能力；Web 应用位于 <code>docker_app/</code>，也可通过 Docker Compose 部署到 AMD64 NAS。
+BiliGalleryRC v10.2 是一个面向个人收藏场景的 B 站动态相簿。它负责把动态图片与 Live Photo 整理到本地图库，并提供浏览、筛选、审核和后台维护能力；Web 应用位于 <code>docker_app/</code>，也可通过 Docker Compose 部署到 AMD64 NAS。
 
 ## 功能特性
 
@@ -78,12 +78,12 @@ Compose 中的关键环境变量如下：
 
 ### AMD64 NAS 使用预构建镜像
 
-v10.1 的 AMD64 镜像包不纳入 Git 工作树。请从[项目 Releases 页面](https://github.com/JDui/bili-gallery/releases)或其他正式发布交付物取得对应版本的 tar 包和 <code>.sha256</code> 校验文件；页面上的版本和资产名称以实际发布内容为准。将取得的镜像包和 <code>docker_app/docker-compose.nas-amd64.yml</code> 复制到 NAS 后，在部署目录执行：
+v10.2 的 AMD64 镜像包不纳入 Git 工作树。请从[项目 Releases 页面](https://github.com/JDui/bili-gallery/releases)或其他正式发布交付物取得对应版本的 tar 包和 <code>.sha256</code> 校验文件；页面上的版本和资产名称以实际发布内容为准。将取得的镜像包和 <code>docker_app/docker-compose.nas-amd64.yml</code> 复制到 NAS 后，在部署目录执行：
 
 ~~~bash
-sha256sum -c zzs-bili-gallery_v10.1_amd64.tar.sha256
-docker load -i zzs-bili-gallery_v10.1_amd64.tar
-docker image inspect zzs-bili-gallery:10.1-amd64 --format '{{.Id}}'
+sha256sum -c zzs-bili-gallery_v10.2_amd64.tar.sha256
+docker load -i zzs-bili-gallery_v10.2_amd64.tar
+docker image inspect zzs-bili-gallery:10.2-amd64 --format '{{.Id}}'
 ~~~
 
 启动前必须编辑 <code>docker_app/docker-compose.nas-amd64.yml</code> 的 <code>volumes</code>。文件中的示例宿主机路径是占位配置，请改成 NAS 上真实、可写的目录，并保留容器目标路径：
@@ -111,7 +111,7 @@ NAS Compose 已将容器端口 <code>7860</code> 映射到宿主机 <code>7860</
 docker compose -f docker_app/docker-compose.nas-amd64.yml down
 
 # 载入新 tar 后重建容器
-docker load -i zzs-bili-gallery_v10.1_amd64.tar
+docker load -i zzs-bili-gallery_v10.2_amd64.tar
 docker compose -f docker_app/docker-compose.nas-amd64.yml up -d
 ~~~
 
@@ -167,7 +167,7 @@ PYTHONPATH=. .venv/bin/pytest -q
 页面审查截图使用隔离占位数据。<code>review_capture.sh</code> 当前针对 macOS 的 Lima Docker 流程：需要本机已有可运行的 <code>limactl</code>、Lima 的 <code>lima-docker</code> context、Docker、Playwright 浏览器和审查镜像；脚本会在 <code>docker_app/review/&lt;时间戳&gt;/</code> 下生成临时运行目录与截图：
 
 ~~~bash
-bash docker_app/scripts/review_capture.sh zzs-bili-gallery:10.1-amd64
+bash docker_app/scripts/review_capture.sh zzs-bili-gallery:10.2-amd64
 ~~~
 
 脚本内部调用 <code>seed_review_data.py</code>，不会读取真实 <code>storage/</code>。如果只需要生成占位数据库和媒体，可单独执行：
@@ -177,4 +177,37 @@ docker_app/.venv/bin/python docker_app/scripts/seed_review_data.py \
   --storage-root /tmp/bili-gallery-review
 ~~~
 
-当前应用版本由 <code>docker_app/app/version.py</code> 中的 <code>APP_VERSION = "10.1"</code> 定义；对应 NAS 镜像标签为 <code>zzs-bili-gallery:10.1-amd64</code>，镜像包文件名为 <code>zzs-bili-gallery_v10.1_amd64.tar</code>。
+当前应用版本由 <code>docker_app/app/version.py</code> 中的 <code>APP_VERSION = "10.2"</code> 定义；对应 NAS 镜像标签为 <code>zzs-bili-gallery:10.2-amd64</code>，镜像包文件名为 <code>zzs-bili-gallery_v10.2_amd64.tar</code>。
+
+## 内网自动跳转
+
+应用启动时会在持久化配置目录创建 `config.json`，默认关闭。源码部署路径为 `storage/config/config.json`；NAS Compose 中为容器内的 `/storage/config/config.json`（对应你挂载的宿主机配置目录）。可参考 [配置示例](docker_app/config.example.json)：
+
+```json
+{
+  "intranet_auto_redirect_enabled": false,
+  "intranet_use_proxy_host": false,
+  "intranet_redirect_host": "192.168.31.221",
+  "intranet_redirect_port": 7777,
+  "intranet_redirect_protocol": "http"
+}
+```
+
+- `intranet_auto_redirect_enabled`：改为 `true` 开启，改回 `false` 关闭。配置文件在每次打开或刷新页面时重新读取，不需要重启；已经打开的页面不会被强制跳转。
+- `intranet_use_proxy_host`：为 `true` 时共用设置页“代理 IP”的值，忽略 `intranet_redirect_host`。只共用 IP；仍使用 `intranet_redirect_port`，不会使用代理端口，也不要求启用站点采集代理。
+- `intranet_redirect_host`：独立设置目标 NAS 的内网 IP；支持 RFC1918 IPv4 和 IPv6 ULA。不能填写带协议、路径或端口的 URL，不能填写容器回环地址 `127.0.0.1`。
+- `intranet_redirect_port` 与 `intranet_redirect_protocol`：填写内网访问时实际使用的服务端口和 `http` / `https`。
+
+从其他地址访问时，浏览器先用无 Cookie 的健康探测确认目标是本应用，成功后保留路径、查询参数和锚点切换地址。已在目标内网地址时不会重复跳转。无法连接、服务身份不匹配或超过 1.5 秒时继续当前地址；配置缺失、格式无效或关闭时直接正常加载。仅健康探测接口允许跨域，不扩大业务 API 的跨域权限。
+
+浏览器可能限制从 HTTPS 页面探测 HTTP 内网或要求本地网络权限；被阻止时会继续使用原地址，不绕过浏览器保护。该功能不会修改系统代理、Clash 规则或 NAS 采集代理。不同访问地址的浏览器本地偏好独立保存，当前搜索、视图等未编码进 URL 的状态不会跨地址迁移。
+
+## 页面体验修正
+
+- 顶部明确区分动态总数与 Live Photo；搜索命中数独立于当前图库，结果页改用紧凑布局，并提供“最近入库”排序和未来来源日期提示，保留原始日期。
+- 图库与图片入口可使用键盘操作，详情和查看器提供对话框语义、焦点约束及返回焦点；查看器显示序号和所属动态。
+- 任务徽标表示运行及等待任务，历史列表使用中文状态和可读时间；垃圾桶明确说明文件清理、解除拦截与重新拉取的关系，并支持搜索记录。
+- 设置按用途分组，显示未保存状态、保存反馈与字段校验；改善辅助信息对比度、完整标题提示、订阅日期名称和网格列数说明。
+- 搜索、垃圾桶、订阅及设置中的文本、日期、数字和选择控件共用 `ui-field` 样式，统一边框、圆角、聚焦和禁用状态；桌面侧栏宽度缩为 236px，折叠为 72px，手机抽屉上限为 280px。桌面按钮默认 36px、分段选项 30px，取消固定按钮宽度；说明收纳到悬停提示，支持键盘聚焦、Escape 关闭及触屏点击。设置分组与保存区合并，任务、空状态和订阅卡片使用紧凑间距。
+
+前端状态及跳转分支回归可运行 `node --test docker_app/tests/ui_state.test.cjs docker_app/tests/ui_help.test.cjs`；Python 回归在 `docker_app` 目录运行 `python3 -m pytest -q`。

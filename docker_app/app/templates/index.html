@@ -1,14 +1,22 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-glass-2' %}
+    {% set ui_revision = app_version ~ '-compact-9' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
+    <script>
+      if (new URL(window.location.href).searchParams.get("_gallery_skip_intranet") === "1") {
+        const page = new URL(window.location.href);
+        page.searchParams.delete("_gallery_skip_intranet");
+        window.history.replaceState(null, "", page.href);
+      }
+    </script>
     <meta name="theme-color" content="#eaf0fb">
     <link rel="stylesheet" href="/static/app.css?v={{ ui_revision }}">
     <link rel="stylesheet" href="/static/liquid-glass.css?v={{ ui_revision }}">
     <script defer src="/static/app.js?v={{ ui_revision }}"></script>
+    <script defer src="/static/ui-help.js?v={{ ui_revision }}"></script>
     <script defer src="/static/liquid-glass.js?v={{ ui_revision }}"></script>
     <script defer src="/static/vendor/alpinejs.min.js?v={{ app_version }}"></script>
 </head>
@@ -35,7 +43,7 @@
             <span></span>
             <span></span>
         </button>
-        <aside id="gallery-sidebar" class="sidebar" x-ref="sidebar" aria-label="相簿导航" :class="{ collapsed: sidebarCollapsed && !compactViewport, open: sidebarDrawerOpen, compact: compactViewport }">
+        <aside id="gallery-sidebar" class="sidebar" x-ref="sidebar" aria-label="相簿导航" :inert="compactViewport && !sidebarDrawerOpen" :class="{ collapsed: sidebarCollapsed && !compactViewport, open: sidebarDrawerOpen, compact: compactViewport }">
             <div class="sidebar-head">
                 <button class="icon-button mobile-only" @click="toggleSidebar()" aria-label="切换边栏">
                     <span></span>
@@ -44,7 +52,7 @@
                 <div class="brand-block" x-show="!sidebarCollapsed || compactViewport">
                     <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
                     <div class="brand-identity">
-                        <h1>{{ app_title | replace(' v' ~ app_version, '') }}</h1>
+                        <h1 title="{{ app_title | replace(' v' ~ app_version, '') }}">{{ app_title | replace(' v' ~ app_version, '') }}</h1>
                         <p class="brand-version">v{{ app_version }}</p>
                     </div>
                 </div>
@@ -67,7 +75,7 @@
                     >
                         <span class="link-badge"><svg class="nav-icon" aria-hidden="true"><use :href="'#icon-' + item.key"></use></svg></span>
                         <span class="link-text" x-show="!sidebarCollapsed || compactViewport" x-text="item.label"></span>
-                        <span class="link-count" x-show="!sidebarCollapsed || compactViewport" x-text="sidebarCount(item.key)"></span>
+                        <span class="link-count" x-show="(!sidebarCollapsed || compactViewport) && sidebarCount(item.key) !== ''" x-text="sidebarCount(item.key)"></span>
                     </button>
                 </template>
             </section>
@@ -125,7 +133,7 @@
                 <button class="sidebar-link" data-testid="nav-tasks" :class="{ active: currentView === 'tasks' }" :aria-current="(currentView === 'tasks') ? 'page' : null" title="任务队列" @click="openTasks()">
                     <span class="link-badge"><svg class="nav-icon" aria-hidden="true"><use href="#icon-tasks"></use></svg></span>
                     <span class="link-text" x-show="!sidebarCollapsed || compactViewport">任务队列</span>
-                    <span class="link-count" x-show="!sidebarCollapsed || compactViewport" x-text="sidebarCount('tasks')"></span>
+                    <span class="link-count" x-show="!sidebarCollapsed || compactViewport" x-text="queuedTasks.length + (pullStatus.running ? 1 : 0)" title="运行中与等待中的任务数"></span>
                 </button>
                 <button class="sidebar-link" data-testid="nav-trash" :class="{ active: currentView === 'trash' }" :aria-current="(currentView === 'trash') ? 'page' : null" title="内容垃圾桶" @click="openTrash()">
                     <span class="link-badge"><svg class="nav-icon" aria-hidden="true"><use href="#icon-trash"></use></svg></span>
@@ -135,7 +143,6 @@
                 <button class="sidebar-link" data-testid="nav-settings" :class="{ active: currentView === 'settings' }" :aria-current="(currentView === 'settings') ? 'page' : null" title="拉取与设置" @click="openSettings()">
                     <span class="link-badge"><svg class="nav-icon" aria-hidden="true"><use href="#icon-settings"></use></svg></span>
                     <span class="link-text" x-show="!sidebarCollapsed || compactViewport">拉取与设置</span>
-                    <span class="link-count" x-show="!sidebarCollapsed || compactViewport">控制</span>
                 </button>
             </section>
             </div>
@@ -145,7 +152,6 @@
             <header class="topbar" x-ref="topbar" :class="{ compact: headerCompact }">
                 <div class="topbar-left">
                     <div class="topbar-copy">
-                        <p class="topbar-label" x-text="currentSectionLabel()"></p>
                         <div class="topbar-title-row">
                             <h2 x-text="currentSectionTitle()"></h2>
                             <div class="mode-switch source-kind-switch" x-show="showGallerySourceKindSwitch()" x-cloak>
@@ -160,7 +166,7 @@
                                 </template>
                             </div>
                         </div>
-                        <div class="topbar-meta" :class="{ 'topbar-meta-placeholder': currentView !== 'gallery' }" :aria-hidden="currentView !== 'gallery'">
+                        <div class="topbar-meta" x-show="currentView === 'gallery'" x-cloak>
                             <template x-for="item in compactStats()" :key="item.label">
                                 <span class="meta-chip">
                                     <strong x-text="item.value"></strong>
@@ -171,51 +177,61 @@
                     </div>
                 </div>
                 <div class="topbar-actions">
-                    <div class="status-pill" role="status" aria-live="polite">
+                    <div class="status-pill" role="status" aria-live="polite" x-show="pullStatus.running || !['图库已就绪', '空闲', ''].includes(pullStatus.message || '')" x-cloak>
                         <span class="status-dot" :class="{ running: pullStatus.running }"></span>
                         <span x-text="pullStatus.message || '空闲'"></span>
                     </div>
-                    <button class="secondary-button" @click="openSettings()">设置</button>
+                    <button class="secondary-button" x-show="currentView !== 'settings'" @click="openSettings()">设置</button>
                     <button class="primary-button" @click="runPull()" :aria-label="runPullButtonLabel()" :title="runPullButtonLabel()" x-text="runPullButtonLabel()"></button>
                 </div>
             </header>
 
-            <section class="gallery-stage" data-testid="section-gallery" x-show="currentView === 'gallery'" x-ref="galleryStage">
+            <section class="gallery-stage" :class="{'search-has-results': searchActive() && searchQuery}" data-testid="section-gallery" x-show="currentView === 'gallery'" x-ref="galleryStage">
+                <section class="search-panel" :class="searchQuery ? 'search-results-bar' : 'search-landing'" x-show="searchActive()" x-cloak>
+                    <form class="search-engine-form" @submit.prevent="applySearch()">
+                        <label class="search-engine-field">
+                            <span class="search-glyph" aria-hidden="true"></span>
+                            <input class="ui-field" type="search" x-model="searchDraft" placeholder="搜索标题、正文、订阅源或文件夹名" aria-label="搜索标题、正文、订阅源或文件夹名" autocomplete="off">
+                            <button type="button" class="search-clear-button" x-show="searchDraft || searchQuery" @click="clearSearch()" aria-label="清空搜索">×</button>
+                        </label>
+                        <button class="primary-button search-submit-button" type="submit">搜索</button>
+                    </form>
+                    <div class="search-tag-row search-tab-row" aria-label="快捷搜索">
+                        <span class="quick-search-label">快捷搜索</span>
+                        <template x-for="tag in searchTags" :key="tag">
+                            <button class="chip-button subtle search-tab" :class="{ active: searchQuery === tag }" :aria-pressed="searchQuery === tag" @click="applySearch(tag)" x-text="tag"></button>
+                        </template>
+                    </div>
+                    <p class="search-result-summary" role="status" x-show="searchQuery" x-text="searchResultText()"></p>
+                </section>
                 <div class="section-heading gallery-heading" x-show="!searchActive() || searchQuery" x-cloak>
                     <div class="section-heading-spacer"></div>
                     <div class="button-row gallery-toolbar">
-                        <label class="range-chip density-chip">
-                            <span class="range-label">网格密度 / 每行数量</span>
-                            <input type="range" min="1" max="8" step="1" :value="galleryColumnCount" @input="setGalleryColumnCount($event.target.value)">
-                            <small class="range-caption" x-text="galleryDensityCaption()"></small>
+                        <label class="range-chip density-chip" :data-tooltip="galleryDensityCaption()">
+                            <span class="range-label">密度</span>
+                            <input type="range" min="1" max="8" step="1" aria-label="网格期望列数" :aria-valuetext="galleryDensityCaption()" :value="galleryColumnCount" @input="setGalleryColumnCount($event.target.value)">
+                            <small class="range-caption" x-text="`${galleryColumnCount} → ${resolveGalleryColumns()} 列`"></small>
                         </label>
-                        <button class="secondary-button" @click="toggleTimeFilter()" x-text="timeFilterOpen ? '收起瀑布流选项' : '瀑布流选项'"></button>
+                        <label class="gallery-sort-label">排序
+                            <select class="ui-field" aria-label="图库排序" :value="timeSortMode" @change="setTimeSortMode($event.target.value)">
+                                <option value="desc">来源发布：最新优先</option>
+                                <option value="asc">来源发布：最早优先</option>
+                                <option value="imported">最近入库</option>
+                                <option value="random">随机</option>
+                            </select>
+                        </label>
+                        <button class="secondary-button" @click="toggleTimeFilter()" x-text="timeFilterOpen ? '收起筛选' : '筛选'"></button>
                         <div class="mode-switch" x-show="!compactViewport" x-cloak>
                             <button class="chip-button" :class="{ active: galleryViewMode === 'folder' }" :aria-pressed="galleryViewMode === 'folder'" @click="setGalleryViewMode('folder')">动态视图</button>
                             <button class="chip-button" :class="{ active: galleryViewMode === 'pair' }" :aria-pressed="galleryViewMode === 'pair'" @click="setGalleryViewMode('pair')">图片视图</button>
                         </div>
                     </div>
                 </div>
-                <section class="search-panel search-landing" x-show="searchActive()" x-cloak>
-                    <form class="search-engine-form" @submit.prevent="applySearch()">
-                        <label class="search-engine-field">
-                            <span class="search-glyph" aria-hidden="true"></span>
-                            <input type="search" x-model="searchDraft" placeholder="搜索标题、正文、订阅源或文件夹名" aria-label="搜索标题、正文、订阅源或文件夹名" autocomplete="off">
-                            <button type="button" class="search-clear-button" x-show="searchDraft || searchQuery" @click="clearSearch()" aria-label="清空搜索">×</button>
-                        </label>
-                        <button class="primary-button search-submit-button" type="submit">搜索</button>
-                    </form>
-                    <div class="search-tag-row search-tab-row">
-                        <template x-for="tag in searchTags" :key="tag">
-                            <button class="chip-button subtle search-tab" :class="{ active: searchQuery === tag }" :aria-pressed="searchQuery === tag" @click="applySearch(tag)" x-text="tag"></button>
-                        </template>
-                    </div>
-                </section>
                 <section class="time-filter-panel" x-show="timeFilterOpen" x-transition.opacity.duration.180ms x-cloak>
                     <div class="time-filter-copy">
-                        <p>瀑布流选项</p>
+                        <p>时间与来源</p>
                         <strong x-text="timeFilterSummary()"></strong>
-                        <span>滚轮平移范围，按住左右端拖动调节起止月份；按住 Shift 再滚轮会调整结束月份。</span>
+                        <button type="button" class="help-button" aria-label="时间范围操作说明" data-tooltip="滚轮平移范围，拖动左右端调节起止月份；Shift 加滚轮调整结束月份。">?</button>
                     </div>
                     <div class="time-filter-control" @wheel.prevent="timeFilterWheel($event)">
                         <div class="time-filter-years">
@@ -242,6 +258,7 @@
                         <div class="mode-switch time-filter-sort-switch">
                             <button class="chip-button" :class="{ active: timeSortMode === 'desc' }" :aria-pressed="timeSortMode === 'desc'" @click="setTimeSortMode('desc')">时间倒序</button>
                             <button class="chip-button" :class="{ active: timeSortMode === 'asc' }" :aria-pressed="timeSortMode === 'asc'" @click="setTimeSortMode('asc')">时间正序</button>
+                            <button class="chip-button" :class="{ active: timeSortMode === 'imported' }" :aria-pressed="timeSortMode === 'imported'" @click="setTimeSortMode('imported')">最近入库</button>
                             <button class="chip-button" :class="{ active: timeSortMode === 'random' }" :aria-pressed="timeSortMode === 'random'" @click="setTimeSortMode('random')">随机时间</button>
                         </div>
                         <div class="mode-switch" x-show="compactViewport" x-cloak>
@@ -299,31 +316,33 @@
                                                         </template>
                                                     </div>
                                                     <div class="photo-badges">
-                                                        <span class="photo-badge" x-text="item.pub_time"></span>
+                                                        <span class="photo-badge" :title="item.pub_time" x-text="displayDate(item.pub_time, true)"></span>
+                                                        <span class="photo-badge date-warning" x-show="futureDate(item.pub_time)" title="来源日期晚于当前时间，请核对原帖">来源日期待核实</span>
                                                     </div>
                                                     <span class="photo-badge live photo-badge-corner" x-show="item.has_livephoto">Live Photo</span>
-                                                    <div class="photo-count-badge" x-text="`${item.asset_count} 项`"></div>
+                                                    <div class="photo-count-badge" x-show="item.asset_count > 0" x-text="`${item.asset_count} 项`"></div>
                                                     </div>
                                                     <button class="favorite-button" :class="{ active: item.is_favorite }" :aria-pressed="item.is_favorite" @click.stop="toggleFavorite(item, $event)" aria-label="收藏">
                                                         <span>❤</span>
                                                     </button>
                                                     <div class="card-trash-zone" @click.stop>
                                                         <template x-if="pendingTrashFolder !== item.folder_name">
-                                                            <button class="mini-trash-button" @click="askTrashFolder(item.folder_name)" aria-label="删除动态">
+                                                            <button class="mini-trash-button" @click="askTrashFolder(item.folder_name)" aria-label="移入垃圾桶">
                                                                 <span class="trash-icon" aria-hidden="true"></span>
                                                             </button>
                                                         </template>
                                                         <template x-if="pendingTrashFolder === item.folder_name">
                                                             <div class="mini-confirm-row single-confirm">
-                                                                <button class="mini-confirm-button danger" @click="trashFolderCard(item.folder_name)">确认</button>
+                                                                <button class="mini-confirm-button danger" @click="trashFolderCard(item.folder_name)" title="移除整组动态并阻止再次采集，本地文件将被清理">确认移入</button>
                                                             </div>
                                                         </template>
                                                     </div>
                                                     <div class="photo-meta">
-                                                    <h4 x-text="cardPrimaryText(item)"></h4>
+                                                    <h4 :title="item.title || item.text_prefix" x-text="cardPrimaryText(item)"></h4>
+                                                    <button class="card-open-button" type="button" @click.stop="openFolder(item.folder_name)" :aria-label="`打开动态：${item.title || item.text_prefix || item.folder_name}`"></button>
                                                     <div class="photo-stats">
                                                         <span x-text="item.subscription_name || '默认订阅'"></span>
-                                                        <span x-text="`${item.image_count} 张照片`"></span>
+                                                        <span x-show="item.image_count > 0" x-text="`${item.image_count} 张照片`"></span>
                                                         <span x-show="item.livephoto_count > 0" x-text="`${item.livephoto_count} 条 Live Photo`"></span>
                                                     </div>
                                                 </div>
@@ -363,6 +382,7 @@
                                                 </template>
                                                 <template x-if="!item.__deleted_placeholder">
                                                     <div>
+                                                <button type="button" class="card-open-button" :aria-label="`查看图片：${item.title || item.folder_name}，第 ${item.pair_index} 组`" @click.stop="openGalleryPair(item)"></button>
                                                 <div class="photo-visual asset-visual" :style="assetVisualStyle(item)">
                                                     <template x-if="galleryQualityFor(item) === 'small' && galleryPairImageUrl(item)">
                                                         <img class="hover-preview-image" loading="lazy" decoding="async" :src="galleryPairImageUrl(item)" :alt="item.title" :width="item.width || null" :height="item.height || null" @load="fadeLoadedImage($event)">
@@ -378,13 +398,14 @@
                                                         ></video>
                                                     </template>
                                                     <div class="photo-badges">
-                                                        <span class="photo-badge" x-text="item.pub_time"></span>
+                                                        <span class="photo-badge" :title="item.pub_time" x-text="displayDate(item.pub_time, true)"></span>
+                                                        <span class="photo-badge date-warning" x-show="futureDate(item.pub_time)" title="来源日期晚于当前时间，请核对原帖">来源日期待核实</span>
                                                         <span class="photo-badge live" x-show="item.has_livephoto">Live Photo</span>
                                                     </div>
                                                 </div>
                                                 <div class="card-trash-zone" @click.stop>
                                                     <template x-if="!pairDeletePending(item.folder_name, item.pair_index)">
-                                                        <button class="mini-trash-button" @click="askDeletePair(item.folder_name, item.pair_index)" aria-label="删除图片">
+                                                        <button class="mini-trash-button" @click="askDeletePair(item.folder_name, item.pair_index)" :aria-label="`永久删除第 ${item.pair_index} 组图片`">
                                                             <span class="trash-icon" aria-hidden="true"></span>
                                                         </button>
                                                     </template>
@@ -425,13 +446,14 @@
                             </div>
                         </template>
                         <div class="empty-state" x-show="gallery.items.length === 0" x-cloak>
-                            <strong>这里还没有内容</strong>
-                            <p>可以先去设置页完成登录，然后执行一次拉取。</p>
+                            <strong x-text="searchActive() ? '没有匹配的搜索结果' : '当前范围没有内容'"></strong>
+                            <button type="button" class="help-button" aria-label="当前范围说明" :data-tooltip="searchActive() ? &#x27;请尝试其他关键词，或清除筛选条件。&#x27; : &#x27;可调整筛选范围，或前往设置完成登录和拉取。&#x27;">?</button>
+                            <button class="secondary-button" x-show="searchActive()" @click="clearSearch()" data-tooltip="清空搜索条件" aria-label="清空搜索条件">清空</button>
                         </div>
                         <div class="load-footer" data-gallery-load-sentinel x-show="gallery.items.length > 0 && !galleryLoadFinished() && !showRandomReloadButton()" x-cloak>
                             <template x-if="autoLoadEnabled()">
                                 <div class="auto-loader">
-                                    <strong x-text="loadingMore ? '正在自动加载更多内容...' : '滑到底部会自动继续加载'"></strong>
+                                    <strong x-text="loadingMore ? '加载中…' : '自动加载'"></strong>
                                 </div>
                             </template>
                             <template x-if="showManualLoadMore()">
@@ -443,8 +465,7 @@
                         </div>
                         <div class="load-footer load-finished" x-show="galleryLoadFinished()" x-cloak>
                             <div class="auto-loader">
-                                <strong>全部加载完了</strong>
-                                <span>当前筛选范围下已经没有更多内容。</span>
+                                <strong>已显示全部</strong>
                             </div>
                         </div>
                     </div>
@@ -453,10 +474,7 @@
 
             <section class="panel-view recent-updates-view" data-testid="section-recent-updates" x-show="currentView === 'recent-updates'" x-cloak>
                 <div class="section-heading">
-                    <div>
-                        <p>智能相簿</p>
-                        <h3>最近更新</h3>
-                    </div>
+
                     <div class="button-row">
                         <span class="inline-tag" x-show="recentUpdates.total_items" x-text="`${recentUpdates.total_items} 条动态 · ${recentUpdates.total_groups} 次更新`" x-cloak></span>
                         <button class="secondary-button" @click="refreshRecentUpdates()" :disabled="recentUpdatesLoading" x-text="recentUpdatesLoading ? '加载中' : '刷新'"></button>
@@ -506,7 +524,8 @@
                                                 </div>
                                             </div>
                                             <div class="photo-meta recent-update-card-meta">
-                                                <h4 x-text="cardPrimaryText(item)"></h4>
+                                                <h4 :title="item.title || item.text_prefix" x-text="cardPrimaryText(item)"></h4>
+                                                    <button class="card-open-button" type="button" @click.stop="openFolder(item.folder_name)" :aria-label="`打开动态：${item.title || item.text_prefix || item.folder_name}`"></button>
                                                 <div class="photo-stats">
                                                     <span x-text="item.subscription_name || '默认订阅'"></span>
                                                     <span x-text="item.pub_time || '未知发布时间'"></span>
@@ -529,30 +548,24 @@
                     </template>
                 </div>
                 <div class="empty-state" x-show="!recentUpdatesLoading && recentUpdates.groups.length === 0" x-cloak>
-                    <strong>还没有最近更新</strong>
-                    <p>成功拉取或同步并加入图库的动态会按任务时间显示在这里。</p>
+                    <strong>还没有最近更新</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="成功拉取或同步并加入图库的动态会按任务时间显示在这里。">?</button>
                 </div>
                 <div class="empty-state" x-show="recentUpdatesLoading && recentUpdates.groups.length === 0" x-cloak>
-                    <strong>正在加载最近更新</strong>
-                    <p>正在读取近期拉取、同步任务与当前图库内容。</p>
+                    <strong>正在加载最近更新</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="正在读取近期拉取、同步任务与当前图库内容。">?</button>
                 </div>
             </section>
 
             <section class="panel-view duplicate-view" data-testid="section-duplicates" x-show="currentView === 'duplicates'" x-cloak>
                 <div class="section-heading">
-                    <div>
-                        <p>智能查重</p>
-                        <h3>相似图片贴文</h3>
-                    </div>
+
                     <div class="button-row">
                         <span class="inline-tag" x-text="`至少 ${duplicateImageThreshold} 张相似图片`"></span>
-                        <span class="inline-tag" x-show="duplicateCacheStale" x-cloak>检测结果已过期</span>
+                        <span class="inline-tag" x-show="duplicateHasCache && duplicateCacheStale" x-cloak>检测结果已过期</span>
                         <button class="secondary-button" @click="refreshDuplicates(true)" :disabled="duplicateLoading" x-text="duplicateLoading ? '检测中' : (duplicateHasCache ? '重新检测' : '开始检测')"></button>
                     </div>
                 </div>
                 <div class="empty-card compact-empty" x-show="!duplicateHasCache && !duplicateLoading" x-cloak>
-                    <strong>尚未执行重复内容检测</strong>
-                    <p>系统不会自动扫描图库。需要时请点击“开始检测”。</p>
+                    <strong>尚未执行重复内容检测</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="系统不会自动扫描图库。需要时请点击“开始检测”。">?</button>
                 </div>
                 <template x-for="(group, groupIndex) in duplicateGroups" :key="group.group_key || group.signature">
                     <article class="duplicate-group-card" x-transition.opacity.duration.180ms>
@@ -594,7 +607,8 @@
                                                 </div>
                                             </template>
                                         </div>
-                                        <div class="photo-badges"><span class="photo-badge" x-text="item.pub_time"></span></div>
+                                        <div class="photo-badges"><span class="photo-badge" :title="item.pub_time" x-text="displayDate(item.pub_time, true)"></span>
+                                                        <span class="photo-badge date-warning" x-show="futureDate(item.pub_time)" title="来源日期晚于当前时间，请核对原帖">来源日期待核实</span></div>
                                         <div class="photo-count-badge" x-text="`${item.image_count} 张`"></div>
                                     </div>
                                     <div class="photo-meta duplicate-post-meta">
@@ -631,7 +645,7 @@
                         <section class="duplicate-match-detail">
                             <div class="duplicate-detail-copy">
                                 <p>重复内容详情</p>
-                                <span>下面展示用于判定的相似图片对，最多显示 12 组。</span>
+                                <button type="button" class="help-button" aria-label="相似图片对说明" data-tooltip="展示用于判定的相似图片对，最多显示 12 组。">?</button>
                             </div>
                             <div class="duplicate-match-list">
                                 <template x-for="(match, matchIndex) in group.matches" :key="`${group.signature}-${matchIndex}`">
@@ -648,22 +662,18 @@
                         </section>
                     </article>
                 </template>
-                <div class="empty-state" x-show="!duplicateLoading && duplicateGroups.length === 0" x-cloak>
+                <div class="empty-state" x-show="duplicateHasCache && !duplicateLoading && duplicateGroups.length === 0" x-cloak>
                     <strong>没有待处理的重复内容</strong>
-                    <p x-text="`两条贴文至少命中 ${duplicateImageThreshold} 张相似图片时，会出现在这里。`"></p>
+                    <button type="button" class="help-button" aria-label="重复检测说明" :data-tooltip="`两条贴文至少命中 ${duplicateImageThreshold} 张相似图片时，会出现在这里。`">?</button>
                 </div>
                 <div class="empty-state" x-show="duplicateLoading && duplicateGroups.length === 0" x-cloak>
-                    <strong>正在检测重复内容</strong>
-                    <p>首次检测会为旧图片补充感知指纹，请稍候。</p>
+                    <strong>正在检测重复内容</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="首次检测会为旧图片补充感知指纹，请稍候。">?</button>
                 </div>
             </section>
 
             <section class="panel-view" data-testid="section-review" x-show="currentView === 'review'" x-cloak>
                 <div class="section-heading">
-                    <div>
-                        <p>审核中心</p>
-                        <h3>推广动态待审核</h3>
-                    </div>
+
                     <button class="secondary-button" @click="refreshReview()">刷新</button>
                 </div>
                 <template x-for="item in reviewItems" :key="item.id">
@@ -682,24 +692,20 @@
                             </div>
                         </div>
                         <div class="panel-card-actions">
-                            <button class="secondary-button" @click="openReviewSource(item)">查看原始动态</button>
+                            <button class="secondary-button" @click="openReviewSource(item)" data-tooltip="查看原始动态" aria-label="查看原始动态">原帖</button>
                             <button class="primary-button" @click="approveReview(item.id)" x-text="reviewApproveLabel(item)"></button>
                             <button class="secondary-button" @click="rejectReview(item.id)">永久忽略</button>
                         </div>
                     </article>
                 </template>
                 <div class="empty-state" x-show="reviewItems.length === 0" x-cloak>
-                    <strong>没有待审核动态</strong>
-                    <p>命中过滤规则的内容会出现在这里。</p>
+                    <strong>没有待审核动态</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="命中过滤规则的内容会出现在这里。">?</button>
                 </div>
             </section>
 
             <section class="panel-view" data-testid="section-logs" x-show="currentView === 'logs'" x-cloak>
                 <div class="section-heading">
-                    <div>
-                        <p>过滤记录</p>
-                        <h3>推广过滤日志</h3>
-                    </div>
+
                     <div class="button-row">
                         <button class="secondary-button" @click="refreshLogs()">刷新</button>
                         <div class="button-row confirm-row" x-show="clearFilterLogsConfirmStep === 0">
@@ -714,7 +720,7 @@
                     <article class="panel-card">
                         <div class="panel-card-main">
                             <h4 x-text="item.folder_name_candidate || item.source_dynamic_id"></h4>
-                            <p x-text="item.created_at"></p>
+                            <p :title="item.created_at" x-text="displayDate(item.created_at)"></p>
                             <div class="inline-tags">
                                 <template x-for="reason in item.reasons" :key="reason">
                                     <span class="inline-tag" x-text="reason"></span>
@@ -725,16 +731,14 @@
                     </article>
                 </template>
                 <div class="empty-state" x-show="logs.length === 0" x-cloak>
-                    <strong>还没有过滤记录</strong>
-                    <p>当拉取过程中命中广告过滤规则，这里会记录原因。</p>
+                    <strong>还没有过滤记录</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="当拉取过程中命中广告过滤规则，这里会记录原因。">?</button>
                 </div>
             </section>
 
             <section class="panel-view" data-testid="section-tasks" x-show="currentView === 'tasks'" x-cloak>
                 <div class="section-heading">
                     <div>
-                        <p>任务中心</p>
-                        <h3>当前任务进度队列</h3>
+                        <p class="field-copy" x-text="`运行 ${pullStatus.running ? 1 : 0} · 等待 ${queuedTasks.length} · 历史 ${sidebarCounts.tasks || taskRuns.length}`"></p>
                     </div>
                     <div class="button-row">
                         <button class="secondary-button" @click="refreshTasks()">刷新</button>
@@ -746,33 +750,34 @@
                         </div>
                     </div>
                 </div>
-                <article class="panel-card task-current-card">
+                <article class="panel-card task-current-card" :class="{ 'is-idle': !pullStatus.running }">
                     <div class="panel-card-main task-current-main">
                         <div class="task-title-row">
                             <h4 x-text="pullStatus.running ? '任务执行中' : '当前空闲'"></h4>
-                            <span class="inline-tag accent" x-text="taskModeLabel(pullStatus.mode)"></span>
-                            <span class="inline-tag" x-show="pullStatus.running" x-cloak>后台任务</span>
+                            <span class="inline-tag accent" x-show="pullStatus.running" x-text="taskModeLabel(pullStatus.mode)"></span>
+
                         </div>
-                        <p x-text="pullStatus.message || '没有正在运行的任务'"></p>
+                        <p x-show="pullStatus.running" x-text="pullStatus.message || '没有正在运行的任务'"></p>
                         <div class="task-progress-shell" x-show="pullStatus.running || taskProgressValue(pullStatus) > 0" x-cloak>
                             <div class="task-progress-bar"><span :style="`width: ${taskProgressValue(pullStatus)}%`"></span></div>
                             <small x-text="taskProgressText(pullStatus)"></small>
                         </div>
-                        <div class="task-detail-grid">
+                        <div class="task-detail-grid" x-show="pullStatus.running" x-cloak>
                             <span><strong>当前来源</strong><em x-text="pullStatus.current_source || pullStatus.site_detail?.current_source || '-'"></em></span>
                             <span><strong>当前内容</strong><em x-text="pullStatus.current_post || pullStatus.site_detail?.current_post || '-'"></em></span>
                             <span><strong>队列</strong><em x-text="`${queuedTasks.length || 0} 个后台任务待执行`"></em></span>
                             <span><strong>最近任务</strong><em x-text="pullStatus.last_run ? `#${pullStatus.last_run.id}` : '-'"></em></span>
                         </div>
-                        <div class="inline-tags">
+                        <span class="task-idle-meta" x-show="!pullStatus.running" x-text="`等待 ${queuedTasks.length} · 最近 ${pullStatus.last_run ? '#' + pullStatus.last_run.id : '暂无'}`"></span>
+                        <div class="inline-tags" x-show="pullStatus.running">
                             <template x-for="tag in taskCounterTags(pullStatus)" :key="tag.label">
                                 <span class="inline-tag" x-text="`${tag.label} ${tag.value}`"></span>
                             </template>
                         </div>
                     </div>
                     <div class="panel-card-actions">
-                        <button class="secondary-button" @click="openCurrentTaskInspector()">查看日志与细节</button>
-                        <button class="secondary-button" x-show="currentTaskHasAddedItems()" @click="openCurrentAddedItems()" x-cloak>查看本次新增</button>
+                        <button class="secondary-button" @click="openCurrentTaskInspector()" data-tooltip="查看任务日志与详情" aria-label="查看任务日志与详情">日志</button>
+                        <button class="secondary-button" x-show="currentTaskHasAddedItems()" @click="openCurrentAddedItems()" x-cloak data-tooltip="查看本次任务新增的内容" aria-label="查看本次任务新增的内容">新增内容</button>
                     </div>
                     <div class="panel-card-actions" x-show="pullStatus.running" x-cloak>
                         <button class="secondary-button" :disabled="!pullStatus.running || pullStatus.paused" @click="pauseTask()">暂停</button>
@@ -782,15 +787,14 @@
                 </article>
                 <article class="panel-card task-queue-card" x-show="queuedTasks.length > 0" x-cloak>
                     <div class="panel-card-main">
-                        <h4>待执行队列</h4>
-                        <p>新的拉取、校验和放行下载会顺序排队执行。</p>
+                        <h4 class="heading-with-help">待执行队列<button type="button" class="help-button" aria-label="待执行队列说明" data-tooltip="新的拉取、校验和放行下载会顺序排队执行。">?</button></h4>
                         <div class="task-queue-list">
                             <template x-for="item in queuedTasks" :key="item.queue_id">
                                 <div class="task-queue-row">
                                     <div>
                                         <strong x-text="`#${item.queue_id} · 第 ${item.position || '-'} 位`"></strong>
                                         <p x-text="item.label || item.kind"></p>
-                                        <small x-text="`${taskModeLabel(item.kind)} · 后台任务 · ${item.queued_at || '-'}`"></small>
+                                        <small x-text="`${taskModeLabel(item.kind)} · ${displayDate(item.queued_at)}`"></small>
                                     </div>
                                     <div class="button-row confirm-row">
                                         <button class="secondary-button" @click="openQueuedTaskInspector(item)">细节</button>
@@ -804,18 +808,18 @@
                 <template x-for="item in visibleTaskRuns()" :key="item.id">
                     <article class="panel-card">
                         <div class="panel-card-main">
-                            <h4 x-text="`${item.task_type} #${item.id}`"></h4>
-                            <p x-text="taskSummary(item)"></p>
+                            <h4 :data-tooltip="taskSummary(item)" tabindex="0" x-text="`${taskModeLabel(item.task_type)} #${item.id}`"></h4>
+                            <p x-show="['failed', 'cancelled', 'paused'].includes(item.status)" x-text="taskSummary(item)"></p>
                             <div class="inline-tags">
-                                <span class="inline-tag" x-text="item.status"></span>
-                                <span class="inline-tag">后台任务</span>
-                                <span class="inline-tag" x-text="item.created_at"></span>
-                                <span class="inline-tag" x-show="item.finished_at" x-text="item.finished_at"></span>
+                                <span class="inline-tag" :data-tooltip="item.status === 'running' ? '记录未写入结束状态，是否仍在执行请以当前任务为准。' : ''" tabindex="0" x-text="taskStatusText(item.status)"></span>
+                                <span class="inline-tag"  :title="item.created_at" x-text="`开始：${displayDate(item.created_at)}`"></span>
+                                <span class="inline-tag" x-show="item.finished_at" :title="item.finished_at" x-text="`完成：${displayDate(item.finished_at)}`"></span>
+                                <span class="inline-tag" x-show="item.finished_at" x-text="taskDuration(item)"></span>
                             </div>
                         </div>
                         <div class="panel-card-actions">
-                            <button class="secondary-button" @click="openTaskInspector(item)">查看日志与细节</button>
-                            <button class="secondary-button" x-show="taskHasAddedItems(item)" @click="openTaskAddedItems(item)" x-cloak>查看本次新增</button>
+                            <button class="secondary-button" @click="openTaskInspector(item)" data-tooltip="查看任务日志与详情" aria-label="查看任务日志与详情">日志</button>
+                            <button class="secondary-button" x-show="taskHasAddedItems(item)" @click="openTaskAddedItems(item)" x-cloak data-tooltip="查看本次任务新增的内容" aria-label="查看本次任务新增的内容">新增内容</button>
                         </div>
                         <div class="panel-card-actions" x-show="canRetryTask(item)" x-cloak>
                             <button class="secondary-button" @click="retryTask(item)">重试</button>
@@ -831,13 +835,14 @@
             </section>
 
             <section class="panel-view" data-testid="section-trash" x-show="currentView === 'trash'" x-cloak>
-                <div class="section-heading">
-                    <div>
-                        <p>内容回收站</p>
-                        <h3>黑名单与垃圾桶</h3>
+                <div class="section-heading trash-toolbar">
+                    <input class="ui-field trash-search" type="search" x-model="trashSearch" placeholder="搜索标题、来源或删除日期" aria-label="搜索垃圾桶">
+                    <div class="button-row">
+                        <button type="button" class="help-button" aria-label="垃圾桶恢复说明" data-tooltip="移入后阻止再次采集并清理本地媒体。这里只保留记录；解除拦截后需重新拉取，原帖失效时可能无法找回。">?</button>
+                        <button class="secondary-button" @click="refreshTrash()">刷新</button>
                     </div>
-                    <button class="secondary-button" @click="refreshTrash()">刷新</button>
                 </div>
+                <p role="status" x-show="trashSearch && !trashGroups().length">没有匹配的已移除内容。</p>
                 <template x-for="group in trashGroups()" :key="group.key">
                     <article class="panel-card subscription-card trash-group-card" :class="{ expanded: isTrashGroupExpanded(group.key) }">
                         <button class="subscription-card-head" @click="toggleTrashGroup(group.key)" :aria-expanded="isTrashGroupExpanded(group.key)">
@@ -852,33 +857,33 @@
                                 </span>
                                 <div class="subscription-card-title">
                                     <h4 x-text="group.name"></h4>
-                                    <p x-text="`${group.items.length} 条已删除内容 · 最近 ${group.latest_deleted_at || '-'}`"></p>
+                                    <p x-text="`${group.items.length} 条已移除内容 · 最近删除 ${displayDate(group.latest_deleted_at)}`"></p>
                                 </div>
                                 <div class="inline-tags subscription-summary-tags">
                                     <span class="inline-tag" x-text="group.is_site ? '站点' : 'UP 主'"></span>
-                                    <span class="inline-tag" x-text="group.uid || '未归属'"></span>
+                                    <span class="inline-tag" :title="group.uid" x-text="group.is_site ? '站点订阅' : (group.uid || '未归属')"></span>
                                 </div>
                             </div>
-                            <span class="subscription-expand-indicator" :class="{ open: isTrashGroupExpanded(group.key) }">展开</span>
+                            <span class="subscription-expand-indicator" :class="{ open: isTrashGroupExpanded(group.key) }" aria-hidden="true"></span>
                         </button>
                         <div class="subscription-card-body trash-group-body" x-show="isTrashGroupExpanded(group.key)" x-transition.opacity.duration.180ms x-cloak>
                             <template x-for="item in group.items" :key="item.id">
                                 <div class="trash-item-row">
                                     <div class="panel-card-main">
                                         <h4 x-text="item.folder?.title || item.folder_name"></h4>
-                                        <p x-text="`已删除于 ${item.deleted_at}`"></p>
+                                        <p x-text="`移除于 ${displayDate(item.deleted_at)}`"></p>
                                         <div class="inline-tags">
                                             <span class="inline-tag" x-text="item.folder?.folder_name || item.folder_name"></span>
                                             <span class="inline-tag" x-text="item.folder?.text_prefix || '已加入黑名单'"></span>
                                         </div>
                                     </div>
                                     <div class="panel-card-actions" x-show="pendingRestoreTrashId !== item.id">
-                                        <button class="secondary-button" @click="openTrashSource(item)">查看原始动态</button>
-                                        <button class="secondary-button" @click="askRestoreTrash(item.id)">恢复</button>
+                                        <button class="secondary-button" @click="openTrashSource(item)" data-tooltip="查看原始动态" aria-label="查看原始动态">原帖</button>
+                                        <button class="secondary-button" @click="askRestoreTrash(item.id)" data-tooltip="解除采集拦截，选择等待下次拉取或立即重新拉取">恢复</button>
                                     </div>
                                     <div class="panel-card-actions" x-show="pendingRestoreTrashId === item.id" x-cloak>
-                                        <button class="secondary-button" @click="restoreTrash(item.id, false)">仅恢复</button>
-                                        <button class="primary-button" @click="restoreTrash(item.id, true)">恢复并立即拉取</button>
+                                        <button class="secondary-button" @click="restoreTrash(item.id, false)" data-tooltip="仅解除拦截，本地文件不会恢复，等待下次拉取">解除拦截</button>
+                                        <button class="primary-button" @click="restoreTrash(item.id, true)" data-tooltip="解除拦截并重新采集；原帖失效时可能无法找回">重新拉取</button>
                                     </div>
                                 </div>
                             </template>
@@ -886,134 +891,127 @@
                     </article>
                 </template>
                 <div class="empty-state" x-show="trashItems.length === 0" x-cloak>
-                    <strong>垃圾桶是空的</strong>
-                    <p>点击动态里的“不喜欢”后，内容会从资料库中删除并出现在这里。</p>
+                    <strong>垃圾桶是空的</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="移入垃圾桶后，本地媒体会被清理，此处保留记录供解除拦截和重新采集。">?</button>
                 </div>
             </section>
 
             <section class="panel-view settings-pane" data-testid="section-settings" x-show="currentView === 'settings'" x-cloak>
-                <div class="section-heading">
-                    <div>
-                        <p>同步与账号</p>
-                        <h3>拉取与设置</h3>
-                    </div>
-                    <button class="primary-button" @click="saveSettings()">保存设置</button>
+                <div class="settings-save-bar">
+                    <nav class="settings-groups" aria-label="设置分组">
+                        <template x-for="group in [{key:'sync',name:'同步',label:'同步与来源'},{key:'filter',name:'过滤',label:'过滤与重复'},{key:'media',name:'界面',label:'界面与媒体'},{key:'account',name:'账号',label:'账号'},{key:'maintenance',name:'维护',label:'维护与清理'}]" :key="group.key">
+                            <button class="chip-button" :aria-label="group.label" :data-tooltip="group.label" :aria-pressed="settingsGroup === group.key" :class="{active:settingsGroup === group.key}" @click="settingsGroup = group.key" x-text="group.name"></button>
+                        </template>
+                    </nav>
+                    <span class="settings-save-state" role="status" x-text="settingsSaving ? '保存中…' : settingsDirty() ? '未保存' : '已保存'"></span>
+                    <button class="primary-button" :disabled="settingsSaving || !settingsDirty()" @click="saveSettings()">保存</button>
                 </div>
-
-                <div class="settings-grid">
-                    <article class="settings-card">
-                        <h4>同步策略</h4>
+                <p class="settings-error" role="alert" x-show="settingsError" x-text="settingsError"></p>
+                <div class="settings-grid" :inert="settingsSaving">
+                    <article class="settings-card" x-show="settingsGroup === 'sync'" data-settings-group="sync">
+                        <h4 class="heading-with-help">同步策略<button type="button" class="help-button" aria-label="同步策略说明" data-tooltip="各 UP 的内容类型在订阅管理中设置。全量拉取会重新扫描当前账号可见动态，用于补齐旧内容。">?</button></h4>
                         <div class="button-row">
-                            <button class="secondary-button" @click="openSubscriptions()">打开订阅管理</button>
+                            <button class="secondary-button" @click="openSubscriptions()" data-tooltip="按 UP 主设置抓取九图、Live Photo 和转发动态" aria-label="按 UP 主设置抓取九图、Live Photo 和转发动态">管理订阅</button>
                         </div>
-                        <label>下载间隔(秒) <input type="number" step="0.1" x-model="settings.download_sleep"></label>
-                        <label>UP 主定时拉取间隔(小时) <input type="number" min="1" x-model.number="settings.scheduler_interval_hours"></label>
-                        <label class="toggle-row"><input type="checkbox" x-model="settings.auto_load_enabled"> 图片视图滑到底部自动继续加载</label>
-                        <label class="toggle-row"><input type="checkbox" x-model="settings.scheduler_enabled"> 启用 UP 主定时拉取</label>
-                        <p class="field-copy">抓取九图、Live Photo 和转发动态已迁移到订阅中心，可按每个 UP 单独设置。拉取时会自动加入访问抖动、下载间隔抖动和浏览器化请求头。</p>
-                        <p class="field-copy">全量拉取会重新扫描当前账号可见的所有动态，用于补齐旧动态和漏拉内容。</p>
+                        <label>下载间隔(秒) <input class="ui-field" type="number" min="0" step="0.1" x-model="settings.download_sleep"></label>
+                        <label>UP 主定时拉取间隔(小时) <input class="ui-field" type="number" min="1" x-model.number="settings.scheduler_interval_hours"></label>
+                        <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.auto_load_enabled"> 图片视图滑到底部自动继续加载</label>
+                        <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.scheduler_enabled"> 启用 UP 主定时拉取</label>
                         <div class="button-row confirm-row" x-show="fullReloadConfirmStep === 0">
-                            <button class="secondary-button confirm-anchor" @click="askFullReload()" x-text="fullReloadButtonLabel()"></button>
+                            <button class="secondary-button confirm-anchor" @click="askFullReload()" data-tooltip="重新扫描当前账号可见的所有动态，补齐旧内容" aria-label="全量拉取当前所有动态" x-text="fullReloadConfirmStep === 0 ? '全量拉取' : fullReloadButtonLabel()"></button>
                         </div>
                         <div class="button-row confirm-row" x-show="fullReloadConfirmStep > 0 && fullReloadConfirmStep < 3" x-cloak>
-                            <button class="secondary-button danger-button confirm-anchor" @click="askFullReload()" x-text="fullReloadButtonLabel()"></button>
+                            <button class="secondary-button danger-button confirm-anchor" @click="askFullReload()" data-tooltip="重新扫描当前账号可见的所有动态，补齐旧内容" aria-label="全量拉取当前所有动态" x-text="fullReloadConfirmStep === 0 ? '全量拉取' : fullReloadButtonLabel()"></button>
                         </div>
                         <div class="button-row confirm-row" x-show="fullReloadConfirmStep >= 3" x-cloak>
                             <button class="primary-button danger-confirm confirm-anchor" @click="confirmFullReload()">确认开始全量拉取</button>
                         </div>
                     </article>
 
-                    <article class="settings-card">
-                        <h4>推广过滤</h4>
-                        <label class="toggle-row"><input type="checkbox" x-model="settings.ad_filter_enabled"> 启用推广过滤</label>
-                        <label>长图阈值 <input type="number" step="0.1" x-model="settings.long_image_ratio"></label>
+                    <article class="settings-card" x-show="settingsGroup === 'filter'" data-settings-group="filter">
+                        <h4 class="heading-with-help">推广过滤<button type="button" class="help-button" aria-label="推广过滤说明" data-tooltip="每行一个关键词，命中后动态进入待审核列表。">?</button></h4>
+                        <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.ad_filter_enabled"> 启用推广过滤</label>
+                        <label>长图阈值 <input class="ui-field" type="number" min="1" step="0.1" x-model="settings.long_image_ratio"></label>
                         <label>查看原帖打开方式
-                            <select x-model="settings.review_source_open_mode">
+                            <select class="ui-field" x-model="settings.review_source_open_mode">
                                 <option value="browser">系统浏览器</option>
                                 <option value="popup">站内小浮窗</option>
                             </select>
                         </label>
                         <label for="ad-filter-keywords">关键词列表</label>
-                        <textarea id="ad-filter-keywords" rows="10" x-model="keywordText" aria-label="推广过滤关键词列表"></textarea>
-                        <p class="field-copy">每行一个关键词，命中后动态进入待审核列表。</p>
+                        <textarea class="ui-field" id="ad-filter-keywords" rows="10" x-model="keywordText" aria-label="推广过滤关键词列表"></textarea>
                     </article>
 
-                    <article class="settings-card">
-                        <h4>重复内容检测</h4>
+                    <article class="settings-card" x-show="settingsGroup === 'filter'" data-settings-group="filter">
+                        <h4 class="heading-with-help">重复内容检测<button type="button" class="help-button" aria-label="重复内容检测说明" data-tooltip="默认 2 张。两条贴文达到这个相似图片数量后，会出现在“重复内容”中；修改后保存即可持久生效。">?</button></h4>
                         <label>触发所需相似图片数
-                            <input type="number" min="1" max="100" step="1" x-model.number="settings.duplicate_image_threshold">
+                            <input class="ui-field" type="number" min="1" max="100" step="1" x-model.number="settings.duplicate_image_threshold">
                         </label>
-                        <p class="field-copy">默认 2 张。两条贴文达到这个相似图片数量后，会出现在“重复内容”中；修改后保存即可持久生效。</p>
                     </article>
 
-                    <article class="settings-card">
-                        <h4>站点同步</h4>
-                        <label class="toggle-row"><input type="checkbox" x-model="settings.site_scheduler_enabled"> 启用站点订阅定时同步</label>
-                        <label>站点定时同步间隔(小时) <input type="number" min="1" x-model.number="settings.site_scheduler_interval_hours"></label>
-                        <label>页面请求超时(秒) <input type="number" min="30" max="900" step="10" x-model.number="settings.site_request_timeout"></label>
-                        <label>请求间隔(秒) <input type="number" min="0" step="0.1" x-model.number="settings.site_request_sleep"></label>
-                        <label>单贴文最大媒体数 <input type="number" min="1" max="500" x-model.number="settings.site_max_media_per_post"></label>
-                        <label>默认起始日期 <input type="date" x-model="settings.site_default_start_date"></label>
-                        <label class="toggle-row"><input type="checkbox" x-model="settings.site_proxy_enabled"> 启用 Clash 代理</label>
-                        <label>代理 IP <input type="text" x-model="settings.site_proxy_host" placeholder="127.0.0.1"></label>
-                        <label>代理端口 <input type="number" min="1" max="65535" step="1" x-model.number="settings.site_proxy_port"></label>
-                        <p class="field-copy">慢站点或海外站点可把页面请求超时调高；代理只影响站点解析和站点媒体下载，不影响哔哩哔哩登录与动态拉取。</p>
+                    <article class="settings-card" x-show="settingsGroup === 'sync'" data-settings-group="sync">
+                        <h4 class="heading-with-help">站点同步<button type="button" class="help-button" aria-label="站点同步说明" data-tooltip="慢站点或海外站点可把页面请求超时调高；代理只影响站点解析和站点媒体下载，不影响哔哩哔哩登录与动态拉取。">?</button></h4>
+                        <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.site_scheduler_enabled"> 启用站点订阅定时同步</label>
+                        <label>站点定时同步间隔(小时) <input class="ui-field" type="number" min="1" x-model.number="settings.site_scheduler_interval_hours"></label>
+                        <label>页面请求超时(秒) <input class="ui-field" type="number" min="30" max="900" step="10" x-model.number="settings.site_request_timeout"></label>
+                        <label>请求间隔(秒) <input class="ui-field" type="number" min="0" step="0.1" x-model.number="settings.site_request_sleep"></label>
+                        <label>单贴文最大媒体数 <input class="ui-field" type="number" min="1" max="500" x-model.number="settings.site_max_media_per_post"></label>
+                        <label>默认起始日期 <input class="ui-field" type="date" x-model="settings.site_default_start_date"></label>
+                        <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.site_proxy_enabled"> 启用 Clash 代理</label>
+                        <label>代理 IP <input class="ui-field" type="text" x-model="settings.site_proxy_host" placeholder="127.0.0.1"></label>
+                        <label>代理端口 <input class="ui-field" type="number" min="1" max="65535" step="1" x-model.number="settings.site_proxy_port"></label>
                     </article>
 
-                    <article class="settings-card thumbnail-settings-card">
-                        <h4>界面与缩略图</h4>
+                    <article class="settings-card thumbnail-settings-card" x-show="settingsGroup === 'media'" data-settings-group="media">
+                        <h4 class="heading-with-help">界面与缩略图<button type="button" class="help-button" aria-label="界面与缩略图说明" data-tooltip="瀑布流只使用 tiny 和 small，详情与查看器按需加载 thumb。">?</button></h4>
                         <div class="interface-settings-grid">
-                            <label>应用标题 <input type="text" x-model="settings.app_title" placeholder="BiliGalleryRC"></label>
+                            <label>应用标题 <input class="ui-field" type="text" x-model="settings.app_title" placeholder="BiliGalleryRC"></label>
                             <label>显示性能模式
-                                <select x-model="performanceMode" @change="setPerformanceMode($event.target.value)">
+                                <select class="ui-field" x-model="performanceMode" @change="setPerformanceMode($event.target.value)" :data-tooltip="resolvedPerformanceMode === 'low' ? '已降低模糊和阴影，媒体功能不受影响。' : '保留完整视觉效果。'">
                                     <option value="auto">自动</option>
                                     <option value="full">完整视觉</option>
                                     <option value="low">低功耗</option>
                                 </select>
                             </label>
-                            <label class="toggle-row interface-preview-toggle"><input type="checkbox" :checked="hoverPreviewEnabled" @change="setHoverPreviewEnabled($event.target.checked)"> 自动预览 Live Photo</label>
-                            <p class="field-copy interface-performance-copy" x-text="resolvedPerformanceMode === 'low' ? '当前已降低模糊和阴影，媒体功能不受影响。' : '当前保留完整视觉效果。'"></p>
+                            <label class="toggle-row interface-preview-toggle switch-row"><input type="checkbox" :checked="hoverPreviewEnabled" @change="setHoverPreviewEnabled($event.target.checked)"> 自动预览 Live Photo</label>
                         </div>
                         <div class="thumbnail-level-grid">
                             <div class="thumbnail-level-row">
                                 <strong>tiny</strong>
-                                <label>短边<input type="number" min="16" max="512" step="1" x-model.number="settings.tiny_thumb_edge"></label>
-                                <label>质量<input type="number" min="1" max="100" step="1" x-model.number="settings.tiny_thumb_quality"></label>
-                                <button class="secondary-button" x-show="thumbnailRebuildConfirmLevel !== 'tiny'" @click="askThumbnailRebuild('tiny')">重建 tiny</button>
+                                <label>短边<input class="ui-field" type="number" min="16" max="512" step="1" aria-label="tiny 缩略图短边" x-model.number="settings.tiny_thumb_edge"></label>
+                                <label>质量<input class="ui-field" type="number" min="1" max="100" step="1" aria-label="tiny 缩略图质量" x-model.number="settings.tiny_thumb_quality"></label>
+                                <button class="secondary-button" x-show="thumbnailRebuildConfirmLevel !== 'tiny'" @click="askThumbnailRebuild('tiny')" aria-label="重建 tiny 缩略图" data-tooltip="重新生成 tiny 缩略图">重建</button>
                                 <div class="button-row confirm-row" x-show="thumbnailRebuildConfirmLevel === 'tiny'" x-cloak>
                                     <button class="primary-button confirm-anchor" @click="confirmThumbnailRebuild('tiny')">确认重建</button>
                                 </div>
                             </div>
                             <div class="thumbnail-level-row">
                                 <strong>small</strong>
-                                <label>短边<input type="number" min="64" max="1024" step="1" x-model.number="settings.small_thumb_edge"></label>
-                                <label>质量<input type="number" min="1" max="100" step="1" x-model.number="settings.small_thumb_quality"></label>
-                                <button class="secondary-button" x-show="thumbnailRebuildConfirmLevel !== 'small'" @click="askThumbnailRebuild('small')">重建 small</button>
+                                <label>短边<input class="ui-field" type="number" min="64" max="1024" step="1" aria-label="small 缩略图短边" x-model.number="settings.small_thumb_edge"></label>
+                                <label>质量<input class="ui-field" type="number" min="1" max="100" step="1" aria-label="small 缩略图质量" x-model.number="settings.small_thumb_quality"></label>
+                                <button class="secondary-button" x-show="thumbnailRebuildConfirmLevel !== 'small'" @click="askThumbnailRebuild('small')" aria-label="重建 small 缩略图" data-tooltip="重新生成 small 缩略图">重建</button>
                                 <div class="button-row confirm-row" x-show="thumbnailRebuildConfirmLevel === 'small'" x-cloak>
                                     <button class="primary-button confirm-anchor" @click="confirmThumbnailRebuild('small')">确认重建</button>
                                 </div>
                             </div>
                             <div class="thumbnail-level-row">
                                 <strong>thumb</strong>
-                                <label>短边<input type="number" min="128" max="2048" step="1" x-model.number="settings.thumb_edge"></label>
-                                <label>质量<input type="number" min="1" max="100" step="1" x-model.number="settings.thumb_quality"></label>
-                                <button class="secondary-button" x-show="thumbnailRebuildConfirmLevel !== 'thumb'" @click="askThumbnailRebuild('thumb')">重建 thumb</button>
+                                <label>短边<input class="ui-field" type="number" min="128" max="2048" step="1" aria-label="thumb 缩略图短边" x-model.number="settings.thumb_edge"></label>
+                                <label>质量<input class="ui-field" type="number" min="1" max="100" step="1" aria-label="thumb 缩略图质量" x-model.number="settings.thumb_quality"></label>
+                                <button class="secondary-button" x-show="thumbnailRebuildConfirmLevel !== 'thumb'" @click="askThumbnailRebuild('thumb')" aria-label="重建 thumb 缩略图" data-tooltip="重新生成 thumb 缩略图">重建</button>
                                 <div class="button-row confirm-row" x-show="thumbnailRebuildConfirmLevel === 'thumb'" x-cloak>
                                     <button class="primary-button confirm-anchor" @click="confirmThumbnailRebuild('thumb')">确认重建</button>
                                 </div>
                             </div>
                         </div>
-                        <p class="field-copy">瀑布流只使用 tiny 和 small，详情与查看器按需加载 thumb。</p>
                     </article>
 
-                    <article class="settings-card">
-                        <h4>订阅图标</h4>
-                        <p class="field-copy">动态订阅头像与站点订阅图标分开重置，任务会在后台执行。无法获得图像的项目会回退为默认文字徽标。</p>
+                    <article class="settings-card" x-show="settingsGroup === 'media'" data-settings-group="media">
+                        <h4 class="heading-with-help">订阅图标<button type="button" class="help-button" aria-label="订阅图标说明" data-tooltip="动态订阅头像与站点订阅图标分开重置，任务会在后台执行。无法获得图像的项目会回退为默认文字徽标。">?</button></h4>
                         <div class="settings-icon-reset-grid">
                             <div class="settings-icon-reset-row">
-                                <div><strong>动态订阅图标</strong><span>重新获取所有 UP 主头像</span></div>
+                                <strong data-tooltip="重新获取所有 UP 主头像">UP 主头像</strong>
                                 <div class="button-row" x-show="resetSubscriptionIconsConfirmStep === 0">
-                                    <button class="secondary-button confirm-anchor" @click="askResetSubscriptionIcons()" :disabled="resetSubscriptionIconsRunning" x-text="resetSubscriptionIconsRunning ? '重置中' : '重置动态订阅图标'"></button>
+                                    <button class="secondary-button confirm-anchor" @click="askResetSubscriptionIcons()" :disabled="resetSubscriptionIconsRunning" data-tooltip="重新获取所有 UP 主头像" aria-label="重置 UP 主头像" x-text="resetSubscriptionIconsRunning ? '重置中' : '重置'"></button>
                                 </div>
                                 <div class="button-row" x-show="resetSubscriptionIconsConfirmStep === 1" x-cloak>
                                     <button class="secondary-button" @click="cancelResetSubscriptionIcons()">取消</button>
@@ -1021,9 +1019,9 @@
                                 </div>
                             </div>
                             <div class="settings-icon-reset-row">
-                                <div><strong>站点订阅图标</strong><span>重新获取所有站点 logo/icon</span></div>
+                                <strong data-tooltip="重新获取所有站点 logo/icon">站点图标</strong>
                                 <div class="button-row" x-show="resetSiteIconsConfirmStep === 0">
-                                    <button class="secondary-button confirm-anchor" @click="askResetSiteIcons()" :disabled="resetSiteIconsRunning" x-text="resetSiteIconsRunning ? '重置中' : '重置站点订阅图标'"></button>
+                                    <button class="secondary-button confirm-anchor" @click="askResetSiteIcons()" :disabled="resetSiteIconsRunning" data-tooltip="重新获取所有站点图标" aria-label="重置站点图标" x-text="resetSiteIconsRunning ? '重置中' : '重置'"></button>
                                 </div>
                                 <div class="button-row" x-show="resetSiteIconsConfirmStep === 1" x-cloak>
                                     <button class="secondary-button" @click="cancelResetSiteIcons()">取消</button>
@@ -1033,7 +1031,7 @@
                         </div>
                     </article>
 
-                    <article class="settings-card auth-card">
+                    <article class="settings-card auth-card" x-show="settingsGroup === 'account'" data-settings-group="account">
                         <h4>哔哩哔哩权限</h4>
                         <p class="field-copy" x-text="settings.auth?.message || '未检查 Cookie'"></p>
                         <div class="inline-tags" x-show="settings.auth?.ok" x-cloak>
@@ -1051,9 +1049,8 @@
                         </div>
                     </article>
 
-                    <article class="settings-card danger-settings-card">
-                        <h4>内容校验</h4>
-                        <p class="field-copy">检查当前资料库里的动态是否缺图、是否存在重复素材。发现重复会清重，发现缺失会重新拉取该动态。</p>
+                    <article class="settings-card danger-settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
+                        <h4 class="heading-with-help">内容校验<button type="button" class="help-button" aria-label="内容校验说明" data-tooltip="检查当前资料库里的动态是否缺图、是否存在重复素材。发现重复会清重，发现缺失会重新拉取该动态。">?</button></h4>
                         <div class="button-row confirm-row" x-show="validateConfirmStep === 0">
                             <button class="secondary-button confirm-anchor" @click="askValidateContent()" x-text="validateButtonLabel()"></button>
                         </div>
@@ -1062,12 +1059,11 @@
                         </div>
                     </article>
 
-                    <article class="settings-card">
-                        <h4>页面索引</h4>
-                        <label class="toggle-row"><input type="checkbox" x-model="settings.auto_gallery_index_check"> 自动索引检查</label>
-                        <p class="field-copy" x-text="`索引版本 ${galleryIndexStatus.version || 0} / ${galleryIndexStatus.current_version || 0}`"></p>
+                    <article class="settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
+                        <h4 class="heading-with-help">页面索引<button type="button" class="help-button" aria-label="页面索引说明" :data-tooltip="`版本 ${galleryIndexStatus.version || 0} / ${galleryIndexStatus.current_version || 0}；最近重建：${galleryIndexStatus.rebuilt_at || '暂无'}`">?</button></h4>
+                        <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.auto_gallery_index_check"> 自动索引检查</label>
                         <p class="field-copy" x-text="`动态索引 ${galleryIndexStatus.folder_index_rows || 0} 条，图片索引 ${galleryIndexStatus.pair_index_rows || 0} 条`"></p>
-                        <p class="field-copy" x-text="galleryIndexStatus.rebuilding ? '后台正在重建页面索引' : (galleryIndexStatus.rebuilt_at ? `最近重建：${galleryIndexStatus.rebuilt_at}` : '尚未完成页面索引重建')"></p>
+                        <span class="inline-tag" x-show="galleryIndexStatus.rebuilding">重建中</span>
                         <div class="button-row confirm-row" x-show="rebuildIndexConfirmStep === 0">
                             <button class="secondary-button confirm-anchor" @click="askRebuildGalleryIndex()" x-text="rebuildIndexButtonLabel()"></button>
                         </div>
@@ -1076,7 +1072,7 @@
                         </div>
                     </article>
 
-                    <article class="settings-card storage-stats-card">
+                    <article class="settings-card storage-stats-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
                         <h4>数据统计</h4>
                         <div class="storage-stat-list">
                             <div class="storage-stat-row">
@@ -1095,16 +1091,15 @@
                                 <small x-text="`${storageStats.trash_files || 0} 个文件`"></small>
                             </div>
                         </div>
-                        <p class="field-copy" x-text="`最近统计：${storageStatsUpdatedText()}`"></p>
+
                         <div class="button-row">
-                            <button class="secondary-button" @click="refreshStorageStats(true)" :disabled="storageStatsLoading" x-text="storageStatsLoading ? '统计中' : '重新统计'"></button>
+                            <button class="secondary-button" :data-tooltip="`最近统计：${storageStatsUpdatedText()}`" @click="refreshStorageStats(true)" :disabled="storageStatsLoading" x-text="storageStatsLoading ? '统计中' : '重新统计'"></button>
                             <button class="secondary-button danger-button" @click="cleanupStorageTrash()" :disabled="storageCleanupRunning || !(storageStats.trash_files > 0)" x-text="storageCleanupRunning ? '提交中' : '清理垃圾文件'"></button>
                         </div>
                     </article>
 
-                    <article class="settings-card danger-settings-card">
-                        <h4>内容清理</h4>
-                        <p class="field-copy">会清空资料库、待审核、过滤日志、任务记录、垃圾桶和黑名单，但会保留当前 Cookie 登录状态与设置。</p>
+                    <article class="settings-card danger-settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
+                        <h4 class="heading-with-help">危险操作：清空内容<button type="button" class="help-button" aria-label="危险操作：清空内容说明" data-tooltip="会清空资料库、待审核、过滤日志、任务记录、垃圾桶和黑名单，但会保留当前 Cookie 登录状态与设置。">?</button></h4>
                         <div class="button-row confirm-row" x-show="clearDataConfirmStep === 0">
                             <button class="secondary-button danger-button confirm-anchor" @click="askClearAllData()" x-text="clearDataButtonLabel()"></button>
                         </div>
@@ -1120,10 +1115,7 @@
 
             <section class="panel-view subscription-overview-pane" data-testid="section-subscription-overview" x-show="currentView === 'subscriptions' && subscriptionPanel === 'overview'" x-cloak>
                 <div class="section-heading subscription-sticky-head">
-                    <div>
-                        <p>订阅中心</p>
-                        <h3>概览</h3>
-                    </div>
+
                     <div class="button-row">
                         <div class="segmented-pill subscription-segmented" role="group" aria-label="订阅页面切换">
                             <span class="segmented-pill-indicator" :style="subscriptionPanelIndicatorStyle()"></span>
@@ -1136,14 +1128,15 @@
                 <div class="subscription-overview-toolbar">
                     <label class="subscription-search-field">
                         <span class="search-glyph" aria-hidden="true"></span>
-                        <input type="search" x-model="subscriptionSearch" placeholder="搜索订阅名称、UID 或状态">
+                        <input class="ui-field" type="search" x-model="subscriptionSearch" placeholder="搜索订阅名称、UID 或状态" aria-label="搜索订阅">
                     </label>
-                    <select :value="subscriptionOverviewSort" @change="setSubscriptionOverviewSort($event.target.value)">
+                    <select class="ui-field" aria-label="订阅排序方式" :value="subscriptionOverviewSort" @change="setSubscriptionOverviewSort($event.target.value)">
                         <option value="name">按名称</option>
                         <option value="posts">按贴文数</option>
                         <option value="assets">按图片数</option>
+                        <option value="recent">按最新内容</option>
                     </select>
-                    <select :value="subscriptionOverviewGroup" @change="setSubscriptionOverviewGroup($event.target.value)">
+                    <select class="ui-field" aria-label="订阅分组方式" :value="subscriptionOverviewGroup" @change="setSubscriptionOverviewGroup($event.target.value)">
                         <option value="kind">按类型分组</option>
                         <option value="status">按状态分组</option>
                         <option value="none">不分组</option>
@@ -1157,7 +1150,7 @@
                         </div>
                         <div class="subscription-icon-grid">
                             <template x-for="item in group.items" :key="item.uid">
-                                <button class="subscription-icon-tile" @click="openSubscriptionOverviewItem(item)">
+                                <button class="subscription-icon-tile" :data-tooltip="`${item.uname || item.name || item.uid} · ${subscriptionOverviewDateText(item)} · ${subscriptionSyncText(item)} · ${item.uid}`" @click="openSubscriptionOverviewItem(item)">
                                     <span class="link-badge subscription-link-badge subscription-card-icon" :class="{ image: subscriptionIconUrl(item) }" :style="subscriptionIconTinyStyle(item)">
                                         <template x-if="subscriptionIconUrl(item)">
                                             <img :src="subscriptionIconUrl(item)" :alt="item.uname || item.name || item.uid" loading="lazy" decoding="async" @load="fadeLoadedImage($event)" @error="handleSubscriptionIconError(item)">
@@ -1166,27 +1159,21 @@
                                             <span x-text="subscriptionBadgeText(item)"></span>
                                         </template>
                                     </span>
-                                    <small class="subscription-overview-date" :style="subscriptionOverviewDateStyle(item)" x-text="subscriptionOverviewDateText(item)"></small>
                                     <strong x-text="item.uname || item.name || item.uid"></strong>
-                                    <small x-text="subscriptionOverviewPostText(item)"></small>
-                                    <small x-text="subscriptionOverviewImageText(item)"></small>
+                                    <small x-text="`${subscriptionOverviewPostText(item)} · ${subscriptionOverviewImageText(item)}`"></small>
                                 </button>
                             </template>
                         </div>
                     </section>
                 </template>
                 <div class="empty-state" x-show="subscriptionOverviewItems().length === 0" x-cloak>
-                    <strong>没有匹配的订阅</strong>
-                    <p>调整搜索关键词后再试。</p>
+                    <strong>没有匹配的订阅</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="调整搜索关键词后再试。">?</button>
                 </div>
             </section>
 
             <section class="panel-view" data-testid="section-subscriptions" x-show="currentView === 'subscriptions' && subscriptionPanel === 'up'" x-cloak>
                 <div class="section-heading">
-                    <div>
-                        <p>订阅中心</p>
-                        <h3>订阅管理</h3>
-                    </div>
+
                     <div class="button-row">
                         <div class="segmented-pill subscription-segmented" role="group" aria-label="订阅页面切换">
                             <span class="segmented-pill-indicator" :style="subscriptionPanelIndicatorStyle()"></span>
@@ -1194,7 +1181,7 @@
                             <button type="button" :class="{ active: subscriptionPanel === 'up' }" :aria-pressed="subscriptionPanel === 'up'" @click="setSubscriptionPanel('up')">UP 主动态</button>
                             <button type="button" :class="{ active: subscriptionPanel === 'site' }" :aria-pressed="subscriptionPanel === 'site'" @click="setSubscriptionPanel('site')">站点订阅</button>
                         </div>
-                        <input class="subscription-input" type="number" placeholder="输入 UID" x-model="newSubscriptionUid">
+                        <input class="ui-field subscription-input" type="number" placeholder="输入 UID" aria-label="订阅 UID" x-model="newSubscriptionUid">
                         <button class="primary-button" @click="createSubscription()">添加订阅</button>
                     </div>
                 </div>
@@ -1221,19 +1208,19 @@
                                     <span class="inline-tag" x-text="subscriptionLivePhotoSummary(item)"></span>
                                 </div>
                             </div>
-                            <span class="subscription-expand-indicator" :class="{ open: isSubscriptionExpanded(item.uid) }">展开</span>
+                            <span class="subscription-expand-indicator" :class="{ open: isSubscriptionExpanded(item.uid) }" aria-hidden="true"></span>
                         </button>
                         <div class="subscription-card-body" x-show="isSubscriptionExpanded(item.uid)" x-transition.opacity.duration.180ms x-cloak>
                             <div class="subscription-policy-grid">
                                 <label>
                                     <span>图片阈值</span>
-                                    <input class="threshold-input" type="number" min="-1" max="12" :value="item.image_min_count ?? 6" @change="updateSubscriptionSetting(item, 'image_min_count', $event.target.value)">
+                                    <input class="ui-field threshold-input" type="number" min="-1" max="12" :value="item.image_min_count ?? 6" @change="updateSubscriptionSetting(item, 'image_min_count', $event.target.value)">
                                 </label>
-                                <label class="toggle-row">
+                                <label class="toggle-row switch-row">
                                     <input type="checkbox" :checked="!!item.pull_livephoto" @change="updateSubscriptionSetting(item, 'pull_livephoto', $event.target.checked)">
                                     <span>抓取 Live Photo</span>
                                 </label>
-                                <label class="toggle-row">
+                                <label class="toggle-row switch-row">
                                     <input type="checkbox" :checked="!!item.include_forwarded" @change="updateSubscriptionSetting(item, 'include_forwarded', $event.target.checked)">
                                     <span>包含转发动态</span>
                                 </label>
@@ -1268,17 +1255,13 @@
                     </article>
                 </template>
                 <div class="empty-state" x-show="upSubscriptions().length === 0" x-cloak>
-                    <strong>暂无 UP 主订阅</strong>
-                    <p>输入 UID 后即可添加 UP 主动态订阅。</p>
+                    <strong>暂无 UP 主订阅</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="输入 UID 后即可添加 UP 主动态订阅。">?</button>
                 </div>
             </section>
 
             <section class="panel-view site-pane" data-testid="section-sites" x-show="currentView === 'subscriptions' && subscriptionPanel === 'site'" x-cloak>
                 <div class="section-heading">
-                    <div>
-                        <p>订阅中心</p>
-                        <h3>订阅管理</h3>
-                    </div>
+
                     <div class="button-row">
                         <div class="segmented-pill subscription-segmented" role="group" aria-label="订阅页面切换">
                             <span class="segmented-pill-indicator" :style="subscriptionPanelIndicatorStyle()"></span>
@@ -1302,46 +1285,41 @@
 
                 <div class="site-source-card-list">
                     <article class="panel-card subscription-card" :class="{ expanded: newSiteSourceExpanded }">
-                        <button class="subscription-card-head" @click="newSiteSourceExpanded = !newSiteSourceExpanded" :aria-expanded="newSiteSourceExpanded">
+                        <button class="subscription-card-head" data-tooltip="RSS、Sitemap 或 HTML 列表页" @click="newSiteSourceExpanded = !newSiteSourceExpanded" :aria-expanded="newSiteSourceExpanded">
                             <div class="panel-card-main subscription-card-main">
                                 <div class="subscription-card-title">
                                     <h4>新增站点</h4>
-                                    <p>RSS、Sitemap 或 HTML 列表页</p>
-                                </div>
-                                <div class="inline-tags subscription-summary-tags">
-                                    <span class="inline-tag">独立设置</span>
-                                    <span class="inline-tag">测试解析</span>
                                 </div>
                             </div>
-                            <span class="subscription-expand-indicator" :class="{ open: newSiteSourceExpanded }">展开</span>
+                            <span class="subscription-expand-indicator" :class="{ open: newSiteSourceExpanded }" aria-hidden="true"></span>
                         </button>
                         <div class="subscription-card-body" x-show="newSiteSourceExpanded" x-transition.opacity.duration.180ms x-cloak>
                             <div class="site-url-first-row">
-                                <label>入口 URL<input x-model="siteSourceForm.entry_url" required placeholder="https://example.com/feed.xml"></label>
+                                <label>入口 URL<input class="ui-field" x-model="siteSourceForm.entry_url" required placeholder="https://example.com/feed.xml"></label>
                                 <button class="primary-button" @click="suggestSiteSource()" :disabled="siteSuggestLoading || !siteSourceForm.entry_url" x-text="siteSuggestLoading ? '探测中' : '自动填写'"></button>
                             </div>
                             <div class="subscription-policy-grid site-policy-grid" x-show="siteSourceFormExpanded" x-cloak>
-                                <label>名称<input x-model="siteSourceForm.name" required></label>
-                                <label>Slug<input x-model="siteSourceForm.slug" placeholder="自动生成"></label>
+                                <label>名称<input class="ui-field" x-model="siteSourceForm.name" required></label>
+                                <label>Slug<input class="ui-field" x-model="siteSourceForm.slug" placeholder="自动生成"></label>
                                 <label>类型
-                                    <select x-model="siteSourceForm.source_type">
+                                    <select class="ui-field" x-model="siteSourceForm.source_type">
                                         <option value="html">HTML 列表页</option>
                                         <option value="rss">RSS</option>
                                         <option value="sitemap">Sitemap</option>
                                     </select>
                                 </label>
-                                <label>分页模板<input x-model="siteSourceForm.page_url_template" placeholder="https://example.com/page/{page}"></label>
-                                <label>最大页数<input type="number" min="1" x-model.number="siteSourceForm.max_pages"></label>
-                                <label>列表项选择器<input x-model="siteSourceForm.list_item_selector" placeholder=".post-card"></label>
-                                <label>详情链接选择器<input x-model="siteSourceForm.detail_link_selector" placeholder="a"></label>
-                                <label>标题选择器<input x-model="siteSourceForm.title_selector" placeholder="h1"></label>
-                                <label>日期选择器<input x-model="siteSourceForm.date_selector" placeholder="time"></label>
-                                <label>tag 选择器<input x-model="siteSourceForm.tag_selector" placeholder=".tag"></label>
-                                <label>正文选择器<input x-model="siteSourceForm.body_selector" placeholder="article, .library-content, .content"></label>
-                                <label>媒体选择器<input x-model="siteSourceForm.media_selector" placeholder=".library-content img, .content img"></label>
-                                <label>跳过头部图片数<input type="number" min="0" x-model.number="siteSourceForm.skip_head_images"></label>
-                                <label>跳过尾部图片数<input type="number" min="0" x-model.number="siteSourceForm.skip_tail_images"></label>
-                                <label>起始日期<input type="date" x-model="siteSourceForm.start_date"></label>
+                                <label>分页模板<input class="ui-field" x-model="siteSourceForm.page_url_template" placeholder="https://example.com/page/{page}"></label>
+                                <label>最大页数<input class="ui-field" type="number" min="1" x-model.number="siteSourceForm.max_pages"></label>
+                                <label>列表项选择器<input class="ui-field" x-model="siteSourceForm.list_item_selector" placeholder=".post-card"></label>
+                                <label>详情链接选择器<input class="ui-field" x-model="siteSourceForm.detail_link_selector" placeholder="a"></label>
+                                <label>标题选择器<input class="ui-field" x-model="siteSourceForm.title_selector" placeholder="h1"></label>
+                                <label>日期选择器<input class="ui-field" x-model="siteSourceForm.date_selector" placeholder="time"></label>
+                                <label>tag 选择器<input class="ui-field" x-model="siteSourceForm.tag_selector" placeholder=".tag"></label>
+                                <label>正文选择器<input class="ui-field" x-model="siteSourceForm.body_selector" placeholder="article, .library-content, .content"></label>
+                                <label>媒体选择器<input class="ui-field" x-model="siteSourceForm.media_selector" placeholder=".library-content img, .content img"></label>
+                                <label>跳过头部图片数<input class="ui-field" type="number" min="0" x-model.number="siteSourceForm.skip_head_images"></label>
+                                <label>跳过尾部图片数<input class="ui-field" type="number" min="0" x-model.number="siteSourceForm.skip_tail_images"></label>
+                                <label>起始日期<input class="ui-field" type="date" x-model="siteSourceForm.start_date"></label>
                                 <label class="toggle-row switch-row"><input type="checkbox" x-model="siteSourceForm.enabled"><span>启用来源</span></label>
                                 <label class="toggle-row switch-row"><input type="checkbox" x-model="siteSourceForm.use_proxy"><span>应用站点网络代理</span></label>
                             </div>
@@ -1391,32 +1369,32 @@
                                         <span class="inline-tag" x-text="source.start_date || '默认起始日期'"></span>
                                     </div>
                                 </div>
-                                <span class="subscription-expand-indicator" :class="{ open: isSiteSourceExpanded(source.id) }">展开</span>
+                                <span class="subscription-expand-indicator" :class="{ open: isSiteSourceExpanded(source.id) }" aria-hidden="true"></span>
                             </button>
                             <div class="subscription-card-body" x-show="isSiteSourceExpanded(source.id)" x-transition.opacity.duration.180ms x-cloak>
                                 <div class="subscription-policy-grid site-policy-grid">
-                                    <label>名称<input :value="siteSourceDraftValue(source.id, 'name')" @input="updateSiteSourceDraft(source.id, 'name', $event.target.value)" required></label>
-                                    <label>Slug<input :value="siteSourceDraftValue(source.id, 'slug')" @input="updateSiteSourceDraft(source.id, 'slug', $event.target.value)" placeholder="自动生成"></label>
+                                    <label>名称<input class="ui-field" :value="siteSourceDraftValue(source.id, 'name')" @input="updateSiteSourceDraft(source.id, 'name', $event.target.value)" required></label>
+                                    <label>Slug<input class="ui-field" :value="siteSourceDraftValue(source.id, 'slug')" @input="updateSiteSourceDraft(source.id, 'slug', $event.target.value)" placeholder="自动生成"></label>
                                     <label>类型
-                                        <select :value="siteSourceDraftValue(source.id, 'source_type')" @change="updateSiteSourceDraft(source.id, 'source_type', $event.target.value)">
+                                        <select class="ui-field" :value="siteSourceDraftValue(source.id, 'source_type')" @change="updateSiteSourceDraft(source.id, 'source_type', $event.target.value)">
                                             <option value="html">HTML 列表页</option>
                                             <option value="rss">RSS</option>
                                             <option value="sitemap">Sitemap</option>
                                         </select>
                                     </label>
-                                    <label>入口 URL<input :value="siteSourceDraftValue(source.id, 'entry_url')" @input="updateSiteSourceDraft(source.id, 'entry_url', $event.target.value)" required placeholder="https://example.com/feed.xml"></label>
-                                    <label>分页模板<input :value="siteSourceDraftValue(source.id, 'page_url_template')" @input="updateSiteSourceDraft(source.id, 'page_url_template', $event.target.value)" placeholder="https://example.com/page/{page}"></label>
-                                    <label>最大页数<input type="number" min="1" :value="siteSourceDraftValue(source.id, 'max_pages')" @input="updateSiteSourceDraft(source.id, 'max_pages', $event.target.value)"></label>
-                                    <label>列表项选择器<input :value="siteSourceDraftValue(source.id, 'list_item_selector')" @input="updateSiteSourceDraft(source.id, 'list_item_selector', $event.target.value)" placeholder=".post-card"></label>
-                                    <label>详情链接选择器<input :value="siteSourceDraftValue(source.id, 'detail_link_selector')" @input="updateSiteSourceDraft(source.id, 'detail_link_selector', $event.target.value)" placeholder="a"></label>
-                                    <label>标题选择器<input :value="siteSourceDraftValue(source.id, 'title_selector')" @input="updateSiteSourceDraft(source.id, 'title_selector', $event.target.value)" placeholder="h1"></label>
-                                    <label>日期选择器<input :value="siteSourceDraftValue(source.id, 'date_selector')" @input="updateSiteSourceDraft(source.id, 'date_selector', $event.target.value)" placeholder="time"></label>
-                                    <label>tag 选择器<input :value="siteSourceDraftValue(source.id, 'tag_selector')" @input="updateSiteSourceDraft(source.id, 'tag_selector', $event.target.value)" placeholder=".tag"></label>
-                                    <label>正文选择器<input :value="siteSourceDraftValue(source.id, 'body_selector')" @input="updateSiteSourceDraft(source.id, 'body_selector', $event.target.value)" placeholder="article, .library-content, .content"></label>
-                                    <label>媒体选择器<input :value="siteSourceDraftValue(source.id, 'media_selector')" @input="updateSiteSourceDraft(source.id, 'media_selector', $event.target.value)" placeholder=".library-content img, .content img"></label>
-                                    <label>跳过头部图片数<input type="number" min="0" :value="siteSourceDraftValue(source.id, 'skip_head_images')" @input="updateSiteSourceDraft(source.id, 'skip_head_images', $event.target.value)"></label>
-                                    <label>跳过尾部图片数<input type="number" min="0" :value="siteSourceDraftValue(source.id, 'skip_tail_images')" @input="updateSiteSourceDraft(source.id, 'skip_tail_images', $event.target.value)"></label>
-                                    <label>起始日期<input type="date" :value="siteSourceDraftValue(source.id, 'start_date')" @input="updateSiteSourceDraft(source.id, 'start_date', $event.target.value)"></label>
+                                    <label>入口 URL<input class="ui-field" :value="siteSourceDraftValue(source.id, 'entry_url')" @input="updateSiteSourceDraft(source.id, 'entry_url', $event.target.value)" required placeholder="https://example.com/feed.xml"></label>
+                                    <label>分页模板<input class="ui-field" :value="siteSourceDraftValue(source.id, 'page_url_template')" @input="updateSiteSourceDraft(source.id, 'page_url_template', $event.target.value)" placeholder="https://example.com/page/{page}"></label>
+                                    <label>最大页数<input class="ui-field" type="number" min="1" :value="siteSourceDraftValue(source.id, 'max_pages')" @input="updateSiteSourceDraft(source.id, 'max_pages', $event.target.value)"></label>
+                                    <label>列表项选择器<input class="ui-field" :value="siteSourceDraftValue(source.id, 'list_item_selector')" @input="updateSiteSourceDraft(source.id, 'list_item_selector', $event.target.value)" placeholder=".post-card"></label>
+                                    <label>详情链接选择器<input class="ui-field" :value="siteSourceDraftValue(source.id, 'detail_link_selector')" @input="updateSiteSourceDraft(source.id, 'detail_link_selector', $event.target.value)" placeholder="a"></label>
+                                    <label>标题选择器<input class="ui-field" :value="siteSourceDraftValue(source.id, 'title_selector')" @input="updateSiteSourceDraft(source.id, 'title_selector', $event.target.value)" placeholder="h1"></label>
+                                    <label>日期选择器<input class="ui-field" :value="siteSourceDraftValue(source.id, 'date_selector')" @input="updateSiteSourceDraft(source.id, 'date_selector', $event.target.value)" placeholder="time"></label>
+                                    <label>tag 选择器<input class="ui-field" :value="siteSourceDraftValue(source.id, 'tag_selector')" @input="updateSiteSourceDraft(source.id, 'tag_selector', $event.target.value)" placeholder=".tag"></label>
+                                    <label>正文选择器<input class="ui-field" :value="siteSourceDraftValue(source.id, 'body_selector')" @input="updateSiteSourceDraft(source.id, 'body_selector', $event.target.value)" placeholder="article, .library-content, .content"></label>
+                                    <label>媒体选择器<input class="ui-field" :value="siteSourceDraftValue(source.id, 'media_selector')" @input="updateSiteSourceDraft(source.id, 'media_selector', $event.target.value)" placeholder=".library-content img, .content img"></label>
+                                    <label>跳过头部图片数<input class="ui-field" type="number" min="0" :value="siteSourceDraftValue(source.id, 'skip_head_images')" @input="updateSiteSourceDraft(source.id, 'skip_head_images', $event.target.value)"></label>
+                                    <label>跳过尾部图片数<input class="ui-field" type="number" min="0" :value="siteSourceDraftValue(source.id, 'skip_tail_images')" @input="updateSiteSourceDraft(source.id, 'skip_tail_images', $event.target.value)"></label>
+                                    <label>起始日期<input class="ui-field" type="date" :value="siteSourceDraftValue(source.id, 'start_date')" @input="updateSiteSourceDraft(source.id, 'start_date', $event.target.value)"></label>
                                     <label class="toggle-row switch-row"><input type="checkbox" :checked="!!siteSourceDraftValue(source.id, 'enabled')" @change="updateSiteSourceDraft(source.id, 'enabled', $event.target.checked)"><span>启用来源</span></label>
                                     <label class="toggle-row switch-row"><input type="checkbox" :checked="!!siteSourceDraftValue(source.id, 'use_proxy')" @change="updateSiteSourceDraft(source.id, 'use_proxy', $event.target.checked)"><span>应用站点网络代理</span></label>
                                 </div>
@@ -1433,7 +1411,7 @@
                                         <div class="button-row confirm-row">
                                             <label class="inline-number-field site-validate-pages">
                                                 <span>本次页数</span>
-                                                <input type="number" min="1" :value="siteValidatePageDraft(source.id)" @input="updateSiteValidatePageDraft(source.id, $event.target.value)">
+                                                <input class="ui-field" type="number" min="1" :value="siteValidatePageDraft(source.id)" @input="updateSiteValidatePageDraft(source.id, $event.target.value)">
                                             </label>
                                             <button class="primary-button danger-confirm confirm-anchor" @click="validateSiteSource(source)">确认全量校验</button>
                                         </div>
@@ -1470,11 +1448,10 @@
                 <div class="site-main-column">
 
                         <article class="panel-card subscription-card" :class="{ expanded: siteRulesExpanded }">
-                            <button class="subscription-card-head" @click="siteRulesExpanded = !siteRulesExpanded" :aria-expanded="siteRulesExpanded">
+                            <button class="subscription-card-head" data-tooltip="全局标题和 tag 关键词过滤，黑白名单可单独或同时启用" @click="siteRulesExpanded = !siteRulesExpanded" :aria-expanded="siteRulesExpanded">
                                 <div class="panel-card-main subscription-card-main">
                                     <div class="subscription-card-title">
                                         <h4>站点过滤规则</h4>
-                                        <p>全局标题和 tag 关键词过滤，黑白名单可单独或同时启用</p>
                                     </div>
                                     <div class="inline-tags subscription-summary-tags">
                                         <span class="inline-tag" x-text="siteRuleModeLabel()"></span>
@@ -1483,7 +1460,7 @@
                                         <span class="inline-tag" x-text="`黑 ${siteRuleKeywordCount('block')}`"></span>
                                     </div>
                                 </div>
-                                <span class="subscription-expand-indicator" :class="{ open: siteRulesExpanded }">展开</span>
+                                <span class="subscription-expand-indicator" :class="{ open: siteRulesExpanded }" aria-hidden="true"></span>
                             </button>
                             <div class="subscription-card-body" x-show="siteRulesExpanded" x-transition.opacity.duration.180ms x-cloak>
                                 <div class="subscription-policy-grid site-policy-grid">
@@ -1492,9 +1469,9 @@
                                         <button class="chip-button" :class="{ active: siteRules.mode === 'whitelist' }" :aria-pressed="siteRules.mode === 'whitelist'" @click="siteRules.mode = 'whitelist'">仅白名单</button>
                                         <button class="chip-button" :class="{ active: siteRules.mode === 'both' }" :aria-pressed="siteRules.mode === 'both'" @click="siteRules.mode = 'both'">黑白同时</button>
                                     </div>
-                                    <label>白名单关键词<textarea x-model="siteRuleText.allow_keywords" placeholder="标题或 tag 命中任一行才允许"></textarea></label>
-                                    <label>黑名单关键词<textarea x-model="siteRuleText.block_keywords" placeholder="标题或 tag 命中任一行会拦截"></textarea></label>
-                                    <label class="toggle-row"><input type="checkbox" x-model="siteRules.use_regex"><span>使用正则匹配</span></label>
+                                    <label>白名单关键词<textarea class="ui-field" x-model="siteRuleText.allow_keywords" placeholder="标题或 tag 命中任一行才允许"></textarea></label>
+                                    <label>黑名单关键词<textarea class="ui-field" x-model="siteRuleText.block_keywords" placeholder="标题或 tag 命中任一行会拦截"></textarea></label>
+                                    <label class="toggle-row switch-row"><input type="checkbox" x-model="siteRules.use_regex"><span>使用正则匹配</span></label>
                                 </div>
                                 <div class="panel-card-actions subscription-card-actions">
                                     <button class="primary-button" @click="saveSiteRules()">保存规则</button>
@@ -1503,17 +1480,16 @@
                         </article>
 
                         <article class="panel-card subscription-card" :class="{ expanded: siteLogsExpanded }">
-                            <button class="subscription-card-head" @click="siteLogsExpanded = !siteLogsExpanded" :aria-expanded="siteLogsExpanded">
+                            <button class="subscription-card-head" data-tooltip="最近的站点解析过滤记录" @click="siteLogsExpanded = !siteLogsExpanded" :aria-expanded="siteLogsExpanded">
                                 <div class="panel-card-main subscription-card-main">
                                     <div class="subscription-card-title">
                                         <h4>站点过滤日志</h4>
-                                        <p>最近的站点解析过滤记录</p>
                                     </div>
                                     <div class="inline-tags subscription-summary-tags">
                                         <span class="inline-tag" x-text="`记录 ${siteLogs.length || 0}`"></span>
                                     </div>
                                 </div>
-                                <span class="subscription-expand-indicator" :class="{ open: siteLogsExpanded }">展开</span>
+                                <span class="subscription-expand-indicator" :class="{ open: siteLogsExpanded }" aria-hidden="true"></span>
                             </button>
                             <div class="subscription-card-body" x-show="siteLogsExpanded" x-transition.opacity.duration.180ms x-cloak>
                                 <div class="panel-card-actions subscription-card-actions">
@@ -1541,13 +1517,14 @@
             </section>
         </main>
 
-        <div class="detail-backdrop" data-testid="detail-backdrop" x-show="detail.open || detailClosing" :class="{ open: detail.open && !detailClosing, closing: detailClosing }" @click.self="closeDetail()" @wheel.prevent.stop @touchmove.prevent.self x-cloak>
+        <div class="detail-backdrop" data-testid="detail-backdrop" data-modal-layer="detail" role="dialog" :aria-label="detail.folder?.title || '动态详情'" tabindex="-1" x-show="detail.open || detailClosing" :class="{ open: detail.open && !detailClosing, closing: detailClosing }" @click.self="closeDetail()" @wheel.prevent.stop @touchmove.prevent.self x-cloak>
             <button class="detail-post-nav detail-post-nav-left" x-show="canShowPreviousFolder()" @click.stop="showPreviousFolder()" aria-label="上一篇动态">&lt;</button>
             <button class="detail-post-nav detail-post-nav-right" x-show="canShowNextFolder()" @click.stop="showNextFolder()" aria-label="下一篇动态">&gt;</button>
             <section class="detail-shell" x-ref="detailShell" x-show="detail.open || detailClosing" :class="{ open: detail.open && !detailClosing, closing: detailClosing }" @wheel.stop @touchmove.stop @scroll="scheduleDetailWindowShift()">
                 <header class="detail-head">
                     <div class="detail-head-copy">
-                        <p class="viewer-kicker" x-text="detail.folder?.pub_time || ''"></p>
+                        <p class="viewer-kicker" :title="detail.folder?.pub_time" x-text="displayDate(detail.folder?.pub_time)"></p>
+                        <span class="date-warning" x-show="futureDate(detail.folder?.pub_time)" data-tooltip="原始时间已保留，可查看原帖确认。" tabindex="0">来源日期待核实</span>
                         <button
                             type="button"
                             class="detail-content-toggle"
@@ -1565,25 +1542,25 @@
                             <span class="meta-chip accent" x-text="`${detail.folder?.livephoto_count || 0} 条 Live Photo`"></span>
                         </div>
                         <label class="detail-density-control">
-                            <span>每行数量</span>
+                            <span>密度</span>
                             <input type="range" min="1" max="8" step="1" :value="detailColumnCount" @input="setDetailColumnCount($event.target.value)">
-                            <strong x-text="resolveDetailColumns()"></strong>
+                            <strong x-text="`${resolveDetailColumns()} 列`"></strong>
                         </label>
                         <button class="favorite-button detail-favorite-button" :class="{ active: detail.folder?.is_favorite }" :aria-pressed="detail.folder?.is_favorite" @click.stop="toggleFavorite(detail.folder, $event)" aria-label="收藏">
                             <span>❤</span>
                         </button>
-                        <button class="secondary-button detail-source-button" @click="openReviewSource(detail.folder)">查看原始动态</button>
-                        <div class="detail-trash-slot">
+                        <button class="secondary-button detail-source-button" @click="openReviewSource(detail.folder)" data-tooltip="查看原始动态" aria-label="查看原始动态">原帖</button>
+                        <div class="detail-trash-slot" title="移除整组动态、阻止再次采集并清理本地文件；垃圾桶仅保留记录">
                             <template x-if="pendingTrashFolder !== detail.folder?.folder_name">
-                                <button class="secondary-button danger-button detail-trash-button" @click="askTrashCurrentFolder()">不喜欢</button>
+                                <button class="secondary-button danger-button detail-trash-button" @click="askTrashCurrentFolder()">移入垃圾桶</button>
                             </template>
                             <template x-if="pendingTrashFolder === detail.folder?.folder_name">
                                 <div class="button-row confirm-row detail-trash-confirm">
-                                    <button class="primary-button danger-confirm confirm-anchor" @click="trashCurrentFolder()">确认不喜欢</button>
+                                    <button class="primary-button danger-confirm confirm-anchor" @click="trashCurrentFolder()">确认移除整组并阻止重采</button>
                                 </div>
                             </template>
                         </div>
-                        <button class="secondary-button detail-close-button" @click="closeDetail()">关闭</button>
+                        <button class="secondary-button detail-close-button" data-modal-close @click="closeDetail()">关闭</button>
                     </div>
                 </header>
                 <div class="detail-grid" x-ref="detailGrid" :style="detailGridStyle()">
@@ -1593,12 +1570,8 @@
                             class="detail-card"
                             data-testid="detail-card"
                             :data-detail-key="detailPairKey(pair)"
-                            role="button"
-                            tabindex="0"
                             :class="{ live: pair.livephoto, placeholder: pair.placeholder, 'is-appearing': pair.__appearing, 'tiny-quality': !pair.promote_preview && pair.initial_quality !== 'small', 'small-quality': !pair.promote_preview && pair.initial_quality === 'small', 'thumb-quality': pair.promote_preview }"
                             @click="pair.placeholder ? null : openPair(pair.pair_index)"
-                            @keydown.enter.prevent="pair.placeholder ? null : openPair(pair.pair_index)"
-                            @keydown.space.prevent="pair.placeholder ? null : openPair(pair.pair_index)"
                             @mouseenter="pair.livephoto ? startHoverPreview($event) : null"
                             @mouseleave="pair.livephoto ? stopHoverPreview($event) : null"
                             @touchstart.passive="pair.livephoto ? scheduleHoverPreview($event) : null"
@@ -1606,6 +1579,7 @@
                             @touchcancel="pair.livephoto ? cancelScheduledHoverPreview($event) : null"
                         >
                             <div class="detail-thumb" :style="detailThumbStyle(pair)">
+                                <button type="button" class="card-open-button" :disabled="!!pair.placeholder" :aria-label="`查看第 ${pair.pair_index} 组图片`" @click.stop="openPair(pair.pair_index)"></button>
                                 <template x-if="!pair.placeholder">
                                     <img class="hover-preview-image detail-preview-image" decoding="async" loading="lazy" :src="detailPairPreviewUrl(pair)" :alt="`第 ${pair.pair_index} 组`" @load="fadeDetailPreviewImage($event)">
                                 </template>
@@ -1624,7 +1598,7 @@
                                 </template>
                                 <div class="card-trash-zone detail-card-trash" @click.stop>
                                     <template x-if="!pairDeletePending(detail.folder?.folder_name, pair.pair_index)">
-                                        <button class="mini-trash-button" @click="askDeletePair(detail.folder?.folder_name, pair.pair_index)" aria-label="删除图片">
+                                        <button class="mini-trash-button" @click="askDeletePair(detail.folder?.folder_name, pair.pair_index)" :aria-label="`永久删除第 ${pair.pair_index} 组图片`">
                                             <span class="trash-icon" aria-hidden="true"></span>
                                         </button>
                                     </template>
@@ -1650,11 +1624,10 @@
             </section>
         </div>
 
-        <div class="detail-backdrop source-preview-backdrop" data-testid="source-preview-backdrop" x-show="sourcePreview.open" x-transition.opacity @click.self="closeSourcePreview()" @wheel.prevent.stop @touchmove.prevent.self x-cloak>
+        <div class="detail-backdrop source-preview-backdrop" data-modal-layer="source" role="dialog" aria-label="原帖预览" tabindex="-1" data-testid="source-preview-backdrop" x-show="sourcePreview.open" x-transition.opacity @click.self="closeSourcePreview()" @wheel.prevent.stop @touchmove.prevent.self x-cloak>
             <section class="source-preview-shell" x-show="sourcePreview.open" x-transition:enter="drawer-enter" x-transition:enter-start="drawer-enter-start" x-transition:enter-end="drawer-enter-end" x-transition:leave="drawer-leave" x-transition:leave-start="drawer-leave-start" x-transition:leave-end="drawer-leave-end" @wheel.stop @touchmove.stop>
                 <header class="source-preview-head">
                     <div>
-                        <p class="viewer-kicker">原帖预览</p>
                         <h3 x-text="sourcePreview.title || '原始内容'"></h3>
                         <p class="detail-copy" x-text="sourcePreview.subtitle"></p>
                     </div>
@@ -1665,8 +1638,8 @@
                         <template x-if="sourcePreview.reviewId">
                             <button class="secondary-button danger-button" :disabled="reviewActionId === sourcePreview.reviewId" @click="resolveSourcePreviewReview('reject')">放弃</button>
                         </template>
-                        <button class="secondary-button" @click="openSourcePreviewExternal()">系统浏览器打开</button>
-                        <button class="secondary-button" @click="closeSourcePreview()">关闭</button>
+                        <button class="secondary-button" @click="openSourcePreviewExternal()" data-tooltip="使用系统浏览器打开原帖" aria-label="使用系统浏览器打开原帖">浏览器打开</button>
+                        <button class="secondary-button" data-modal-close @click="closeSourcePreview()">关闭</button>
                     </div>
                 </header>
                 <iframe
@@ -1680,11 +1653,15 @@
             </section>
         </div>
 
-        <div class="viewer-backdrop" data-testid="viewer-backdrop" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @click.self="closeViewer()" @wheel.prevent.stop @touchmove.prevent.stop x-cloak>
+        <div class="viewer-backdrop" data-testid="viewer-backdrop" data-modal-layer="viewer" role="dialog" aria-label="图片查看器" tabindex="-1" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @click.self="closeViewer()" @wheel.prevent.stop @touchmove.prevent.stop x-cloak>
             <div class="viewer-shell viewer-shell-full" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @click="viewerShellClick($event)" @wheel.prevent.stop @touchmove.prevent.stop>
+                <div class="viewer-context" role="status">
+                    <strong x-text="viewerPositionText()"></strong>
+                    <span :title="viewer.folder?.title" x-text="viewer.folder?.title || viewer.folder?.folder_name"></span>
+                </div>
                 <div class="viewer-floating viewer-floating-right" @click.stop @wheel.prevent.stop @touchmove.prevent.stop>
                     <button class="secondary-button confirm-anchor viewer-action-button" x-show="viewer.pair?.livephoto" @click="cyclePlayback()" x-text="`播放模式: ${playbackModeLabel()}`"></button>
-                    <button class="secondary-button confirm-anchor viewer-action-button" x-show="viewerSource === 'gallery' && viewer.folder?.folder_name" @click="openViewerFolder()">查看动态</button>
+                    <button class="secondary-button confirm-anchor viewer-action-button" x-show="viewer.folder?.folder_name" @click="openViewerFolder()">返回动态</button>
                     <button class="secondary-button confirm-anchor viewer-action-button" :disabled="!canShowPreviousPair()" @click="showPreviousPair()">上一张</button>
                     <button class="secondary-button confirm-anchor viewer-action-button" :disabled="!canShowNextPair()" @click="showNextPair()">下一张</button>
                         <template x-if="deletePairConfirmStep < 1">
@@ -1697,7 +1674,7 @@
                             <button class="primary-button danger-confirm confirm-anchor" @click="confirmDeleteViewerPair()">确认永久删除，不可恢复</button>
                         </div>
                         </template>
-                        <button class="secondary-button confirm-anchor viewer-action-button" @click="closeViewer()">关闭</button>
+                        <button class="secondary-button confirm-anchor viewer-action-button" data-modal-close @click="closeViewer()">关闭</button>
                     </div>
                 <article class="viewer-stage-wrap" :class="{ live: viewer.pair?.livephoto, closing: viewerClosing, 'switch-left': viewerSwitchDirection === 'left', 'switch-right': viewerSwitchDirection === 'right', 'is-swapping': viewerSwapPending }" x-show="viewer.pair || viewerClosing" x-cloak>
                     <div
@@ -1748,16 +1725,15 @@
             </article>
         </div>
 
-        <div class="detail-backdrop" x-show="taskInspector.open" x-transition.opacity @click.self="closeTaskInspector()" @wheel.prevent.stop @touchmove.prevent.self x-cloak>
+        <div class="detail-backdrop" data-modal-layer="task" role="dialog" aria-label="任务详情" tabindex="-1" x-show="taskInspector.open" x-transition.opacity @click.self="closeTaskInspector()" @wheel.prevent.stop @touchmove.prevent.self x-cloak>
             <section class="inspector-shell" x-show="taskInspector.open" x-transition:enter="drawer-enter" x-transition:enter-start="drawer-enter-start" x-transition:enter-end="drawer-enter-end" x-transition:leave="drawer-leave" x-transition:leave-start="drawer-leave-start" x-transition:leave-end="drawer-leave-end" @wheel.stop @touchmove.stop>
                 <header class="detail-head">
                     <div>
-                        <p class="viewer-kicker">任务详情</p>
                         <h3 x-text="taskInspector.title"></h3>
                         <p class="detail-copy" x-text="taskInspector.subtitle"></p>
                     </div>
                     <div class="button-row">
-                        <button class="secondary-button" @click="closeTaskInspector()">关闭</button>
+                        <button class="secondary-button" data-modal-close @click="closeTaskInspector()">关闭</button>
                     </div>
                 </header>
                 <pre class="task-log-pre" x-text="taskInspector.body"></pre>
