@@ -6,6 +6,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.db import Database
 from app.services.puller import PullManager
 from app.services.site_syncer import SiteSyncManager
+from app.services.xhs.scheduler import XhsRefreshScheduler
 
 
 class SchedulerService:
@@ -14,6 +15,7 @@ class SchedulerService:
         self.pull_manager = pull_manager
         self.site_syncer = site_syncer
         self.scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+        self.xhs = XhsRefreshScheduler(db, self.scheduler)
 
     def start(self) -> None:
         if not self.scheduler.running:
@@ -39,6 +41,10 @@ class SchedulerService:
                 id="scheduled-site-sync",
                 replace_existing=True,
             )
+        self.reload_xhs()
+
+    def reload_xhs(self) -> None:
+        self.xhs.reload()
 
     def start_scheduled_pull(self) -> None:
         self.pull_manager.start_pull()

@@ -58,11 +58,13 @@ class MediaIndexer:
         image_folder = self.storage.image_folder(folder_name)
         livephoto_folder = self.storage.livephoto_folder(folder_name)
         image_assets = self._index_images(folder_name, image_folder, generate_derivatives=generate_derivatives)
+        standalone_video = bool((metadata or {}).get('standalone_video'))
         livephoto_assets = self._index_livephotos(
             folder_name,
             livephoto_folder,
             image_assets=image_assets,
             generate_derivatives=generate_derivatives,
+            generate_reverse=not standalone_video,
         )
 
         self.db.upsert_folder(
@@ -77,14 +79,16 @@ class MediaIndexer:
                 "subscription_uid": subscription_uid,
                 "subscription_name": subscription_name,
                 "has_images": bool(image_assets),
-                "has_livephoto": bool(livephoto_assets),
+                "has_livephoto": bool(livephoto_assets) and not standalone_video,
                 "review_status": review_status,
                 "review_reason": review_reason,
                 "metadata": {**(metadata or {}), "indexed_at": now_iso()},
             }
         )
         self.db.replace_folder_assets(folder_name, "image", image_assets)
-        self.db.replace_folder_assets(folder_name, "livephoto", livephoto_assets)
+        self.db.replace_folder_assets(folder_name, "livephoto", [] if standalone_video else livephoto_assets)
+        if standalone_video:
+            self.db.replace_folder_assets(folder_name, "video", livephoto_assets)
         self.refresh_gallery_index(folder_name)
 
     def reindex_library(
@@ -447,6 +451,7 @@ class MediaIndexer:
         folder_path: Path,
         image_assets: list[dict] | None = None,
         generate_derivatives: bool = True,
+        generate_reverse: bool = True,
     ) -> list[dict]:
         if not folder_path.exists():
             return []
@@ -471,7 +476,8 @@ class MediaIndexer:
                     self.thumbnailer.ensure_image_thumbnail(cover_path, cover_webp)
                     self.thumbnailer.ensure_small_image_thumbnail(cover_path, small_cover_webp)
                     self.thumbnailer.ensure_tiny_image_thumbnail(cover_path, tiny_cover_webp)
-                self.thumbnailer.ensure_reverse_video(file_path, reverse_path)
+                if generate_reverse:
+                    self.thumbnailer.ensure_reverse_video(file_path, reverse_path)
             pair_index = self._extract_pair_index(file_path.name) or self._match_live_pair_index(
                 folder_path,
                 file_path,

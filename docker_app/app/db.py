@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from app.services.utils import dumps_json, loads_json, now_iso, safe_slug
+from app.services.xhs.schema import migrate as migrate_xhs
 
 
 DEFAULT_SETTINGS = {
@@ -459,6 +460,7 @@ class Database:
             self._migrate_subscription_policies(conn)
             self._migrate_image_threshold_defaults(conn)
             self._backfill_folder_subscriptions(conn)
+            migrate_xhs(conn)
 
     def _ensure_default_settings(self, conn: sqlite3.Connection) -> None:
         existing_rows = conn.execute("select key, value from settings").fetchall()
@@ -796,6 +798,10 @@ class Database:
             row = conn.execute("select * from site_sources where id = ?", (int(source_id),)).fetchone()
         return dict(row) if row else None
 
+    def xhs_subscription_uids(self) -> set[str]:
+        with self.connect() as conn:
+            return {f"site:{row[0]}" for row in conn.execute("select id from site_sources where source_type = 'xhs_likes'")}
+
     def get_site_post_by_source_url(self, source_id: int, url: str) -> dict[str, Any] | None:
         with self.connect() as conn:
             row = conn.execute(
@@ -805,6 +811,8 @@ class Database:
         return dict(row) if row else None
 
     def create_site_source(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if payload.get("source_type") == "xhs_likes":
+            raise ValueError("小红书来源请通过专用入口创建")
         now = now_iso()
         name = str(payload.get("name") or "未命名来源").strip()
         slug = safe_slug(str(payload.get("slug") or name), "source")
@@ -852,6 +860,8 @@ class Database:
         current = self.get_site_source(source_id)
         if not current:
             return None
+        if current.get("source_type") == "xhs_likes" or payload.get("source_type") == "xhs_likes":
+            raise ValueError("小红书来源请通过专用入口修改")
         merged = {**current, **payload}
         merged["slug"] = safe_slug(str(merged.get("slug") or merged.get("name")), "source")
         with self.connect() as conn:
@@ -943,6 +953,9 @@ class Database:
         }
 
     def clear_site_source_content(self, source_id: int) -> dict[str, Any]:
+        source = self.get_site_source(source_id)
+        if source and source.get("source_type") == "xhs_likes":
+            raise ValueError("小红书来源禁止使用破坏式站点全量校验")
         uid = self.site_subscription_uid(source_id)
         with self.connect() as conn:
             folder_rows = conn.execute(
@@ -979,7 +992,8 @@ class Database:
     def export_site_sources(self) -> dict[str, Any]:
         return {
             "version": 1,
-            "sources": [self._site_source_export_item(item) for item in self.list_site_sources()],
+            "sources": [self._site_source_export_item(item) for item in self.list_site_sources()
+                        if item.get("source_type") != "xhs_likes"],
         }
 
     def import_site_sources(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2317,7 +2331,9 @@ class Database:
                     (select coalesce(sum(is_favorite), 0) from folder_index) as folder_index_favorites,
                     (select coalesce(max(updated_at), '') from folder_index) as folder_index_updated,
                     (select count(*) from pair_index) as pair_index_rows,
-                    (select coalesce(max(updated_at), '') from pair_index) as pair_index_updated
+                    (select coalesce(max(updated_at), '') from pair_index) as pair_index_updated,
+                    (select coalesce(group_concat(id), '') from
+                        (select id from site_sources where source_type = 'xhs_likes' order by id)) as xhs_source_ids
                 """
             ).fetchone()
         return dumps_json(
@@ -2333,6 +2349,7 @@ class Database:
                 "folder_index_updated": row["folder_index_updated"] or "",
                 "pair_index_rows": int(row["pair_index_rows"] or 0),
                 "pair_index_updated": row["pair_index_updated"] or "",
+                "xhs_source_ids": row["xhs_source_ids"] or "",
             }
         )
 
@@ -2765,8 +2782,11 @@ class Database:
                 placeholders = ", ".join("?" for _ in normalized)
                 clauses.append(f"{column('subscription_uid')} in ({placeholders})")
                 params.extend(normalized)
-        elif source_kind == "site":
+        elif source_kind in {"site", "xhs"}:
             clauses.append(f"{column('subscription_uid')} like 'site:%'")
+            operator = "in" if source_kind == "xhs" else "not in"
+            clauses.append(f"""{column('subscription_uid')} {operator}
+                (select 'site:' || id from site_sources where source_type = 'xhs_likes')""")
         elif source_kind == "up":
             clauses.append(f"coalesce({column('subscription_uid')}, '') not like 'site:%'")
         if year:

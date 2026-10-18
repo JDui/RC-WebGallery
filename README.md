@@ -1,6 +1,6 @@
 # B 站动态相簿 BiliGalleryRC
 
-BiliGalleryRC v10.5 是一个面向个人收藏场景的 B 站动态相簿。它负责把动态图片与 Live Photo 整理到本地图库，并提供浏览、筛选、审核和后台维护能力；Web 应用位于 <code>docker_app/</code>，也可通过 Docker Compose 部署到 AMD64 NAS。
+BiliGalleryRC v10.6 是一个面向个人收藏场景的 B 站动态相簿。它负责把动态图片与 Live Photo 整理到本地图库，并提供浏览、筛选、审核和后台维护能力；Web 应用位于 <code>docker_app/</code>，也可通过 Docker Compose 部署到 AMD64 NAS。
 
 ## 功能特性
 
@@ -11,12 +11,9 @@ BiliGalleryRC v10.5 是一个面向个人收藏场景的 B 站动态相簿。它
 - **审核与过滤**：对命中过滤规则的动态进入待审核列表，并保留过滤日志；审核项可以查看原始动态、放行下载或永久忽略。关键词和长图等规则可在设置中调整。
 - **任务队列**：拉取、审核下载、校验、页面索引、缩略图重建、重复内容处理、垃圾清理和站点同步等工作统一进入任务中心，可查看进度和日志，支持暂停、继续、取消与重试。
 - **订阅与站点源**：管理 B 站 UP 主订阅和外部站点订阅；站点源支持 RSS、Sitemap 或 HTML 列表页，并可配置定时同步、筛选规则和网络代理。
+- **小红书个人点赞**：独立浏览器扫码与持久化登录，支持本人点赞笔记扫描、媒体归档、失败重试和手工清单导入；首次拉取条数默认 100，可设 1–10000 或不限，锚点数默认 3、可设 1–20。固定直连，刷新周期独立设置，每轮随机前后抖动 1–22 分钟；图库提供独立小红书药丸。首次使用需完成本人账号、分页与访问规则确认。
 - **登录与运行控制**：支持 B 站二维码登录、Cookie 状态检查和退出登录；可以配置定时拉取间隔、站点同步间隔及过滤关键词。
 - **缩略图与性能调度**：为原图生成 tiny、small、thumb 等分级缩略图，配合页面按需加载和本地索引；前台浏览拥有更高优先级，后台拉取、清理、索引和重复检测会主动让行。
-
-## 技术设计提案（尚未实现）
-
-- [小红书个人点赞订阅与 NAS 登录态持久化 RFC](docs/design/xhs-liked-nas-auth-rfc.md)：独立 Chromium Worker、扫码登录与会话复用、私有凭据隔离、点赞完整快照语义、媒体归档及 Go/No-Go 验证清单。本功能仍处于设计阶段，尚未接入现有服务，也未验证真实账号的端到端兼容性。
 
 ## 效果展示
 
@@ -82,12 +79,12 @@ Compose 中的关键环境变量如下：
 
 ### AMD64 NAS 使用预构建镜像
 
-v10.5 的 AMD64 镜像包不纳入 Git 工作树。请从[项目 Releases 页面](https://github.com/JDui/bili-gallery/releases)或其他正式发布交付物取得对应版本的 tar 包和 <code>.sha256</code> 校验文件；页面上的版本和资产名称以实际发布内容为准。将取得的镜像包和 <code>docker_app/docker-compose.nas-amd64.yml</code> 复制到 NAS 后，在部署目录执行：
+v10.6 的 AMD64 镜像包不纳入 Git 工作树。请从[项目 Releases 页面](https://github.com/JDui/bili-gallery/releases)或其他正式发布交付物取得对应版本的 tar 包和 <code>.sha256</code> 校验文件；页面上的版本和资产名称以实际发布内容为准。将取得的镜像包和 <code>docker_app/docker-compose.nas-amd64.yml</code> 复制到 NAS 后，在部署目录执行：
 
 ~~~bash
-sha256sum -c zzs-bili-gallery_v10.5_amd64.tar.sha256
-docker load -i zzs-bili-gallery_v10.5_amd64.tar
-docker image inspect zzs-bili-gallery:10.5-amd64 --format '{{.Id}}'
+sha256sum -c zzs-bili-gallery_v10.6_amd64.tar.sha256
+docker load -i zzs-bili-gallery_v10.6_amd64.tar
+docker image inspect zzs-bili-gallery:10.6-amd64 --format '{{.Id}}'
 ~~~
 
 启动前必须编辑 <code>docker_app/docker-compose.nas-amd64.yml</code> 的 <code>volumes</code>。文件中的示例宿主机路径是占位配置，请改成 NAS 上真实、可写的目录，并保留容器目标路径：
@@ -115,7 +112,7 @@ NAS Compose 已将容器端口 <code>7860</code> 映射到宿主机 <code>7860</
 docker compose -f docker_app/docker-compose.nas-amd64.yml down
 
 # 载入新 tar 后重建容器
-docker load -i zzs-bili-gallery_v10.5_amd64.tar
+docker load -i zzs-bili-gallery_v10.6_amd64.tar
 docker compose -f docker_app/docker-compose.nas-amd64.yml up -d
 ~~~
 
@@ -171,7 +168,7 @@ PYTHONPATH=. .venv/bin/pytest -q
 页面审查截图使用隔离占位数据。<code>review_capture.sh</code> 当前针对 macOS 的 Lima Docker 流程：需要本机已有可运行的 <code>limactl</code>、Lima 的 <code>lima-docker</code> context、Docker、Playwright 浏览器和审查镜像；脚本会在 <code>docker_app/review/&lt;时间戳&gt;/</code> 下生成临时运行目录与截图：
 
 ~~~bash
-bash docker_app/scripts/review_capture.sh zzs-bili-gallery:10.5-amd64
+bash docker_app/scripts/review_capture.sh zzs-bili-gallery:10.6-amd64
 ~~~
 
 脚本内部调用 <code>seed_review_data.py</code>，不会读取真实 <code>storage/</code>。如果只需要生成占位数据库和媒体，可单独执行：
@@ -181,7 +178,55 @@ docker_app/.venv/bin/python docker_app/scripts/seed_review_data.py \
   --storage-root /tmp/bili-gallery-review
 ~~~
 
-当前应用版本由 <code>docker_app/app/version.py</code> 中的 <code>APP_VERSION = "10.5"</code> 定义；对应 NAS 镜像标签为 <code>zzs-bili-gallery:10.5-amd64</code>，镜像包文件名为 <code>zzs-bili-gallery_v10.5_amd64.tar</code>。
+当前应用版本由 <code>docker_app/app/version.py</code> 中的 <code>APP_VERSION = "10.6"</code> 定义；对应 NAS 镜像标签为 <code>zzs-bili-gallery:10.6-amd64</code>，镜像包文件名为 <code>zzs-bili-gallery_v10.6_amd64.tar</code>。
+
+## 小红书个人点赞
+
+小红书使用独立浏览器容器，首次在真实页面手动扫码，后续复用私有浏览器配置目录。主应用不读取或导出 Cookie。此功能只归档本人点赞，不支持他人点赞、发布或自动点赞；登录失效、验证码、平台限制和网页结构异常会停止任务，等待人工处理。页面适配尚需使用者在自己的账号环境验证，不能将合成测试当作真实账号验收。
+
+### 启动可选浏览器服务
+
+首次在仓库根目录执行：
+
+```bash
+python3 docker_app/scripts/setup_xhs.py
+docker compose -f docker_app/docker-compose.example.yml \
+  -f docker_app/docker-compose.xhs.yml --profile xhs up -d --build
+```
+
+NAS 使用预构建镜像时，先导入 v10.6 镜像包（包含主应用和 Worker），保留 `docker_app/docker-compose.nas-amd64.yml`、`docker_app/docker-compose.xhs.yml`、`docker_app/xhs_worker/seccomp_profile.json` 和 `docker_app/scripts/setup_xhs.py` 的相对目录关系，修改原有图库挂载路径，再执行：
+
+```bash
+python3 docker_app/scripts/setup_xhs.py
+docker compose -f docker_app/docker-compose.nas-amd64.yml \
+  -f docker_app/docker-compose.xhs.yml --profile xhs up -d
+```
+
+没有 Python 的 NAS 可用已导入的主镜像生成密钥：
+
+```bash
+mkdir -p .secrets
+chmod 700 .secrets
+docker run --rm -v "$PWD/.secrets:/private-secrets" --entrypoint python \
+  zzs-bili-gallery:10.6-amd64 scripts/setup_xhs.py --secrets-dir /private-secrets
+```
+
+密钥保存在不纳入 Git、镜像或 HTTP 存储的 `.secrets/` 私有目录，通过只读 Docker Secret 提供给两个服务。浏览器以 UID/GID 1000 非 root 运行，启用 Chromium 沙箱和固定 Playwright 版本；专用 Profile 命名卷仅挂载给 Worker。升级时保留 Compose 项目名和该命名卷，不执行 `down -v`。主应用仍使用原配置与图库目录。Chromium 沙箱受 NAS 内核影响，不能启动时应修正内核或容器配置，不要通过关闭沙箱继续运行。沙箱配置基于 [Playwright 官方 Docker 指引](https://playwright.dev/python/docs/docker)，随附 seccomp 来自固定版本的官方配置。
+
+### 首次登录和订阅
+
+1. 打开“订阅管理 → 站点订阅 → 小红书 · 我的点赞”，点击“启动手动登录”。NAS 上的登录端口只绑定 `127.0.0.1:6080`；本机部署直接访问，远程 NAS 先执行 `ssh -L 6080:127.0.0.1:6080 用户名@NAS地址`。
+2. 点击“打开本机登录窗口”，输入界面给出的一次性远程桌面密码，在真实小红书页面内自行扫码或完成官方验证。十分钟后登录入口自动关闭。不要将登录窗口裸露到公网。
+3. 点击“完成扫码”，账号标识自动填入创建表单；填写首次拉取条数、锚点数和独立刷新周期，创建来源。
+4. 在该来源中确认本人账号、点赞页可翻页及访问规则。只有实际确认排序稳定时才勾选“启用锚点早停”；未确认时使用保守完整扫描。点击“验证本人点赞源”后可立即同步，也可单独开启自动刷新。
+
+小红书不继承站点代理、系统环境代理或 B 站刷新周期。基础周期至少 23 分钟，每次任务完成后重新抽取提前或延后 1–22 分钟的偏移。首次读取达到条数上限时记为部分扫描，不据此判断旧点赞已取消；正常锚点早停也不会取消旧点赞。仅可信自然末页会更新取消点赞状态，保留本地归档和收藏。还可使用“忽略锚点完整扫描”进行核对。
+
+媒体以网页实际可访问版本保存，记录 SHA-256、尺寸和视频时长，不承诺作者原件或固定无水印版本。未知资源先保留解析待办；可用“重试媒体”重新解析过期地址，已下载成功的文件不重复下载。“检查本地归档”离线比对下载缓存与图库文件的 SHA-256，将缺失或损坏项保留为待重试，不访问小红书。图文、视频封面与明确存在的 Live Photo 分别归档；普通视频不计为 Live Photo。命中过滤的笔记可在来源笔记清单中审核放行。
+
+任务统一进入任务中心，支持暂停、继续、取消、重试并遵循前台优先级。主应用重启会将未结束的小红书任务标记为可重试，清理孤立 `.part` 文件；已提交笔记、待办与读取锚点保留。注销登录态需要确认，只清除私有浏览器 Profile 并停用对应来源，既有图库文件不删除。
+
+不启用 Worker 时，仍可导入净化的 [Manifest v1 示例](docs/examples/xhs-manifest.example.json)。清单最多 4 MiB，不能包含 Cookie、认证头、签名 URL 或 `xsec_token`；手工清单不会改变扫描锚点或推断取消点赞。
 
 ## 内网自动跳转
 

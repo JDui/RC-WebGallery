@@ -149,6 +149,7 @@ class PullManager:
         self._cancel_requested = False
         self.site_syncer: Any | None = None
         self.duplicate_service: Any | None = None
+        self.xhs_manager: Any | None = None
         self._event_log: deque[dict[str, Any]] = deque(maxlen=120)
         self._status: dict[str, Any] = {
             "running": False,
@@ -194,6 +195,56 @@ class PullManager:
 
     def attach_duplicate_service(self, duplicate_service: Any) -> None:
         self.duplicate_service = duplicate_service
+
+    def attach_xhs_manager(self, manager: Any) -> None:
+        self.xhs_manager = manager
+        manager.queue = self
+
+    def start_xhs_sync(self, source_id: int, *, job_id: str | None = None, force_full: bool = False,
+                       media_only: bool = False) -> dict[str, Any]:
+        if self.xhs_manager is None:
+            raise RuntimeError('小红书同步器未初始化')
+        job, created = self.xhs_manager.reserve_job(source_id, job_id=job_id, force_full=force_full, media_only=media_only)
+        queued = False
+        if created:
+            queued = self._queue_or_start('xhs-sync', '同步小红书本人点赞', self._run_xhs_sync, job['job_id'])
+        return {'ok': True, 'job_id': job['job_id'], 'queued': queued, 'replayed': not created,
+                'message': '小红书同步已提交', 'sidebar_counts': self.db.refresh_sidebar_count_cache(['tasks'])}
+
+    def _run_xhs_sync(self, job_id: str) -> None:
+        try:
+            result = self.xhs_manager.execute(job_id, cooperate=self._cooperate,
+                cancelled=lambda: self._cancel_requested,
+                progress=lambda done, total: self._set_progress('xhs-sync', '正在归档小红书媒体', processed=done, total=total))
+            self._status = {'running': False, 'message': '小红书任务已结束', 'mode': 'idle', 'stats': result}
+        except Exception:
+            self._status = {'running': False, 'message': '小红书任务执行失败，请查看任务记录', 'mode': 'idle'}
+            self.xhs_manager.fail_job(job_id, 'SYNC_FAILED')
+        finally:
+            self._release()
+            self._run_next_queued_task()
+
+    def start_xhs_validation(self, source_id: int) -> dict[str, Any]:
+        if not self.xhs_manager:
+            raise RuntimeError('小红书来源不存在')
+        from app.services.xhs.sync import XhsSyncService
+        XhsSyncService(self.db).get_source(source_id)
+        queued = self._queue_or_start('xhs-verify', '检查小红书本地归档', self._run_xhs_validation, source_id)
+        return {'ok': True, 'queued': queued, 'message': '已提交本地归档检查，不会访问小红书'}
+
+    def _run_xhs_validation(self, source_id: int) -> None:
+        details = {'retry_action': {'kind': 'xhs-verify', 'source_id': source_id}}
+        task_id = self.db.create_task_run('xhs-verify', 'running', '检查小红书本地归档', details)
+        try:
+            stats = self.xhs_manager.validate_archive(source_id, self._cooperate)
+            self.db.finish_task_run(task_id, 'partial' if stats['failed'] else 'success',
+                '本地归档检查完成，损坏或缺失媒体可重试' if stats['failed'] else '本地归档检查完成', {**stats, **details})
+        except Exception:
+            self.db.finish_task_run(task_id, 'cancelled' if self._cancel_requested else 'failed', '本地归档检查已停止', details)
+        finally:
+            self._status = {'running': False, 'message': '本地归档检查已结束', 'mode': 'idle'}
+            self._release()
+            self._run_next_queued_task()
 
     def _refresh_content_sidebar_counts(self) -> dict[str, Any]:
         return self.db.refresh_sidebar_count_cache(["all", "favorites", "livephoto", "review", "logs", "tasks", "subscriptions", "sites"])
@@ -394,6 +445,7 @@ class PullManager:
             "pull", "review", "validate", "startup", "index", "thumbnail-rebuild", "site-sync",
             "storage-cleanup", "icons", "subscription-icons", "site-icons", "duplicate-trash",
             "duplicate-resolve", "duplicate-cleanup",
+            'xhs-sync', 'xhs-import', 'xhs-verify',
         ])
         status = dict(self._status)
         if str(status.get("mode") or "").startswith("site") and self.site_syncer is not None:
@@ -467,6 +519,8 @@ class PullManager:
             item_id = int(removed.payload.get("args", [0])[0])
             if self.db.get_review_item(item_id):
                 self.db.set_review_status(item_id, "pending")
+        if removed.kind == 'xhs-sync' and self.xhs_manager:
+            self.xhs_manager.cancel_queued(str(removed.payload['args'][0]))
         return {"ok": True, "message": f"已撤销排队任务：{removed.label}"}
 
     def retry_task_run(self, task_id: int) -> dict[str, Any]:
@@ -495,6 +549,11 @@ class PullManager:
         if kind == "site-sync":
             source_id = retry_action.get("source_id")
             return self.start_site_sync(int(source_id) if source_id is not None else None)
+        if kind == 'xhs-sync':
+            return self.start_xhs_sync(int(retry_action.get('source_id') or 0),
+                force_full=bool(retry_action.get('force_full')), media_only=bool(retry_action.get('media_only')))
+        if kind == 'xhs-verify':
+            return self.start_xhs_validation(int(retry_action.get('source_id') or 0))
         if kind == "site-validate":
             return self.start_site_validation(
                 int(retry_action.get("source_id") or 0),
@@ -2464,6 +2523,12 @@ class PullManager:
                 raw_source_id = next_task.payload.get("args", [None])[0]
                 source_id = int(raw_source_id) if raw_source_id is not None else None
                 thread = threading.Thread(target=self._run_site_sync, args=(source_id,), daemon=True)
+            elif next_task.kind == 'xhs-sync':
+                job_id = str(next_task.payload.get('args', [''])[0])
+                thread = threading.Thread(target=self._run_xhs_sync, args=(job_id,), daemon=True)
+            elif next_task.kind == 'xhs-verify':
+                source_id = int(next_task.payload.get('args', [0])[0])
+                thread = threading.Thread(target=self._run_xhs_validation, args=(source_id,), daemon=True)
             elif next_task.kind == "site-validate":
                 source_id = int(next_task.payload.get("args", [0])[0])
                 args = next_task.payload.get("args", [])

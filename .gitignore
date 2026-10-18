@@ -19,6 +19,7 @@ storage/
 
 # Build/review artifacts
 /temp/
+.secrets/
 docker_app/dist/
 docker_app/review/
 

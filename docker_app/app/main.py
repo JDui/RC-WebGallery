@@ -27,6 +27,10 @@ from app.services.media_indexer import MediaIndexer
 from app.services.puller import PullManager
 from app.services.scheduler import SchedulerService
 from app.services.site_syncer import SiteSyncManager
+from app.services.xhs.routes import create_router as create_xhs_router
+from app.services.xhs.sync import XhsSyncService
+from app.services.xhs.manager import XhsManager
+from app.services.xhs.sync import XhsConflict
 from app.services.storage import StorageService
 from app.services.thumbnailer import ThumbnailService
 from app.services.task_priority import TaskPriorityCoordinator, TaskPriorityMiddleware
@@ -59,6 +63,10 @@ pull_manager.attach_site_syncer(site_syncer)
 pull_manager.attach_duplicate_service(duplicates)
 site_syncer.bind_task_queue(pull_manager)
 scheduler = SchedulerService(db, pull_manager, site_syncer)
+xhs_manager = XhsManager(db, storage, indexer)
+pull_manager.attach_xhs_manager(xhs_manager)
+scheduler.xhs.run_sync = xhs_manager.scheduled_sync
+scheduler.xhs.ready = xhs_manager.ready
 templates = Jinja2Templates(directory=str(config.app_root / "templates"))
 AVATAR_REFRESH_INITIAL_DELAY_RANGE = (2.0, 5.0)
 AVATAR_REFRESH_BETWEEN_DELAY_RANGE = (6.0, 14.0)
@@ -89,6 +97,7 @@ async def lifespan(app: FastAPI):
     storage.ensure()
     ensure_config(config.config_dir)
     db.init()
+    xhs_manager.recover()
     thumbnailer.apply_settings(db.get_settings())
     scheduler.start()
     pull_manager.start_startup_sync()
@@ -99,6 +108,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=APP_TITLE, lifespan=lifespan)
+app.include_router(create_xhs_router(lambda: XhsSyncService(db), lambda: scheduler.reload_xhs(), lambda: xhs_manager))
 app.add_middleware(TaskPriorityMiddleware, coordinator=task_priority)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.mount(
@@ -398,6 +408,8 @@ def clear_delete_site_source(source_id: int) -> dict[str, Any]:
 def sync_site_source(source_id: int) -> dict[str, Any]:
     if not db.get_site_source(source_id):
         raise HTTPException(status_code=404, detail="站点来源不存在")
+    if db.get_site_source(source_id).get("source_type") == "xhs_likes":
+        raise HTTPException(status_code=409, detail="小红书当前支持手工清单导入，自动采集尚未启用")
     return site_syncer.start_sync(source_id)
 
 
@@ -405,6 +417,8 @@ def sync_site_source(source_id: int) -> dict[str, Any]:
 def validate_site_source(source_id: int, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     if not db.get_site_source(source_id):
         raise HTTPException(status_code=404, detail="站点来源不存在")
+    if db.get_site_source(source_id).get("source_type") == "xhs_likes":
+        raise HTTPException(status_code=409, detail="小红书来源不支持先删除内容的站点全量校验")
     max_pages = payload.get("max_pages")
     try:
         max_pages = max(1, int(max_pages)) if max_pages else None
@@ -947,6 +961,11 @@ def pull_subscription(uid: str) -> dict[str, Any]:
             source_id = int(uid.split(":", 1)[1])
             if not db.get_site_source(source_id):
                 raise RuntimeError("站点来源不存在")
+            if db.get_site_source(source_id).get("source_type") == "xhs_likes":
+                try:
+                    return xhs_manager.start_sync(source_id)
+                except XhsConflict as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from None
             return site_syncer.start_sync(source_id)
         return pull_manager.start_subscription_pull(uid)
     except (RuntimeError, ValueError) as exc:

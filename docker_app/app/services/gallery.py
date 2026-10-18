@@ -136,6 +136,7 @@ class GalleryService:
                 "end_month": end_month or "",
                 "subscription_uids": sorted(str(uid) for uid in (subscription_uids or []) if str(uid).strip()),
                 "source_kind": source_kind,
+                "source_filter_version": 2,
                 "search_query": str(search_query or "").strip(),
                 "page": int(page),
                 "page_size": int(page_size),
@@ -179,7 +180,7 @@ class GalleryService:
         candidates: list[tuple[dict, list[dict]]] = []
         dynamic_pairs: list[tuple[str, str]] = []
         for task in task_runs:
-            if task.get("task_type") not in {"pull", "site-sync"} or task.get("status") != "success":
+            if task.get("task_type") not in {"pull", "site-sync", "xhs-sync"} or task.get("status") not in {"success", "partial"}:
                 continue
             details = loads_json(task.get("details_json"), {})
             added_items = details.get("added_items") if isinstance(details, dict) else None
@@ -445,10 +446,11 @@ class GalleryService:
         sort_order: str,
     ) -> dict:
         folders = self.db.list_folders()
+        xhs_uids = self.db.xhs_subscription_uids() if source_kind in {"site", "xhs"} else set()
         filtered = [
             folder
             for folder in folders
-            if self._match(folder, category, year, month, start_month, end_month, subscription_uids, source_kind)
+            if self._match(folder, category, year, month, start_month, end_month, subscription_uids, source_kind, xhs_uids)
         ]
         terms = [term.strip().lower() for term in str(search_query or "").split() if term.strip()]
         if terms:
@@ -594,13 +596,14 @@ class GalleryService:
         end_month: str | None,
         subscription_uids: list[str] | None,
         source_kind: str,
+        xhs_uids: set[str] | None = None,
     ) -> bool:
         pub_time = folder.get("pub_time", "")
         month_key = pub_time[:7] if pub_time else ""
         if subscription_uids:
             if str(folder.get("subscription_uid") or "") not in {str(uid) for uid in subscription_uids}:
                 return False
-        elif not self._match_source_kind(folder.get("subscription_uid"), source_kind):
+        elif not self._match_source_kind(folder.get("subscription_uid"), source_kind, xhs_uids):
             return False
         if year and pub_time[:4] != year:
             return False
@@ -630,14 +633,18 @@ class GalleryService:
         return True
 
     def _normalize_source_kind(self, source_kind: str | None) -> str:
-        if source_kind in {"up", "site"}:
+        if source_kind in {"up", "site", "xhs"}:
             return str(source_kind)
         return "all"
 
-    def _match_source_kind(self, subscription_uid: object, source_kind: str) -> bool:
+    def _match_source_kind(self, subscription_uid: object, source_kind: str, xhs_uids: set[str] | None = None) -> bool:
         uid = str(subscription_uid or "")
+        if source_kind in {"site", "xhs"} and xhs_uids is None:
+            xhs_uids = self.db.xhs_subscription_uids()
+        if source_kind == "xhs":
+            return uid in xhs_uids
         if source_kind == "site":
-            return uid.startswith("site:")
+            return uid.startswith("site:") and uid not in xhs_uids
         if source_kind == "up":
             return not uid.startswith("site:")
         return True

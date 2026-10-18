@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-image-overlap-1' %}
+    {% set ui_revision = app_version ~ '-xhs-manifest-2' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -1307,6 +1307,88 @@
                 </div>
 
                 <div class="site-source-card-list">
+                    <article class="panel-card subscription-card" data-testid="xhs-source-create" :class="{ expanded: xhsCreateExpanded }">
+                        <button type="button" class="subscription-card-head" @click="xhsCreateExpanded = !xhsCreateExpanded" :aria-expanded="xhsCreateExpanded">
+                            <div class="panel-card-main"><h4>小红书 · 我的点赞</h4><span class="inline-tag">浏览器同步 / 清单导入</span></div>
+                            <span class="subscription-expand-indicator" :class="{ open: xhsCreateExpanded }" aria-hidden="true"></span>
+                        </button>
+                        <div class="subscription-card-body" x-show="xhsCreateExpanded" x-cloak>
+                            <p class="field-copy" x-text="`浏览器状态：${xhsAuthText(xhsWorker.state)}`"></p>
+                            <div class="panel-card-actions">
+                                <button type="button" class="secondary-button" @click="xhsLogin('start')" :disabled="xhsBusy || !xhsAutomaticAvailable">启动手动登录</button>
+                                <button type="button" class="secondary-button" @click="xhsLogin('finish')" :disabled="xhsBusy || (!xhsLoginSession && xhsWorker.state !== 'LOGIN_IN_PROGRESS')">完成扫码</button>
+                                <button type="button" class="secondary-button" @click="xhsLogin('check')" :disabled="xhsBusy || !xhsAutomaticAvailable">检查登录</button>
+                                <button type="button" class="secondary-button" @click="xhsLogin('revoke')" :disabled="xhsBusy || !xhsAutomaticAvailable">注销登录态</button>
+                            </div>
+                            <div class="field-copy" x-show="xhsLoginSession" x-cloak>
+                                <p>此浏览器会话拥有账号访问权限，登录入口十分钟后关闭。请通过 SSH 转发 NAS 的回环端口 6080，再打开登录窗口。</p>
+                                <a href="http://127.0.0.1:6080/vnc.html" target="_blank" rel="noopener noreferrer">打开本机登录窗口</a>
+                                <p>一次性远程桌面密码：<strong x-text="xhsLoginSession?.viewer_password"></strong></p>
+                            </div>
+                            <p class="field-copy">在真实页面内自行扫码或完成官方验证，随后点击完成扫码。账号标识会自动填入下方；也可继续使用净化 JSON 清单导入。</p>
+                            <div class="subscription-policy-grid site-policy-grid">
+                                <label>名称<input class="ui-field" x-model="xhsNewSource.name" maxlength="100"></label>
+                                <label>账号标识<input class="ui-field" x-model="xhsNewSource.owner_key" maxlength="128" placeholder="登录后自动填入，或填写清单 owner_key"></label>
+                                <label>首次拉取条数<input class="ui-field" type="number" min="1" max="10000" x-model="xhsNewSource.initial_fetch_limit" placeholder="留空为不限"></label>
+                                <label>读取锚点帖子数<input class="ui-field" type="number" min="1" max="20" x-model="xhsNewSource.anchor_count"></label>
+                                <label>小红书刷新周期（分钟）<input class="ui-field" type="number" min="23" max="525600" x-model="xhsNewSource.refresh_interval_minutes"></label>
+                                <label class="toggle-row switch-row"><input type="checkbox" x-model="xhsNewSource.refresh_enabled"><span>自动刷新（登录验证后生效）</span></label>
+                            </div>
+                            <p class="field-copy">网络固定直连，不使用采集代理或系统环境代理。刷新周期按小红书来源独立设置，每次随机提前或延后 1–22 分钟；周期至少 23 分钟。完成本人账号验证后才会自动刷新。</p>
+                            <p class="field-copy">首次默认 100 条，可设置 1–10000 条或留空不限。达到上限记为部分扫描，后续可继续同步或导入新扫描清单。锚点默认 3 条，排序稳定时遇到上轮任一候选并完成当前页即可停止；手工清单不会更新锚点。</p>
+                            <button type="button" class="primary-button" @click="createXhsSource()" :disabled="xhsBusy || !xhsNewSource.owner_key.trim()">创建小红书来源</button>
+                        </div>
+                    </article>
+                    <template x-for="source in xhsSources" :key="`xhs-${source.id}`">
+                        <article class="panel-card subscription-card expanded" data-testid="xhs-source-card">
+                            <div class="subscription-card-body">
+                                <div class="panel-card-main"><h4 x-text="source.name"></h4><span class="inline-tag" x-text="source.enabled ? xhsAuthText(source.auth_status) : '已停用'"></span></div>
+                                <p class="field-copy" x-text="`账号标识：${source.owner_key} · 笔记 ${source.note_count} 条 · 待归档 ${source.pending_notes || 0} 条 · 媒体待解析 ${source.pending_media} 项`"></p>
+                                <div class="subscription-policy-grid site-policy-grid">
+                                    <label>首次拉取条数<input class="ui-field" type="number" min="1" max="10000" x-model="xhsDrafts[source.id].initial_fetch_limit" :disabled="!!source.initial_fetch_completed" placeholder="留空为不限"></label>
+                                    <label>读取锚点帖子数<input class="ui-field" type="number" min="1" max="20" x-model="xhsDrafts[source.id].anchor_count"></label>
+                                    <label>小红书刷新周期（分钟）<input class="ui-field" type="number" min="23" max="525600" x-model="xhsDrafts[source.id].refresh_interval_minutes"></label>
+                                    <label>完整核对周期（天）<input class="ui-field" type="number" min="1" max="365" x-model="xhsDrafts[source.id].full_scan_interval_days"></label>
+                                    <label class="toggle-row switch-row"><input type="checkbox" x-model="xhsDrafts[source.id].ordering_stable"><span>排序稳定，允许锚点早停</span></label>
+                                    <label class="toggle-row switch-row"><input type="checkbox" x-model="xhsDrafts[source.id].refresh_enabled"><span>自动刷新（登录验证后生效）</span></label>
+                                    <label class="toggle-row switch-row"><input type="checkbox" x-model="xhsDrafts[source.id].enabled"><span>启用来源</span></label>
+                                </div>
+                                <p class="field-copy">固定直连，不走代理。刷新周期与 B 站和普通站点独立，每次随机提前或延后 1–22 分钟。</p>
+                                <p class="field-copy" x-show="source.next_refresh_at" x-text="`下次刷新：${source.next_refresh_at ? formatDateTime(source.next_refresh_at) : ''}`"></p>
+                                <div class="subscription-policy-grid" x-show="!source.verification_passed && xhsAutomaticAvailable" x-cloak>
+                                    <label class="toggle-row"><input type="checkbox" x-model="xhsChecks[source.id].owner_confirmed"><span>已确认登录账号与本人点赞页</span></label>
+                                    <label class="toggle-row"><input type="checkbox" x-model="xhsChecks[source.id].paging_confirmed"><span>已手动确认列表可正常翻页</span></label>
+                                    <label class="toggle-row"><input type="checkbox" x-model="xhsChecks[source.id].rules_reviewed"><span>已核对访问规则并授权归档本人内容</span></label>
+                                    <label class="toggle-row"><input type="checkbox" x-model="xhsChecks[source.id].ordering_stable"><span>已确认最近点赞靠前且排序稳定，启用锚点早停</span></label>
+                                    <button type="button" class="secondary-button" @click="verifyXhsSource(source)" :disabled="xhsBusy">验证本人点赞源</button>
+                                </div>
+                                <p class="field-copy" x-text="source.initial_fetch_completed ? '首次读取已完成，之后不再应用首次条数上限。' : '首次读取达到条数上限时标记部分完成，不会推断取消点赞。'"></p>
+                                <p class="field-copy">记住上次成功扫描顶部 N 条作为备用锚点，下次遇到任意一条后完成当前页。设置下次扫描生效；手工导入不改变检查点。</p>
+                                <p class="field-copy" x-text="`检查点：${source.last_checkpoint_at ? formatDateTime(source.last_checkpoint_at) : '尚无可信扫描'} · 最近结果：${xhsStopText(source.last_run?.stop_reason)}`"></p>
+                                <div class="panel-card-actions subscription-card-actions">
+                                    <button type="button" class="primary-button" @click="saveXhsSource(source)" :disabled="xhsBusy">保存设置</button>
+                                    <button type="button" class="secondary-button" @click="syncXhsSource(source)" :disabled="xhsBusy || !source.can_sync || xhsSourceDirty(source)">立即同步</button>
+                                    <button type="button" class="secondary-button" @click="syncXhsSource(source, {force_full: true})" :disabled="xhsBusy || !source.can_sync || xhsSourceDirty(source)">忽略锚点完整扫描</button>
+                                    <button type="button" class="secondary-button" @click="syncXhsSource(source, {media_only: true})" :disabled="xhsBusy || !source.can_sync">重试媒体</button>
+                                    <button type="button" class="secondary-button" @click="checkXhsFiles(source)" :disabled="xhsBusy">检查本地归档</button>
+                                    <label class="secondary-button xhs-import-control">导入 JSON 清单<input type="file" accept="application/json,.json" :disabled="xhsBusy || !source.enabled || xhsSourceDirty(source)" @change="importXhsManifest(source, $event)"></label>
+                                    <button type="button" class="secondary-button" @click="loadXhsNotes(source)">查看最近 50 条笔记</button>
+                                </div>
+                                <p class="field-copy" x-show="xhsSourceDirty(source)">设置尚未保存，请先保存再导入清单。</p>
+                                <div class="site-preview-list xhs-notes" x-show="xhsNotes[source.id]" x-cloak>
+                                    <template x-for="note in xhsNotes[source.id] || []" :key="note.note_id">
+                                        <div class="site-preview-row">
+                                            <a :href="note.url" target="_blank" rel="noopener noreferrer" x-text="note.title"></a>
+                                            <small x-text="`发布：${note.pub_date ? formatDateYMD(note.pub_date) : '未知'} · 首见：${formatDateTime(note.first_seen_at)}`"></small>
+                                            <small x-text="note.download_status === 'ready' ? '已归档' : note.download_status === 'blocked' ? '待审核' : note.download_status === 'failed' ? '下载失败，可重试' : '等待下载'"></small>
+                                            <button type="button" class="secondary-button" x-show="note.download_status === 'blocked'" @click="releaseXhsNote(source, note)">放行</button>
+                                        </div>
+                                    </template>
+                                    <p class="field-copy" x-show="xhsNotes[source.id]?.length === 0">暂无已发现笔记</p>
+                                </div>
+                            </div>
+                        </article>
+                    </template>
                     <article class="panel-card subscription-card" :class="{ expanded: newSiteSourceExpanded }">
                         <button class="subscription-card-head" data-tooltip="RSS、Sitemap 或 HTML 列表页" @click="newSiteSourceExpanded = !newSiteSourceExpanded" :aria-expanded="newSiteSourceExpanded">
                             <div class="panel-card-main subscription-card-main">

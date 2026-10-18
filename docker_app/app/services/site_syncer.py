@@ -72,6 +72,8 @@ class SiteSyncManager:
         return {"ok": True, "queued": False, "message": "已开始站点全量校验", "sidebar_counts": self.db.refresh_sidebar_count_cache(["tasks"])}
 
     def test_source(self, source: dict[str, Any]) -> list[dict[str, Any]]:
+        if source.get("source_type") == "xhs_likes":
+            raise RuntimeError("小红书来源仅支持专用适配器")
         settings = self.db.get_settings()
         source_settings = self._settings_for_source(settings, source)
         fetcher = PageFetcher(
@@ -145,6 +147,8 @@ class SiteSyncManager:
         self._status = {"running": True, "message": "正在同步站点来源"}
         sources = [self.db.get_site_source(source_id)] if source_id else self.db.list_site_sources(include_disabled=False)
         for source in [item for item in sources if item]:
+            if source.get("source_type") == "xhs_likes":
+                continue
             if cooperate:
                 cooperate()
             details["sources"] += 1
@@ -197,6 +201,8 @@ class SiteSyncManager:
         source = self.db.get_site_source(source_id)
         if not source:
             raise RuntimeError("站点来源不存在")
+        if source.get("source_type") == "xhs_likes":
+            raise RuntimeError("小红书来源禁止使用破坏式站点全量校验")
         self._status = {"running": True, "message": f"正在全量校验站点：{source.get('name') or source_id}"}
         settings = self.db.get_settings()
         cleared = self.db.clear_site_source_content(source_id)
@@ -238,6 +244,8 @@ class SiteSyncManager:
         return result
 
     def _sync_source(self, source: dict[str, Any], cooperate=None, max_pages: int | None = None) -> dict[str, Any]:
+        if source.get("source_type") == "xhs_likes":
+            raise RuntimeError("小红书来源仅支持专用适配器")
         settings = self.db.get_settings()
         source_settings = self._settings_for_source(settings, source)
         fetcher = PageFetcher(
@@ -516,6 +524,8 @@ class SiteSyncManager:
         source = self.db.get_site_source(source_id)
         if not source:
             raise RuntimeError("站点来源不存在")
+        if source.get("source_type") == "xhs_likes":
+            return source
         settings = self._settings_for_source(self.db.get_settings(), source)
         icon_url = self.discover_site_icon(source)
         cached_url, cached_tiny_url = self._cache_site_icon(source_id, icon_url, settings, str(source.get("entry_url") or ""))

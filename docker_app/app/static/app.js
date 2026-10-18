@@ -30,13 +30,14 @@ function galleryApp() {
     settingsError: "",
     trashSearch: "",
     modalFocusStack: [],
-    sourceKind: ["all", "up", "site"].includes(localStorage.getItem("gallery_source_kind"))
+    sourceKind: ["all", "up", "site", "xhs"].includes(localStorage.getItem("gallery_source_kind"))
       ? localStorage.getItem("gallery_source_kind")
       : "all",
     sourceKindOptions: [
       { key: "all", label: "所有项目" },
       { key: "up", label: "UP订阅" },
       { key: "site", label: "站点订阅" },
+      { key: "xhs", label: "小红书" },
     ],
     searchTags: ["九图", "Live Photo", "收藏", "站点订阅", "COS", "写真", "视频", "转发"],
     gallery: { items: [], total: 0, page: 1, page_size: 36, total_pages: 1 },
@@ -164,6 +165,16 @@ function galleryApp() {
     siteStats: {},
     siteStatus: {},
     siteSources: [],
+    xhsSources: [],
+    xhsDrafts: {},
+    xhsBusy: false,
+    xhsNewSource: { name: "我的小红书点赞", owner_key: "", anchor_count: 3, initial_fetch_limit: 100, refresh_interval_minutes: 720, refresh_enabled: false },
+    xhsCreateExpanded: false,
+    xhsNotes: {},
+    xhsWorker: { state: 'NOT_CONFIGURED', owner_key: null },
+    xhsAutomaticAvailable: false,
+    xhsLoginSession: null,
+    xhsChecks: {},
     siteLogs: [],
     siteRules: { mode: "blacklist", keywords: [], allow_keywords: [], block_keywords: [], use_regex: false },
     siteRuleText: {
@@ -956,6 +967,7 @@ function galleryApp() {
       if (this.searchActive()) return this.searchQuery ? `搜索：${this.searchQuery}` : "搜索";
       if (this.currentView === "gallery" && this.sourceKind === "up") return "UP 订阅";
       if (this.currentView === "gallery" && this.sourceKind === "site") return "站点订阅";
+      if (this.currentView === "gallery" && this.sourceKind === "xhs") return "小红书";
       return this.activeCategory().label;
     },
 
@@ -1041,7 +1053,7 @@ function galleryApp() {
     },
 
     taskStatusText(value) {
-      return ({success: "已完成", failed: "失败", running: "未结束记录", cancelled: "已取消", paused: "已暂停", queued: "等待中"})[value] || value;
+      return ({success: "已完成", partial: "部分完成", failed: "失败", running: "未结束记录", cancelled: "已取消", paused: "已暂停", queued: "等待中"})[value] || value;
     },
 
     taskDuration(item) {
@@ -2378,7 +2390,7 @@ function galleryApp() {
       if (this.randomModeActive()) {
         return "";
       }
-      return `gallery-page:${params.toString()}`;
+      return `gallery-page:sources-v2:${params.toString()}`;
     },
 
     readLocalGalleryCache(key) {
@@ -2747,7 +2759,8 @@ function galleryApp() {
       this.category = "all";
       const normalized = String(uid);
       this.selectedSubscriptionUids = [normalized];
-      this.sourceKind = normalized.startsWith("site:") ? "site" : "up";
+      const subscription = (this.subscriptions || []).find((item) => String(item.uid) === normalized);
+      this.sourceKind = subscription?.source_type === "xhs_likes" ? "xhs" : normalized.startsWith("site:") ? "site" : "up";
       localStorage.setItem("gallery_source_kind", this.sourceKind);
       this.queuedCancelConfirmId = null;
       this.closeSidebarDrawer();
@@ -2774,10 +2787,11 @@ function galleryApp() {
     },
 
     setSourceKind(kind) {
-      if (!["all", "up", "site"].includes(kind) || this.sourceKind === kind) {
+      if (!["all", "up", "site", "xhs"].includes(kind) || this.sourceKind === kind) {
         return;
       }
       this.sourceKind = kind;
+      this.selectedSubscriptionUids = [];
       localStorage.setItem("gallery_source_kind", kind);
       this.closeGalleryLayers();
       this.scrollViewTop();
@@ -5091,7 +5105,7 @@ function galleryApp() {
     },
 
     recentUpdateTaskLabel(group) {
-      return group?.task_type === "site-sync" ? "站点同步" : "B站拉取";
+      return group?.task_type === 'xhs-sync' ? '小红书同步' : group?.task_type === "site-sync" ? "站点同步" : "B站拉取";
     },
 
     recentUpdateTaskKey(taskId) {
@@ -5383,6 +5397,9 @@ function galleryApp() {
         index: "重建页面索引",
         "thumbnail-rebuild": "重建缩略图",
         "site-sync": "同步站点订阅",
+        "xhs-import": "导入小红书点赞清单",
+        "xhs-sync": "同步小红书本人点赞与媒体",
+        "xhs-verify": "检查小红书本地归档完整性",
         "site-validate": "全量校验站点订阅",
         "storage-cleanup": "清理垃圾文件",
         startup: "启动后整理图库",
@@ -5547,6 +5564,9 @@ function galleryApp() {
         "thumbnail-rebuild": "缩略图",
         thumbnails: "缩略图",
         "site-sync": "站点同步",
+        "xhs-import": "小红书导入",
+        "xhs-sync": "小红书同步",
+        "xhs-verify": "小红书归档检查",
         "site-validate": "站点校验",
         "storage-cleanup": "存储清理",
         icons: "图标刷新",
@@ -6339,7 +6359,8 @@ function galleryApp() {
     },
 
     canRetryTask(item) {
-      return item?.status === "failed" && !!item?.details?.retry_action?.kind;
+      return (item?.status === "failed" || (["partial", "cancelled"].includes(item?.status)
+        && ["xhs-sync", "xhs-verify"].includes(item?.task_type))) && !!item?.details?.retry_action?.kind;
     },
 
     async retryTask(item) {
@@ -6839,16 +6860,20 @@ function galleryApp() {
 
     async runPull() {
       let url = "/api/pull/run";
+      const isXhsPull = this.currentView === 'gallery' && this.sourceKind === 'xhs';
+      if (isXhsPull) url = '/api/xhs/sync';
       if (this.currentView === "gallery" && this.selectedSubscriptionUids.length === 1) {
         url = `/api/subscriptions/${encodeURIComponent(this.selectedSubscriptionUids[0])}/pull`;
       }
       const isSitePull = this.selectedSubscriptionUids.length === 1 && String(this.selectedSubscriptionUids[0]).startsWith("site:");
-      if (isSitePull) {
+      if (isXhsPull) {
+        this.setImmediateTaskFeedback('正在提交小红书同步任务...');
+      } else if (isSitePull) {
         this.setImmediateSiteTaskFeedback("正在提交站点拉取任务...", { running: true });
       } else {
         this.setImmediateTaskFeedback("正在提交拉取任务...");
       }
-      const result = await this.api(url, { method: "POST" });
+      const result = await this.api(url, { method: "POST", ...(isXhsPull ? { body: '{}' } : {}) });
       this.clearLocalGalleryCaches();
       this.scheduleStatusRefresh();
       await Promise.all([
@@ -6860,6 +6885,7 @@ function galleryApp() {
     },
 
     runPullButtonLabel() {
+      if (this.currentView === 'gallery' && this.sourceKind === 'xhs') return this.compactViewport ? '同步' : '同步小红书';
       if (this.compactViewport) {
         return "拉取";
       }
@@ -7329,6 +7355,7 @@ function galleryApp() {
     async refreshSites() {
       await Promise.all([
         this.loadSiteSources(),
+        this.loadXhsSources(),
         this.loadSiteRules(),
         this.loadSiteLogs(),
       ]);
@@ -7337,7 +7364,7 @@ function galleryApp() {
 
     async loadSiteSources() {
       const payload = await this.api("/api/site-sources");
-      const nextSources = payload.items || [];
+      const nextSources = (payload.items || []).filter((source) => source.source_type !== "xhs_likes");
       const previousDrafts = { ...(this.siteSourceDrafts || {}) };
       const previousExpanded = { ...(this.siteSourceExpanded || {}) };
       this.siteSourceDrafts = Object.fromEntries(
@@ -7350,7 +7377,175 @@ function galleryApp() {
         nextSources.map((source) => [String(source.id), !!previousExpanded[String(source.id)]]),
       );
       this.siteSources = nextSources;
-      this.sidebarCounts = { ...this.sidebarCounts, sites: this.siteSources.length };
+      this.sidebarCounts = { ...this.sidebarCounts, sites: (payload.items || []).length };
+    },
+
+    async loadXhsSources() {
+      const payload = await this.api("/api/xhs/status");
+      this.xhsWorker = payload.worker || { state: 'NOT_CONFIGURED', owner_key: null };
+      this.xhsAutomaticAvailable = !!payload.automatic_sync_available;
+      if (!this.xhsNewSource.owner_key && this.xhsWorker.owner_key) this.xhsNewSource.owner_key = this.xhsWorker.owner_key;
+      this.xhsSources = payload.items || [];
+      this.xhsChecks = Object.fromEntries(this.xhsSources.map(source => [String(source.id), this.xhsChecks[String(source.id)] ||
+        { owner_confirmed: false, paging_confirmed: false, rules_reviewed: false, ordering_stable: false }]));
+      this.xhsDrafts = Object.fromEntries(this.xhsSources.map((source) => {
+        const draft = this.xhsDrafts[String(source.id)];
+        return [String(source.id), draft?.config_version === source.config_version ? draft : this.xhsDraft(source)];
+      }));
+    },
+
+    xhsDraft(source) {
+      return { anchor_count: source.anchor_count, initial_fetch_limit: source.initial_fetch_limit,
+        enabled: !!source.enabled, config_version: source.config_version,
+        refresh_enabled: !!source.refresh_enabled, refresh_interval_minutes: source.refresh_interval_minutes,
+        ordering_stable: !!source.ordering_stable, full_scan_interval_days: source.full_scan_interval_days ?? 7 };
+    },
+
+    xhsLimitValue(value) {
+      if (value === null || value === "") return null;
+      const number = Number(value);
+      if (!Number.isInteger(number) || number < 1 || number > 10000) throw new Error("首次拉取条数须为 1–10000，留空为不限");
+      return number;
+    },
+
+    xhsAuthText(state) {
+      return { NOT_CONFIGURED: '未配置浏览器服务', LOGIN_REQUIRED: '需要登录', MANUAL_ONLY: '清单导入模式',
+        LOGIN_IN_PROGRESS: '等待手动扫码', READY: '已登录', RUNNING: '正在读取', NEEDS_REAUTH: '登录已失效',
+        NEEDS_REBIND: '账号不一致', NEEDS_MANUAL_VERIFICATION: '需要人工验证', RATE_LIMITED: '请求受限，已暂停',
+        STRUCTURE_CHANGED: '页面结构变化，已暂停', CURSOR_ERROR: '分页异常，已暂停',
+        UNAUTHORIZED: '浏览器服务凭证不匹配', BROWSER_UNAVAILABLE: '浏览器暂不可用',
+        CANCELLED: '已取消', WORKER_ERROR: '浏览器服务暂不可用' }[state] || state;
+    },
+
+    async xhsLogin(action) {
+      if (this.xhsBusy) return;
+      if (action === 'revoke' && !window.confirm('确认注销小红书浏览器登录态？对应订阅会停用，已归档媒体保留。')) return;
+      this.xhsBusy = true;
+      try {
+        const result = await this.api(`/api/xhs/login/${action}`, { method: 'POST',
+          body: JSON.stringify(action === 'revoke' ? { confirm_revoke: true } : {}) });
+        if (action === 'start') {
+          this.xhsLoginSession = result;
+          window.setTimeout(() => { this.xhsLoginSession = null; }, (result.expires_in || 600) * 1000);
+        } else { this.xhsLoginSession = null; }
+        await this.loadXhsSources();
+        this.notify('success', '小红书账号状态已更新', this.xhsAuthText(result.state));
+      } catch (error) { this.notify('error', '账号操作未完成', error.message); }
+      finally { this.xhsBusy = false; }
+    },
+
+    async verifyXhsSource(source) {
+      this.xhsBusy = true;
+      try {
+        await this.api(`/api/xhs/sources/${source.id}/verify`, { method: 'POST', body: JSON.stringify(this.xhsChecks[String(source.id)]) });
+        await this.loadXhsSources();
+        this.notify('success', '本人点赞源已验证', '可立即同步，自动刷新使用此来源独立设置的周期。');
+      } catch (error) { this.notify('error', '验证未完成', error.message); }
+      finally { this.xhsBusy = false; }
+    },
+
+    async syncXhsSource(source, options = {}) {
+      if (this.xhsBusy) return;
+      this.xhsBusy = true;
+      try {
+        const result = await this.api(`/api/xhs/sources/${source.id}/sync`, { method: 'POST', body: JSON.stringify(options) });
+        await Promise.all([this.refreshTasks(), this.refreshStatus()]);
+        this.notify('success', '小红书同步已提交', result.message);
+      } catch (error) { this.notify('error', '无法开始同步', error.message); }
+      finally { this.xhsBusy = false; }
+    },
+
+    async releaseXhsNote(source, note) {
+      await this.api(`/api/xhs/sources/${source.id}/notes/${encodeURIComponent(note.note_id)}/release`, { method: 'POST', body: '{}' });
+      await this.loadXhsNotes(source);
+      this.notify('success', '笔记已放行', '点击重试媒体完成下载。');
+    },
+
+    async checkXhsFiles(source) {
+      if (this.xhsBusy) return;
+      this.xhsBusy = true;
+      try {
+        const result = await this.api(`/api/xhs/sources/${source.id}/check-files`, { method: 'POST', body: '{}' });
+        await Promise.all([this.refreshTasks(), this.refreshStatus()]);
+        this.notify('success', '本地归档检查已提交', result.message);
+      } catch (error) { this.notify('error', '无法检查归档', error.message); }
+      finally { this.xhsBusy = false; }
+    },
+
+    xhsSourceDirty(source) {
+      const draft = this.xhsDrafts[String(source.id)];
+      if (!draft) return false;
+      return Number(draft.anchor_count) !== source.anchor_count || draft.enabled !== !!source.enabled
+        || draft.ordering_stable !== !!source.ordering_stable || Number(draft.full_scan_interval_days) !== (source.full_scan_interval_days ?? 7)
+        || Number(draft.refresh_interval_minutes) !== source.refresh_interval_minutes || draft.refresh_enabled !== !!source.refresh_enabled
+        || (draft.initial_fetch_limit === "" || draft.initial_fetch_limit === null ? null : Number(draft.initial_fetch_limit)) !== source.initial_fetch_limit;
+    },
+
+    async createXhsSource() {
+      if (this.xhsBusy) return;
+      this.xhsBusy = true;
+      try {
+        const payload = { ...this.xhsNewSource, anchor_count: Number(this.xhsNewSource.anchor_count),
+          refresh_interval_minutes: Number(this.xhsNewSource.refresh_interval_minutes),
+          initial_fetch_limit: this.xhsLimitValue(this.xhsNewSource.initial_fetch_limit) };
+        await this.api("/api/xhs/sources", { method: "POST", body: JSON.stringify(payload) });
+        this.xhsNewSource.owner_key = "";
+        this.xhsCreateExpanded = false;
+        await Promise.all([this.loadXhsSources(), this.loadSubscriptions()]);
+        this.notify("success", "小红书来源已创建", "可导入与该账号标识匹配的净化 JSON 清单。");
+      } catch (error) {
+        this.notify("error", "创建失败", error.message);
+      } finally { this.xhsBusy = false; }
+    },
+
+    async saveXhsSource(source) {
+      if (this.xhsBusy) return;
+      this.xhsBusy = true;
+      try {
+        const draft = this.xhsDrafts[String(source.id)];
+        const saved = await this.api(`/api/xhs/sources/${source.id}/anchor`, { method: "PATCH",
+          body: JSON.stringify({ ...draft, anchor_count: Number(draft.anchor_count),
+            refresh_interval_minutes: Number(draft.refresh_interval_minutes),
+            full_scan_interval_days: Number(draft.full_scan_interval_days),
+            initial_fetch_limit: this.xhsLimitValue(draft.initial_fetch_limit) }) });
+        this.xhsDrafts[String(source.id)] = this.xhsDraft(saved);
+        await this.loadXhsSources();
+        this.notify("success", "小红书设置已保存", "首次条数用于首次读取；锚点数量在下次可信扫描生效。");
+      } catch (error) {
+        this.notify("error", "保存失败", error.message);
+      } finally { this.xhsBusy = false; }
+    },
+
+    async importXhsManifest(source, event) {
+      const input = event.target;
+      const file = input.files?.[0];
+      if (!file || this.xhsBusy) { input.value = ""; return; }
+      this.xhsBusy = true;
+      try {
+        if (file.size > 4 * 1024 * 1024) throw new Error("清单不能超过 4 MiB");
+        const result = await this.api(`/api/xhs/manifest/import?source_id=${source.id}`, {
+          method: "POST", body: await file.text(),
+        });
+        this.xhsNotes = {};
+        await Promise.all([this.loadXhsSources(), this.loadSubscriptions(), this.refreshTasks(), this.refreshStatus()]);
+        this.notify("success", result.replayed ? "清单已导入过" : "小红书清单已导入",
+          `读取 ${result.seen_count} 条，新增 ${result.new_count} 条。${this.xhsStopText(result.stop_reason)}。媒体待解析。`);
+      } catch (error) {
+        this.notify("error", "导入失败", error.message);
+      } finally { input.value = ""; this.xhsBusy = false; }
+    },
+
+    async loadXhsNotes(source) {
+      const payload = await this.api(`/api/xhs/sources/${source.id}/notes`);
+      this.xhsNotes = { ...this.xhsNotes, [source.id]: payload.items || [] };
+    },
+
+    xhsStopText(reason) {
+      return { manual_import: "手工导入，未核对完整点赞列表", first_sync_limit: "已达首次拉取条数，部分完成",
+        anchor_hit: "命中上次任一锚点，增量完成", end_of_feed: "完整读取到列表末尾",
+        page_limit: "已达页数上限", time_limit: "已达时长上限", cursor_error: "分页不完整",
+        cancelled: "已取消", network_error: "网络中断", structure_changed: "页面结构变化",
+        needs_reauth: "需要重新登录", rate_limited: "请求受限" }[reason] || reason || "尚未读取";
     },
 
     async loadSiteRules() {

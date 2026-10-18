@@ -43,6 +43,47 @@
     --ease-snap: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
+.xhs-import-control {
+    position: relative;
+    white-space: nowrap;
+}
+
+.xhs-import-control input[type="file"] {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.xhs-import-control:has(input:disabled) {
+    opacity: 0.5;
+}
+
+.xhs-import-control:focus-within {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.xhs-notes .site-preview-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 16px;
+}
+
+.xhs-notes .site-preview-row a {
+    color: var(--accent);
+    overflow-wrap: anywhere;
+    flex: 1 1 180px;
+}
+
+.xhs-notes .site-preview-row small {
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+
 * {
     box-sizing: border-box;
 }

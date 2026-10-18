@@ -345,6 +345,8 @@ class SourceParser:
 
     def discover(self, source: dict[str, Any], limit: int | None = None, parse_assets: bool = True) -> list[ParsedPost]:
         source_type = str(source.get("source_type") or "html").lower()
+        if source_type == "xhs_likes":
+            raise ValueError("小红书点赞源不能使用通用 HTML/RSS 解析器")
         if source_type == "rss":
             posts = self._discover_rss(source, parse_assets=parse_assets, limit=limit)
         elif source_type == "sitemap":

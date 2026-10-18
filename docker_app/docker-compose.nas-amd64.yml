@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   bili-gallery:
-    image: zzs-bili-gallery:10.5-amd64
+    image: zzs-bili-gallery:10.6-amd64
     container_name: bili-gallery
     restart: unless-stopped
     user: "0:0"

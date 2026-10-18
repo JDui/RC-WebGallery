@@ -1,4 +1,4 @@
-# Docker 化 B 站动态相簿 v10.5
+# Docker 化 B 站动态相簿 v10.6
 
 ## 启动
 
@@ -12,7 +12,7 @@ AMD64 NAS 可以直接使用 [docker-compose.nas-amd64.yml](docker-compose.nas-a
 
 建议流程：
 
-1. 先把镜像包导入 NAS：`docker load -i zzs-bili-gallery_v10.5_amd64.tar`
+1. 先把镜像包导入 NAS：`docker load -i zzs-bili-gallery_v10.6_amd64.tar`
 2. 按你的 NAS 实际目录修改 compose 里的两个挂载路径
 3. 执行 `docker compose -f docker-compose.nas-amd64.yml up -d`
 
@@ -47,6 +47,10 @@ AMD64 NAS 可以直接使用 [docker-compose.nas-amd64.yml](docker-compose.nas-a
 在「设置」中选择低功耗模式会关闭背景模糊和鼠标高光，标签切换保留短暂的淡入。系统开启「减少动态效果」时，界面会减少过渡并关闭页面切换动效。浏览器不支持背景模糊时使用清晰的实色面板。玻璃效果不会改变原图与视频的颜色。
 
 视觉样式与动效分别维护在 `app/static/liquid-glass.css` 和 `app/static/liquid-glass.js`。前端资源使用独立的样式修订号刷新缓存；升级现有 Docker 部署需要重新构建镜像。
+
+## 小红书
+
+小红书使用独立浏览器容器、私有 Profile 卷和只读 Docker Secret。首次扫码与本人点赞源验证后才启用同步；固定直连，独立周期逐轮随机前后抖动 1–22 分钟。部署命令、端口转发和归档恢复说明见[项目 README](../README.md#小红书个人点赞)。一次性测试脚本、原始日志、截图和设计过程记录统一放在仓库 `temp/`。
 
 ## 任务优先级
 

@@ -1,0 +1,8 @@
+seccomp_profile.json is from Microsoft Playwright v1.58.0:
+https://github.com/microsoft/playwright/blob/v1.58.0/utils/docker/seccomp_profile.json
+
+Copyright (c) Microsoft Corporation.
+Licensed under the Apache License, Version 2.0; see LICENSE.playwright.
+
+Modified to allow Chromium's chroot system call inside its own user namespace
+when the container drops all capabilities. Kernel capability checks still apply.

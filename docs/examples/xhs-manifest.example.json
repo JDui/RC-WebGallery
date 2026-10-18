@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "source_kind": "xhs_my_likes",
+  "owner_key": "local-account-1",
+  "scan_id": "9eb3845e-9593-4c68-a8e6-b28662a49d4b",
+  "started_at": "2026-10-19T09:00:00+08:00",
+  "completed_at": "2026-10-19T09:03:00+08:00",
+  "complete_snapshot": false,
+  "stop_reason": "manual_import",
+  "notes": [
+    {
+      "note_id": "example-note-1",
+      "url": "https://www.xiaohongshu.com/explore/example-note-1",
+      "title": "合成示例笔记",
+      "author_id": "example-author",
+      "type": "image",
+      "published_at": null,
+      "observed_at": "2026-10-19T09:02:00+08:00",
+      "assets": []
+    }
+  ]
+}

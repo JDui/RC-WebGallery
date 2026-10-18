@@ -11,6 +11,10 @@ docker_app/review/
 downloaded/
 LivePhoto/downloaded/
 storage/
+.secrets/
+temp/
+*.tar
+*.sha256
 bili_9pics_run.log
 bili_9pics_run_latest.log
 bili_9pics_run_latest_refresh.log
