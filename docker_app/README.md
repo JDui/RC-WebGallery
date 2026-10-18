@@ -1,4 +1,4 @@
-# Docker 化 B 站动态相簿 v10.4
+# Docker 化 B 站动态相簿 v10.5
 
 ## 启动
 
@@ -12,7 +12,7 @@ AMD64 NAS 可以直接使用 [docker-compose.nas-amd64.yml](docker-compose.nas-a
 
 建议流程：
 
-1. 先把镜像包导入 NAS：`docker load -i zzs-bili-gallery_v10.4_amd64.tar`
+1. 先把镜像包导入 NAS：`docker load -i zzs-bili-gallery_v10.5_amd64.tar`
 2. 按你的 NAS 实际目录修改 compose 里的两个挂载路径
 3. 执行 `docker compose -f docker-compose.nas-amd64.yml up -d`
 

@@ -132,6 +132,8 @@ function galleryApp() {
     detailCloseTimer: null,
     detailTextExpanded: false,
     detailTextOverflowing: false,
+    viewerPreviewRetired: false,
+    viewerPreviewRetireTimer: null,
     viewerClosing: false,
     viewerCloseTimer: null,
     headerCompact: false,
@@ -1688,7 +1690,7 @@ function galleryApp() {
         return false;
       }
       this.gallerySmallPreloadPending = { ...this.gallerySmallPreloadPending, [preloadKey]: true };
-      this.gallerySmallPreloadQueue.push({ key, preloadKey, urls });
+      this.gallerySmallPreloadQueue.push({ key, preloadKey, urls, requestId: this.galleryRequestId });
       this.pumpGallerySmallPreloadQueue();
       return true;
     },
@@ -1721,22 +1723,9 @@ function galleryApp() {
     },
 
     async loadGallerySmallTask(task) {
-      const loads = task.urls.map((url) => new Promise((resolve) => {
-        const image = new Image();
-        const finish = (ok) => {
-          window.clearTimeout(timeout);
-          resolve(ok);
-        };
-        const timeout = window.setTimeout(() => finish(false), 8000);
-        image.decoding = "async";
-        image.onload = () => finish(true);
-        image.onerror = () => finish(false);
-        image.src = url;
-        if (image.complete) {
-          finish(true);
-        }
-      }));
-      await Promise.allSettled(loads);
+      const loaded = await Promise.all(task.urls.map((url) => window.galleryImageResources.warm(url)));
+      if (!loaded.every(Boolean) || task.requestId !== this.galleryRequestId
+          || !this.galleryWindowItems().some((item) => this.galleryItemKey(item) === task.key)) return;
       this.gallerySmallPreloadCache = { ...this.gallerySmallPreloadCache, [task.preloadKey]: true };
       this.promoteGalleryQuality(task.key, "small");
     },
@@ -1759,9 +1748,7 @@ function galleryApp() {
         if (coverTinyUrl) urls.add(coverTinyUrl);
       }
       urls.forEach((url) => {
-        const image = new Image();
-        image.decoding = "async";
-        image.src = url;
+        window.galleryImageResources.warm(url);
       });
       this.galleryTinyPreloadCache = { ...this.galleryTinyPreloadCache, [key]: true };
     },
@@ -3184,9 +3171,7 @@ function galleryApp() {
       const loadBatch = (index = 0) => {
         const batch = candidates.slice(index, index + 5);
         batch.forEach((url) => {
-          const image = new Image();
-          image.decoding = "async";
-          image.src = url;
+          window.galleryImageResources.warm(url);
         });
         if (index + batch.length < candidates.length) {
           this.scheduleIdleWork(() => loadBatch(index + batch.length), 600);
@@ -3255,6 +3240,8 @@ function galleryApp() {
       const pair = entry.pair;
       this.viewerToken += 1;
       const shouldShowVideo = !!pair.livephoto && !pair.image;
+      this.cancelViewerPreviewRetirement();
+      this.viewerPreviewRetired = false;
       this.viewerImageReady = !pair.image;
       this.viewerImageRevealAfter = Date.now() + (switchDirection ? 420 : 260);
       if (this.viewerImageRevealTimer) {
@@ -3454,6 +3441,7 @@ function galleryApp() {
     },
 
     closeViewer(skipAnimation = false) {
+      this.cancelViewerPreviewRetirement();
       if (!this.viewer.open && !this.viewerClosing) {
         return;
       }
@@ -4394,6 +4382,11 @@ function galleryApp() {
       };
     },
 
+    cancelViewerPreviewRetirement() {
+      if (this.viewerPreviewRetireTimer !== null) window.clearTimeout(this.viewerPreviewRetireTimer);
+      this.viewerPreviewRetireTimer = null;
+    },
+
     viewerMediaLoaded(kind, event) {
       const target = event?.target;
       if (!this.viewer.open || !target) {
@@ -4409,7 +4402,12 @@ function galleryApp() {
           }
           this.viewerImageReady = true;
           this.viewerImageRevealTimer = null;
-          this.fadeLoadedImage(event);
+          this.cancelViewerPreviewRetirement();
+          const token = this.viewerToken;
+          this.viewerPreviewRetireTimer = window.setTimeout(() => {
+            this.viewerPreviewRetireTimer = null;
+            if (this.viewer.open && token === this.viewerToken && this.viewerImageReady) this.viewerPreviewRetired = true;
+          }, window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? 0 : 280);
         };
         const waitMs = Math.max(0, Number(this.viewerImageRevealAfter || 0) - Date.now());
         if (this.viewerImageRevealTimer) {

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-network-polish-2' %}
+    {% set ui_revision = app_version ~ '-image-overlap-1' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -16,6 +16,8 @@
     <link rel="stylesheet" href="/static/ui-tokens.css?v={{ ui_revision }}">
     <link rel="stylesheet" href="/static/app.css?v={{ ui_revision }}">
     <link rel="stylesheet" href="/static/liquid-glass.css?v={{ ui_revision }}">
+    <link rel="stylesheet" href="/static/progressive-images.css?v={{ ui_revision }}">
+    <script defer src="/static/progressive-images.js?v={{ ui_revision }}"></script>
     <script defer src="/static/app.js?v={{ ui_revision }}"></script>
     <script defer src="/static/ui-help.js?v={{ ui_revision }}"></script>
     <script defer src="/static/liquid-glass.js?v={{ ui_revision }}"></script>
@@ -316,7 +318,7 @@
                                                         <template x-for="tile in item.preview_tiles" :key="tile.id">
                                                             <div class="photo-collage-tile" :style="tileTinyStyle(tile)">
                                                                 <template x-if="galleryQualityFor(item) === 'small' && galleryTileUrl(tile, item)">
-                                                                    <img loading="lazy" decoding="async" :src="galleryTileUrl(tile, item)" :alt="item.title" :width="tile.width || null" :height="tile.height || null" @load="fadeLoadedImage($event)">
+                                                                    <img loading="lazy" decoding="async" x-progressive-src="galleryTileUrl(tile, item)" :alt="item.title" :width="tile.width || null" :height="tile.height || null">
                                                                 </template>
                                                             </div>
                                                         </template>
@@ -391,7 +393,7 @@
                                                 <button type="button" class="card-open-button" :aria-label="`查看图片：${item.title || item.folder_name}，第 ${item.pair_index} 组`" @click.stop="openGalleryPair(item)"></button>
                                                 <div class="photo-visual asset-visual" :style="assetVisualStyle(item)">
                                                     <template x-if="galleryQualityFor(item) === 'small' && galleryPairImageUrl(item)">
-                                                        <img class="hover-preview-image" loading="lazy" decoding="async" :src="galleryPairImageUrl(item)" :alt="item.title" :width="item.width || null" :height="item.height || null" @load="fadeLoadedImage($event)">
+                                                        <img class="hover-preview-image" loading="lazy" decoding="async" x-progressive-src="galleryPairImageUrl(item)" :alt="item.title" :width="item.width || null" :height="item.height || null">
                                                     </template>
                                                     <template x-if="item.has_livephoto">
                                                         <video
@@ -1602,7 +1604,7 @@
                             <div class="detail-thumb" :style="detailThumbStyle(pair)">
                                 <button type="button" class="card-open-button" :disabled="!!pair.placeholder" :aria-label="`查看第 ${pair.pair_index} 组图片`" @click.stop="openPair(pair.pair_index)"></button>
                                 <template x-if="!pair.placeholder">
-                                    <img class="hover-preview-image detail-preview-image" decoding="async" loading="lazy" :src="detailPairPreviewUrl(pair)" :alt="`第 ${pair.pair_index} 组`" @load="fadeDetailPreviewImage($event)">
+                                    <img class="hover-preview-image detail-preview-image" decoding="async" loading="lazy" x-progressive-src="detailPairPreviewUrl(pair)" :alt="`第 ${pair.pair_index} 组`">
                                 </template>
                                 <template x-if="pair.placeholder">
                                     <div class="detail-placeholder-wash"></div>
@@ -1707,12 +1709,12 @@
                         @pointerup="viewerPointerUp($event)"
                         @pointercancel="viewerPointerUp($event)"
                     >
-                        <template x-if="viewer.pair?.image">
-                            <img class="viewer-stage-preview" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) || viewerImageReady }" :src="viewerPreviewUrl()" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片预览'" decoding="async" loading="eager" draggable="false" @load="fadeLoadedImage($event)">
+                        <template x-if="viewer.pair?.image && !viewerPreviewRetired">
+                            <img x-retire-image class="viewer-stage-preview" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) }" :src="viewerPreviewUrl()" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片预览'" decoding="async" loading="eager" draggable="false" @load="fadeLoadedImage($event)">
                         </template>
                         <div class="viewer-stage-loading-wash" :class="{ hidden: !viewerShouldShowImageWash() }" :style="viewerMediaStyle()"></div>
                         <template x-if="viewer.pair?.image">
-                            <img class="viewer-stage-image" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) || !viewerImageReady }" :src="viewer.pair?.image?.url" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片'" :data-viewer-token="viewerToken" decoding="async" loading="eager" fetchpriority="high" draggable="false" @load="viewerMediaLoaded('image', $event)" @error="viewerMediaFailed('image', $event)">
+                            <img x-retire-image class="viewer-stage-image" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) || !viewerImageReady }" :src="viewer.pair?.image?.url" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片'" :data-viewer-token="viewerToken" decoding="async" loading="eager" fetchpriority="high" draggable="false" @load="viewerMediaLoaded('image', $event)" @error="viewerMediaFailed('image', $event)">
                         </template>
                         <template x-if="viewer.pair?.livephoto">
                             <video

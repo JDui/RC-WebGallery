@@ -1,0 +1,26 @@
+/* 分级图片拥有独立透明度，避免父卡片的质量标记提前覆盖旧图。 */
+.photo-card .photo-collage-tile img[data-progressive-image],
+.photo-card .asset-visual img[data-progressive-image],
+.detail-card .detail-thumb img[data-progressive-image] {
+    opacity: 1;
+    filter: none;
+    transform: none;
+    animation: none;
+}
+.photo-collage-tile img.progressive-image-old,
+.asset-visual img.progressive-image-old,
+.detail-thumb img.progressive-image-old {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    opacity: 1;
+    pointer-events: none;
+    transition: none;
+    animation: none;
+}
+.viewer-stage-image { transition: transform var(--duration-base) var(--ease-fluid), opacity 260ms ease-out; }
+
+.photo-card .asset-visual img[data-progressive-image].hidden,
+.detail-card .detail-thumb img[data-progressive-image].hidden { opacity: 0; }
