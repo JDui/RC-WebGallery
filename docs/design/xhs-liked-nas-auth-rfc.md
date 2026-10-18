@@ -141,6 +141,9 @@ Playwright 采用 launch_persistent_context(user_data_dir="/var/lib/xhs/chromium
   "started_at": "2026-10-19T09:00:00+08:00",
   "completed_at": "2026-10-19T09:03:00+08:00",
   "complete_snapshot": false,
+  "stop_reason": "anchor_hit",
+  "anchor_hit_note_id": "example-prior-note-id",
+  "anchor_count_at_start": 3,
   "notes": [
     {
       "note_id": "example-note-id",
@@ -158,7 +161,7 @@ Playwright 采用 launch_persistent_context(user_data_dir="/var/lib/xhs/chromium
 }
 ~~~
 
-以上是**约定结构，不是当前网页 API 的响应**。owner_key 为本地不可逆／不含 Cookie 的账户标识。Manifest 最大体积、条目数、字段长度均须限制，校验域名和 note_id 格式，拒绝含敏感认证键的嵌套 JSON。candidate_ref 只允许 worker 内部解析，不能直接暴露需要鉴权的真实素材 URL 或令牌。对本机手动导出的 JSON，优先不含媒体候选，改由确认后的媒体解析流程处理。
+以上是**约定结构，不是当前网页 API 的响应**。示例的 `stop_reason=anchor_hit` 是已确认增量边界的成功扫描，**`complete_snapshot=false` 不允许反推旧点赞已取消**；`anchor_hit_note_id` 与 `anchor_count_at_start` 为无敏感信息的审计元数据，不是跨任务分页令牌。owner_key 为本地不可逆／不含 Cookie 的账户标识。Manifest 最大体积、条目数、字段长度均须限制，校验域名和 note_id 格式，拒绝含敏感认证键的嵌套 JSON。candidate_ref 只允许 worker 内部解析，不能直接暴露需要鉴权的真实素材 URL 或令牌。对本机手动导出的 JSON，优先不含媒体候选，改由确认后的媒体解析流程处理。
 
 去重键至少为 (source_id, note_id)，媒体去重键为 (source_id, note_id, ordinal, kind, fingerprint/稳定资产键)。分页顺序、发布时间、首次观察时间互不等价：
 - published_at = 原作品发表时间；
@@ -242,17 +245,18 @@ Playwright 采用 launch_persistent_context(user_data_dir="/var/lib/xhs/chromium
 
 | 主应用接口（拟新增） | 作用 | 约束 |
 | --- | --- | --- |
-| GET /api/xhs/status | 查看认证状态、上次同步、剩余失败数 | 不返回 Cookie/Profile 路径/敏感 URL |
+| GET /api/xhs/status | 查看认证状态、上次同步、剩余失败数、锚点命中情况、上次检查点提交时间 | 不返回 Cookie/Profile 路径/敏感 URL |
 | POST /api/xhs/login/start | 发起一次性手动登录 | 管理员权限 + CSRF 防护 + 登录互斥 |
 | POST /api/xhs/login/revoke | 注销／删除登录 Profile | 二次确认；不删已下载图库 |
-| POST /api/xhs/sources | 创建本人点赞订阅源 | 仅允许当前已登录的本人 |
+| POST /api/xhs/sources | 创建本人点赞订阅源 | 仅允许当前已登录的本人；默认 anchor_count=3 |
+| PATCH /api/xhs/sources/{id}/anchor | 更新读取锚点帖数（1–20） | 用户配置、源级权限、版本校验；不能在失败扫描推进检查点 |
 | POST /api/xhs/sync | 手动同步 | 幂等 job id、单源锁、限流 |
 | POST /api/xhs/manifest/import | 手工 manifest 导入 | 文件尺寸、schema、账户归属校验 |
 | GET /api/xhs/runs | 查询同步日志和失败类别 | 严格脱敏 |
 
 这些路径和认证机制是**设计草案**，实现阶段需匹配现有 main.py 的实际 API 命名、鉴权、任务队列模式；不得据此认为现有版本已具备这些端点。Worker 内部 API 仅暴露在容器内网并独立认证；不得向前端开放导航、任意 Fetch、Cookie 导出接口。
 
-界面可在「订阅管理 → 小红书 → 我的点赞」新增来源卡片，显示「已登录／需扫码／风控暂停／部分扫描」、「上次完整同步」、「本次新增」、「下载失败」；提供立即同步、仅重新检查、手工导入及重新登录。登录会话页面必须提示浏览器会话具有账户访问权限。
+界面可在「订阅管理 → 小红书 → 我的点赞」新增来源卡片，显示「已登录／需扫码／风控暂停／部分扫描」、「上次完整同步」、「上次成功增量」、「锚点命中/全部失效」、「本次新增」、「下载失败」；提供立即同步、仅重新检查、手工导入、重新登录和「忽略锚点，完整扫描」。**每个来源增加「读取锚点帖子数」设置项，默认 3，允许 1–20**；辅助说明为「记住上次成功任务顶部 N 条笔记作为备用锚点；下次遇到任意一个即结束增量读取。删帖后会尝试其他候选」。显示锚点检查点最后成功更新时间及当前任务停止原因，且不得通过界面暴露登录凭据。登录会话页面必须提示浏览器会话具有账户访问权限。
 
 ## 8. 资源和调度
 
