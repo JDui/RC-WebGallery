@@ -58,7 +58,6 @@ class SidecarRunner:
         source: Path,
         thumb: Path,
         small: Path,
-        tiny: Path,
         options: dict[str, int] | None = None,
     ) -> dict[str, Any] | None:
         options = options or {}
@@ -72,8 +71,6 @@ class SidecarRunner:
                 str(thumb),
                 "--small",
                 str(small),
-                "--tiny",
-                str(tiny),
                 "--thumb-edge",
                 str(options.get("thumb_edge", 576)),
                 "--thumb-quality",
@@ -82,10 +79,6 @@ class SidecarRunner:
                 str(options.get("small_edge", 192)),
                 "--small-quality",
                 str(options.get("small_quality", 48)),
-                "--tiny-edge",
-                str(options.get("tiny_edge", 32)),
-                "--tiny-quality",
-                str(options.get("tiny_quality", 28)),
             ],
         )
 

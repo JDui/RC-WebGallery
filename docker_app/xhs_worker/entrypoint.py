@@ -14,7 +14,8 @@ def main():
                 break
             time.sleep(0.1)
         import uvicorn
-        uvicorn.run('xhs_worker.main:app', host='0.0.0.0', port=8091, access_log=False, log_level='warning')
+        uvicorn.run('xhs_worker.main:app', host=os.environ.get('XHS_WORKER_HOST', '127.0.0.1'),
+                    port=int(os.environ.get('XHS_WORKER_PORT', '8091')), access_log=False, log_level='warning')
     finally:
         display.terminate()
         display.wait(timeout=10)

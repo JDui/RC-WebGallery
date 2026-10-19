@@ -1,4 +1,4 @@
-# Docker 化 B 站动态相簿 v10.6
+# Docker 化 B 站动态相簿 v10.14
 
 ## 启动
 
@@ -12,9 +12,11 @@ AMD64 NAS 可以直接使用 [docker-compose.nas-amd64.yml](docker-compose.nas-a
 
 建议流程：
 
-1. 先把镜像包导入 NAS：`docker load -i zzs-bili-gallery_v10.6_amd64.tar`
-2. 按你的 NAS 实际目录修改 compose 里的两个挂载路径
-3. 执行 `docker compose -f docker-compose.nas-amd64.yml up -d`
+1. 导入镜像包：`docker load -i zzs-bili-gallery_v10.14_amd64.tar`，并解压同版本部署包，保留其中目录关系。
+2. 在默认 Compose 中保留你原有的两个配置、数据挂载路径；升级时使用随包的新版本 Compose。
+3. 在部署包根目录执行 `docker compose -f docker_app/docker-compose.nas-amd64.yml up -d`。
+
+小红书浏览器会随主服务自动启动，直接在网页中扫码使用。只有一个应用容器和 `7860` 网页端口。
 
 默认挂载说明：
 
@@ -50,7 +52,7 @@ AMD64 NAS 可以直接使用 [docker-compose.nas-amd64.yml](docker-compose.nas-a
 
 ## 小红书
 
-小红书使用独立浏览器容器、私有 Profile 卷和只读 Docker Secret。首次扫码与本人点赞源验证后才启用同步；固定直连，独立周期逐轮随机前后抖动 1–22 分钟。部署命令、端口转发和归档恢复说明见[项目 README](../README.md#小红书个人点赞)。一次性测试脚本、原始日志、截图和设计过程记录统一放在仓库 `temp/`。
+主镜像已内置小红书浏览器，使用默认 Compose 自动初始化，无需额外容器、密钥脚本、登录端口或 SSH 转发。打开页面即可启动扫码窗口；首次扫码与本人点赞源验证后启用同步。固定直连，独立周期逐轮随机前后抖动 1–22 分钟。使用与归档恢复说明见[项目 README](../README.md#小红书个人点赞)。一次性测试脚本、原始日志、截图和设计过程记录统一放在仓库 `temp/`。
 
 ## 任务优先级
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from contextlib import contextmanager
 import hashlib
+import re
 import shutil
 import time
 import threading
@@ -10,9 +11,8 @@ from uuid import UUID, uuid4
 
 from PIL import Image
 
-from app.services.site_filtering import RuleEngine
-from app.services.utils import TIMEZONE, dumps_json, now_iso, parse_date
-from app.services.xhs.models import XhsAsset, XhsValidationError, fields
+from app.services.utils import TIMEZONE, dumps_json, loads_json, now_iso, parse_date
+from app.services.xhs.models import XhsAsset, XhsNote, XhsValidationError, fields
 from app.services.xhs.sync import XhsConflict, XhsSyncService
 from app.services.xhs.worker_client import WorkerError, XhsWorkerClient
 
@@ -146,8 +146,74 @@ class XhsManager:
                 continue
         return {'ok': True, 'jobs': jobs, 'message': f'已提交 {len(jobs)} 个小红书同步任务，已有任务的来源自动跳过'}
 
+    def reset_source(self, source_id, payload):
+        fields(payload, {'confirmations', 'config_version'}, {'confirmations', 'config_version'})
+        if type(payload['confirmations']) is not int or payload['confirmations'] != 3:
+            raise XhsValidationError('完全重置需要三次明确确认')
+        if type(payload['config_version']) is not int or payload['config_version'] < 0:
+            raise XhsValidationError('来源版本无效，请刷新后重试')
+        service = XhsSyncService(self.db)
+        with service._source_lock(source_id), self.db.connect() as conn:
+            conn.execute('begin immediate')
+            source = service.get_source(source_id, conn)
+            if source['config_version'] != payload['config_version']:
+                raise XhsConflict('来源设置已更新，请刷新后重新确认')
+            if conn.execute("select 1 from xhs_jobs where source_id=? and state in ('queued','running')", (source_id,)).fetchone():
+                raise XhsConflict('请先停止或取消此来源正在执行和排队的任务')
+            task_ids = []
+            for task in conn.execute("select id,status,details_json from task_runs where task_type in ('xhs-sync','xhs-verify','xhs-import','xhs-unlike')"):
+                detail = loads_json(task['details_json'], {})
+                target = detail.get('source_id', (detail.get('retry_action') or {}).get('source_id'))
+                if target == source_id:
+                    if task['status'] in {'queued', 'running', 'paused'}:
+                        raise XhsConflict('请先停止或取消此来源正在执行和排队的任务')
+                    task_ids.append(task['id'])
+            prefix = f'xhs_{source_id}_'
+            folders = {row[0] for row in conn.execute('select folder_name from folders where subscription_uid=?', (f'site:{source_id}',))}
+            for root in (self.storage.config.images_dir, self.storage.config.livephoto_dir):
+                folders.update(path.name for path in root.iterdir() if path.name.startswith(prefix))
+            for folder in folders:
+                if not folder.startswith(prefix) or '/' in folder or '\\' in folder:
+                    raise XhsConflict('来源目录异常，未执行重置')
+            count = conn.execute('select count(*) from site_posts where source_id=?', (source_id,)).fetchone()[0]
+            for folder in folders:
+                self.storage.remove_folder_assets(folder)
+                for table in ('pair_index', 'folder_index', 'folders'):
+                    conn.execute(f'delete from {table} where folder_name=?', (folder,))
+            self.storage.remove_site_source_assets(f'xhs-{source_id}')
+            for table in ('trash_items', 'blacklist_items', 'deleted_pair_marks', 'filter_logs', 'review_items'):
+                conn.execute(f'delete from {table} where source_dynamic_id like ?', (f'site:{source_id}:%',))
+            conn.execute('delete from site_filter_logs where source_id=?', (source_id,))
+            task_ids.extend(row[0] for row in conn.execute('select task_id from xhs_jobs where source_id=? and task_id is not null', (source_id,)))
+            conn.execute('delete from xhs_jobs where source_id=?', (source_id,))
+            for task_id in set(task_ids):
+                conn.execute('delete from task_runs where id=?', (task_id,))
+            conn.execute('delete from site_posts where source_id=?', (source_id,))
+            conn.execute('delete from xhs_anchor_candidates where source_id=?', (source_id,))
+            conn.execute('delete from xhs_sync_runs where source_id=?', (source_id,))
+            conn.execute('delete from xhs_schedule_state where source_id=?', (source_id,))
+            conn.execute('''update xhs_source_accounts set initial_fetch_completed=0,last_checkpoint_scan_id=null,
+                last_checkpoint_at=null,checkpoint_version=checkpoint_version+1,config_version=config_version+1 where source_id=?''', (source_id,))
+            conn.execute('delete from gallery_page_cache')
+            conn.execute('delete from duplicate_group_cache')
+            for ignored in conn.execute('select signature,folder_names_json from duplicate_ignores').fetchall():
+                if folders.intersection(loads_json(ignored['folder_names_json'], [])):
+                    conn.execute('delete from duplicate_ignores where signature=?', (ignored['signature'],))
+        self.db.refresh_sidebar_count_cache()
+        restarted = False
+        if self.queue is not None and self.ready(source_id):
+            try:
+                self.start_sync(source_id)
+                restarted = True
+            except XhsConflict:
+                pass
+        return {'ok': True, 'removed_posts': count, 'restarted': restarted,
+                'message': '已完全重置，并按首次拉取规则重新开始。' if restarted else '已完全重置；登录验证后可按首次规则重新同步。'}
+
     def recover(self):
         with self.db.connect() as conn:
+            conn.execute("""update task_runs set status='failed',message='本地已删除，原帖取消点赞因重启中断',finished_at=?
+                where task_type='xhs-unlike' and status in ('queued','running')""", (now_iso(),))
             interrupted = conn.execute("select * from xhs_jobs where state in ('queued','running')").fetchall()
             for job in interrupted:
                 conn.execute("update xhs_jobs set state='interrupted', finished_at=?, error_category='PROCESS_RESTARTED' where job_id=?", (now_iso(), job['job_id']))
@@ -267,49 +333,59 @@ class XhsManager:
 
     def _download_pending(self, source, session_id, stats, cooperate, progress):
         with self.db.connect() as conn:
-            posts = [dict(row) for row in conn.execute('''select p.*,l.note_id,l.note_type,d.status as download_status
+            posts = [dict(row) for row in conn.execute('''select p.*,l.note_id,l.note_type,d.status as download_status,d.media_revision
                 from xhs_note_downloads d join site_posts p on p.id=d.post_id join xhs_like_state l on l.site_post_id=p.id
                 where p.source_id=? and d.status != 'ready' order by p.id''', (source['source_id'],))]
         quota = source['media_quota_mb'] * 1024 * 1024
-        rules = RuleEngine(self.db.get_site_rules())
         for index, post in enumerate(posts):
             if cooperate:
                 cooperate()
             if progress:
                 progress(index, len(posts))
             dynamic_id = f"site:{source['source_id']}:{post['id']}"
-            decision = rules.evaluate(post['title'], [])
             if (post['is_blocked'] or self.db.is_blacklisted(dynamic_id, dynamic_id)
-                    or self.db.is_site_post_in_active_trash(source['source_id'], post['url'])
-                    or (not decision.allowed and post['download_status'] != 'approved')):
+                    or self.db.is_site_post_in_active_trash(source['source_id'], post['url'])):
                 stats['blocked'] += 1
-                self._note_result(post['id'], 'blocked', 'FILTERED')
+                self._note_result(post['id'], 'blocked', 'MANUAL_EXCLUDED')
                 continue
             try:
-                stored_assets = self.db.list_site_assets(post['id'])
-                if stored_assets and all(item['status'] == 'ready' and item['rel_path']
-                    and self.storage.resolve_storage_path(item['rel_path']).is_file() for item in stored_assets):
-                    self._archive(source, post)
-                    self._note_result(post['id'], 'ready')
-                    continue
                 resolved = self.worker.request('POST', f'/sessions/{session_id}/resolve', {'note_id': post['note_id']})
                 raw_assets = resolved.get('assets')
                 if not isinstance(raw_assets, list) or not raw_assets or len(raw_assets) > 100:
                     raise WorkerError('MEDIA_NEEDS_RESOLUTION')
                 assets = [XhsAsset.parse(asset) for asset in raw_assets]
+                if resolved.get('media_complete') is not True:
+                    raise WorkerError('MEDIA_NEEDS_RESOLUTION')
+                note = XhsNote.parse(resolved.get('note'))
+                if note.note_id != post['note_id'] or tuple(sorted(assets, key=lambda asset: (asset.ordinal, asset.kind))) != note.assets:
+                    raise WorkerError('MEDIA_NEEDS_RESOLUTION')
+                post['title'], post['note_type'] = note.title, note.type
+                if note.published_at:
+                    post['pub_date'] = datetime.fromisoformat(note.published_at).astimezone(TIMEZONE).date().isoformat()
+                with self.db.connect() as conn:
+                    conn.execute('update site_posts set title=?,pub_date=?,updated_at=? where id=?',
+                                 (post['title'], post['pub_date'], now_iso(), post['id']))
+                    conn.execute('update xhs_like_state set note_type=?,author_id=? where site_post_id=?',
+                                 (note.type, note.author_id, post['id']))
                 previous_assets = {item['url']: item for item in self.db.list_site_assets(post['id'])}
+                expected_keys = set()
                 for asset in assets:
                     if cooperate:
                         cooperate()
                     stable_key = f"urn:xhs:{source['source_id']}:{post['note_id']}:{asset.ordinal}:{asset.kind}"
+                    expected_keys.add(stable_key)
                     row = self.db.upsert_site_asset(post['id'], {'url': stable_key, 'media_type': asset.kind,
                         'filename': previous_assets.get(stable_key, {}).get('filename') or f'{asset.ordinal:03d}-{asset.kind}'})
                     old_path = self.storage.resolve_storage_path(row.get('rel_path'))
-                    if row['status'] == 'ready' and old_path and old_path.is_file() and old_path.stat().st_size:
+                    if post['media_revision'] >= 1 and row['status'] == 'ready' and old_path and old_path.is_file() and old_path.stat().st_size:
                         continue
                     downloaded = self._download_asset(session_id, post, row, asset, source, quota, cooperate)
                     quota -= downloaded
                     stats['downloaded'] += 1
+                with self.db.connect() as conn:
+                    for old in previous_assets.values():
+                        if old['url'] not in expected_keys:
+                            conn.execute('delete from site_assets where id=?', (old['id'],))
                 self.db.update_site_post_counts(post['id'])
                 folder = self._archive(source, post)
                 self._note_result(post['id'], 'ready')
@@ -319,12 +395,18 @@ class XhsManager:
                 stats['errors'] += 1
                 category = exc.category if isinstance(exc, WorkerError) else 'MEDIA_DOWNLOAD_FAILED'
                 self._note_result(post['id'], 'failed', category)
+                if isinstance(exc, WorkerError) and exc.diagnostic:
+                    diagnostics = stats.setdefault('resolution_diagnostics', [])
+                    if len(diagnostics) < 20:
+                        diagnostics.append({'note_id': post['note_id'], 'category': category, **exc.diagnostic})
                 if category in {'NEEDS_REAUTH', 'RATE_LIMITED', 'NEEDS_MANUAL_VERIFICATION', 'MEDIA_QUOTA_EXCEEDED'}:
                     raise
 
     def _note_result(self, post_id, status, error=None):
         with self.db.connect() as conn:
-            conn.execute('update xhs_note_downloads set status=?, error_category=?, updated_at=? where post_id=?', (status, error, now_iso(), post_id))
+            conn.execute('''update xhs_note_downloads set status=?, error_category=?, updated_at=?,
+                media_revision=case when ?='ready' then 1 else media_revision end where post_id=?''',
+                         (status, error, now_iso(), status, post_id))
 
     def _download_asset(self, session_id, post, row, asset, source, quota, cooperate):
         folder = self.storage.site_post_folder(f"xhs-{source['source_id']}", post['pub_date'], post['note_id'])
@@ -377,7 +459,11 @@ class XhsManager:
         image_folder, video_folder = self.storage.image_folder(folder_name), self.storage.livephoto_folder(folder_name)
         image_folder.mkdir(parents=True, exist_ok=True)
         video_folder.mkdir(parents=True, exist_ok=True)
-        for asset in self.db.list_site_assets(post['id']):
+        expected_paths = set()
+        stored = self.db.list_site_assets(post['id'])
+        image_ordinals = {int(asset['url'].split(':')[-2]) for asset in stored
+                          if asset['media_type'] == 'image' and asset['status'] == 'ready' and asset['rel_path']}
+        for asset in stored:
             if asset['status'] != 'ready' or not asset['rel_path']:
                 continue
             path = self.storage.resolve_storage_path(asset['rel_path'])
@@ -385,13 +471,19 @@ class XhsManager:
                 continue
             ordinal = int(asset['url'].split(':')[-2]) + 1
             target = (image_folder if asset['media_type'] == 'image' else video_folder) / f'{ordinal:03d}__{asset["filename"]}'
+            expected_paths.add(target)
             if not target.is_file() or target.stat().st_mtime < path.stat().st_mtime:
                 if shutil.disk_usage(target.parent).free < path.stat().st_size + 128 * 1024 * 1024:
                     raise WorkerError('MEDIA_QUOTA_EXCEEDED')
                 shutil.copy2(path, target)
-            if asset['media_type'] == 'video':
+            if asset['media_type'] == 'video' and ordinal - 1 not in image_ordinals:
                 cover = image_folder / f'{ordinal:03d}__video-cover.jpg'
+                expected_paths.add(cover)
                 self.indexer.thumbnailer.ensure_video_cover(target, cover)
+        for directory in (image_folder, video_folder):
+            for old in directory.iterdir():
+                if old.is_file() and len(old.name) > 5 and old.name[:3].isdigit() and old.name[3:5] == '__' and old not in expected_paths:
+                    old.unlink()
         published = parse_date(post['pub_date'])
         pub_ts = int(datetime.combine(published, datetime.min.time(), TIMEZONE).timestamp()) if published else 0
         dynamic_id = f"site:{source['source_id']}:{post['id']}"
@@ -401,6 +493,44 @@ class XhsManager:
                                             'standalone_video': post['note_type'] == 'video',
                                             'media_variant': 'visible_web_media'})
         return folder_name
+
+    def unlike_target(self, folder_name):
+        match = re.fullmatch(r'xhs_([0-9]+)_([A-Za-z0-9_-]+)', folder_name)
+        if not match:
+            return None
+        source_id, note_id = int(match[1]), match[2]
+        with self.db.connect() as conn:
+            row = conn.execute('select 1 from xhs_like_state where source_id=? and note_id=?',
+                               (source_id, note_id)).fetchone()
+        return (source_id, note_id) if row else None
+
+    def unlike_note(self, source_id, note_id, task_id):
+        details = {'source_id': source_id, 'note_id': note_id, 'local_deleted': True}
+        try:
+            with XhsSyncService(self.db)._source_lock(source_id):
+                source = XhsSyncService(self.db).get_source(source_id)
+                if not self.ready(source_id):
+                    raise WorkerError('LOGIN_REQUIRED')
+                with self.worker.session(source['owner_key'], [note_id]) as session_id:
+                    found = False
+                    for index, page in enumerate(self.worker.pages(session_id)):
+                        if any(note.note_id == note_id for note in page.notes):
+                            found = True
+                            break
+                        if page.end_of_feed or index >= 99:
+                            break
+                    if not found:
+                        raise WorkerError('NOTE_NOT_OBSERVED')
+                    result = self.worker.request('POST', f'/sessions/{session_id}/unlike', {'note_id': note_id})
+                    if result.get('note_id') != note_id or result.get('unliked') is not True:
+                        raise WorkerError('UNLIKE_UNCONFIRMED')
+                with self.db.connect() as conn:
+                    conn.execute('update xhs_like_state set is_currently_liked=0 where source_id=? and note_id=?',
+                                 (source_id, note_id))
+            self.db.finish_task_run(task_id, 'success', '本地已删除，原帖已取消点赞', details)
+        except Exception as exc:
+            details['error_category'] = exc.category if isinstance(exc, WorkerError) else 'UNLIKE_UNCONFIRMED'
+            self.db.finish_task_run(task_id, 'failed', '本地已删除，原帖取消点赞未完成', details)
 
     def release_note(self, source_id, note_id):
         with self.db.connect() as conn:

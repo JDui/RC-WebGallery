@@ -13,7 +13,7 @@ function galleryApp() {
     sidebarCountUpdatedAt: {},
     subscriptions: [],
     latestSubscriptionPullAt: "",
-    subscriptionPanel: ["overview", "up", "site"].includes(localStorage.getItem("subscription_panel"))
+    subscriptionPanel: ["overview", "up", "site", "xhs"].includes(localStorage.getItem("subscription_panel"))
       ? localStorage.getItem("subscription_panel")
       : "overview",
     subscriptionSearch: "",
@@ -73,10 +73,8 @@ function galleryApp() {
     galleryQualityUpdateQueue: {},
     galleryQualityUpdateRaf: null,
     galleryQualityUpdateTimer: null,
-    galleryCardObserver: null,
     gallerySmallObserver: null,
     galleryObservedCardElements: {},
-    galleryTinyPreloadCache: {},
     gallerySmallPreloadQueue: [],
     gallerySmallPreloadActive: 0,
     gallerySmallPreloadPending: {},
@@ -168,12 +166,14 @@ function galleryApp() {
     xhsSources: [],
     xhsDrafts: {},
     xhsBusy: false,
+    xhsResetSteps: {},
     xhsNewSource: { name: "我的小红书点赞", owner_key: "", anchor_count: 3, initial_fetch_limit: 100, refresh_interval_minutes: 720, refresh_enabled: false },
     xhsCreateExpanded: false,
     xhsNotes: {},
     xhsWorker: { state: 'NOT_CONFIGURED', owner_key: null },
     xhsAutomaticAvailable: false,
     xhsLoginSession: null,
+    xhsLoginTimer: null,
     xhsChecks: {},
     siteLogs: [],
     siteRules: { mode: "blacklist", keywords: [], allow_keywords: [], block_keywords: [], use_regex: false },
@@ -224,6 +224,7 @@ function galleryApp() {
     pullStatus: {},
     qr: {},
     detail: { open: false, pairs: [], folder: null, videos: [] },
+    videoNote: { open: false, folder: null, video: null, error: '' },
     detailCache: {},
     detailCacheOrder: [],
     detailCacheLimit: 3,
@@ -346,7 +347,7 @@ function galleryApp() {
         this.$watch(key, () => this.$nextTick(() => window.GalleryGlass?.refresh()));
       });
       this.updateViewportMode();
-      ["detail.open", "viewer.open", "taskInspector.open", "sourcePreview.open"].forEach((key) => {
+      ["videoNote.open", "detail.open", "viewer.open", "taskInspector.open", "sourcePreview.open"].forEach((key) => {
         this.$watch(key, () => this.$nextTick(() => this.syncModalAccessibility()));
       });
       window.addEventListener("beforeunload", (event) => {
@@ -629,9 +630,6 @@ function galleryApp() {
       this.galleryQualityUpdateQueue = Object.fromEntries(
         Object.entries(this.galleryQualityUpdateQueue || {}).filter(([key]) => keys.has(key)),
       );
-      this.galleryTinyPreloadCache = Object.fromEntries(
-        Object.entries(this.galleryTinyPreloadCache || {}).filter(([key]) => keys.has(key)),
-      );
       this.gallerySmallPreloadCache = Object.fromEntries(
         Object.entries(this.gallerySmallPreloadCache || {}).filter(([key]) => keys.has(String(key).split("::", 1)[0])),
       );
@@ -745,6 +743,7 @@ function galleryApp() {
     },
 
     closeGalleryLayers() {
+      this.closeVideoNote();
       this.closeViewer(true);
       this.closeDetail(true);
     },
@@ -903,6 +902,10 @@ function galleryApp() {
     },
 
     handleEscape() {
+      if (this.videoNote.open) {
+        this.closeVideoNote();
+        return;
+      }
       if (this.resetSubscriptionIconsConfirmStep || this.resetSiteIconsConfirmStep) {
         this.resetSubscriptionIconsConfirmStep = 0;
         this.resetSiteIconsConfirmStep = 0;
@@ -977,7 +980,7 @@ function galleryApp() {
       if (this.currentView === "review") return "把推广动态拦在相簿之前";
       if (this.currentView === "logs") return "知道每一条动态为什么被筛出去";
       if (this.currentView === "settings") return "同步、账号权限与过滤策略";
-      if (this.currentView === "subscriptions") return "统一管理 UP 主与站点订阅";
+      if (this.currentView === "subscriptions") return "统一管理 UP 主、站点与小红书订阅";
       const subscription = this.activeSelectedSubscription();
       if (subscription) return `只浏览 ${subscription.uname || subscription.name || subscription.uid} 的内容`;
       if (this.searchActive()) return "搜索标题、正文、订阅源和文件夹名";
@@ -1079,7 +1082,7 @@ function galleryApp() {
     },
 
     syncModalAccessibility() {
-      const name = this.sourcePreview.open ? "source" : this.taskInspector.open ? "task" : this.viewer.open ? "viewer" : this.detail.open ? "detail" : "";
+      const name = this.videoNote.open ? 'video-note' : this.sourcePreview.open ? "source" : this.taskInspector.open ? "task" : this.viewer.open ? "viewer" : this.detail.open ? "detail" : "";
       const active = name ? document.querySelector(`[data-modal-layer="${name}"]`) : null;
       const stack = this.modalFocusStack;
       let restore = null;
@@ -1574,49 +1577,20 @@ function galleryApp() {
       return `background-image: url("${value.replace(/["\\\n\r]/g, "\\$&")}");`;
     },
 
-    galleryItemTinyUrl(item) {
-      const tiles = item?.preview_tiles || [];
-      const firstTile = tiles.find((tile) => tile?.tiny_thumb_url || tile?.small_thumb_url || tile?.cover_url) || {};
-      return firstTile.tiny_thumb_url || item?.tiny_thumb_url || firstTile.small_thumb_url || firstTile.cover_url || "";
-    },
-
-    pairTinyUrl(pair) {
-      const image = pair?.image || {};
-      const livephoto = pair?.livephoto || {};
-      return (
-        pair?.tiny_thumb_url ||
-        image.tiny_thumb_url ||
-        livephoto.tiny_thumb_url ||
-        pair?.small_thumb_url ||
-        image.small_thumb_url ||
-        livephoto.small_thumb_url ||
-        livephoto.cover_url ||
-        ""
-      );
-    },
-
-    galleryItemTinyStyle(item) {
-      return this.tinyThumbBackground(this.galleryItemTinyUrl(item));
-    },
-
-    tileTinyStyle(tile) {
-      return this.tinyThumbBackground(tile?.tiny_thumb_url || tile?.small_thumb_url || tile?.cover_url);
-    },
-
     galleryQualityFor(item) {
       const key = this.galleryItemKey(item);
-      return key && this.galleryCardQuality[key] === "small" ? "small" : "tiny";
+      return key && this.galleryCardQuality[key] === "small" ? "small" : "pending";
     },
 
     galleryQualityRank(quality) {
-      return { tiny: 0, small: 1, thumb: 2 }[quality] ?? 0;
+      return { pending: 0, small: 1, thumb: 2 }[quality] ?? 0;
     },
 
     promoteGalleryQuality(key, quality) {
       if (!key) {
         return;
       }
-      const current = this.galleryQualityUpdateQueue[key] || this.galleryCardQuality[key] || "tiny";
+      const current = this.galleryQualityUpdateQueue[key] || this.galleryCardQuality[key] || "pending";
       if (this.galleryQualityRank(current) >= this.galleryQualityRank(quality)) {
         return;
       }
@@ -1645,19 +1619,14 @@ function galleryApp() {
       }
     },
 
-    galleryTileUrl(tile, parentItem = null) {
-      const small = !parentItem || this.galleryQualityFor(parentItem) === "small";
-      if (small) {
-        return tile?.small_thumb_url || tile?.tiny_thumb_url || tile?.cover_url || "";
-      }
-      return tile?.tiny_thumb_url || tile?.small_thumb_url || tile?.cover_url || "";
+    galleryTileUrl(tile) {
+      return tile?.small_thumb_url || tile?.thumb_url || tile?.cover_url || "";
     },
 
     galleryPairImageUrl(item) {
-      if (this.galleryQualityFor(item) === "small") {
-        return item?.small_thumb_url || item?.tiny_thumb_url || "";
-      }
-      return item?.tiny_thumb_url || item?.small_thumb_url || "";
+      return item?.small_thumb_url || item?.image?.small_thumb_url || item?.livephoto?.small_thumb_url
+        || item?.thumb_url || item?.image?.thumb_url || item?.livephoto?.thumb_url
+        || item?.livephoto?.cover_url || "";
     },
 
     gallerySmallUrlsForItem(item) {
@@ -1665,14 +1634,13 @@ function galleryApp() {
       const tiles = item?.preview_tiles || [];
       if (tiles.length) {
         for (const tile of tiles.slice(0, 4)) {
-          if (tile?.small_thumb_url) {
-            urls.add(tile.small_thumb_url);
+          const url = this.galleryTileUrl(tile);
+          if (url) {
+            urls.add(url);
           }
         }
       } else {
-        const image = item?.image || {};
-        const livephoto = item?.livephoto || {};
-        const url = item?.small_thumb_url || image.small_thumb_url || livephoto.small_thumb_url;
+        const url = this.galleryPairImageUrl(item);
         if (url) {
           urls.add(url);
         }
@@ -1686,7 +1654,7 @@ function galleryApp() {
 
     queueGallerySmallItem(item) {
       const key = this.galleryItemKey(item);
-      if (!key || this.galleryQualityRank(this.galleryCardQuality[key] || "tiny") >= this.galleryQualityRank("small")) {
+      if (!key || this.galleryQualityRank(this.galleryCardQuality[key] || "pending") >= this.galleryQualityRank("small")) {
         return false;
       }
       const urls = this.gallerySmallUrlsForItem(item);
@@ -1715,7 +1683,7 @@ function galleryApp() {
       const limit = this.gallerySmallPreloadLimit();
       while (this.gallerySmallPreloadActive < limit && this.gallerySmallPreloadQueue.length) {
         const task = this.gallerySmallPreloadQueue.shift();
-        if (!task || this.galleryQualityRank(this.galleryCardQuality[task.key] || "tiny") >= this.galleryQualityRank("small")) {
+        if (!task || this.galleryQualityRank(this.galleryCardQuality[task.key] || "pending") >= this.galleryQualityRank("small")) {
           if (task?.preloadKey) {
             const { [task.preloadKey]: _removed, ...rest } = this.gallerySmallPreloadPending;
             this.gallerySmallPreloadPending = rest;
@@ -1742,45 +1710,8 @@ function galleryApp() {
       this.promoteGalleryQuality(task.key, "small");
     },
 
-    preloadGalleryTinyItem(item) {
-      const key = this.galleryItemKey(item);
-      if (!key || this.galleryTinyPreloadCache[key]) {
-        return;
-      }
-      const urls = new Set();
-      if (this.galleryViewMode === "pair") {
-        const tinyUrl = this.pairTinyUrl(item);
-        if (tinyUrl) urls.add(tinyUrl);
-      } else {
-        for (const tile of (item?.preview_tiles || []).slice(0, 4)) {
-          const tinyUrl = tile?.tiny_thumb_url || tile?.small_thumb_url || tile?.cover_url;
-          if (tinyUrl) urls.add(tinyUrl);
-        }
-        const coverTinyUrl = this.galleryItemTinyUrl(item);
-        if (coverTinyUrl) urls.add(coverTinyUrl);
-      }
-      urls.forEach((url) => {
-        window.galleryImageResources.warm(url);
-      });
-      this.galleryTinyPreloadCache = { ...this.galleryTinyPreloadCache, [key]: true };
-    },
-
     assetVisualStyle(item) {
-      const styles = [`aspect-ratio: ${item.display_ratio || "1 / 1"}`];
-      const tiny = this.tinyThumbBackground(this.pairTinyUrl(item));
-      if (tiny) {
-        styles.push(tiny);
-      }
-      return styles.join("; ");
-    },
-
-    detailThumbStyle(pair) {
-      const styles = ["aspect-ratio: 1 / 1"];
-      const tiny = this.tinyThumbBackground(this.pairTinyUrl(pair));
-      if (tiny) {
-        styles.push(tiny);
-      }
-      return styles.join("; ");
+      return `aspect-ratio: ${item.display_ratio || "1 / 1"}`;
     },
 
     galleryDensityCaption() {
@@ -1911,17 +1842,20 @@ function galleryApp() {
     },
 
     siteSubscriptions() {
-      return (this.subscriptions || []).filter((item) => item.is_site || String(item.uid || "").startsWith("site:"));
+      return (this.subscriptions || []).filter((item) => (item.is_site || String(item.uid || "").startsWith("site:")) && item.source_type !== 'xhs_likes');
     },
 
     setSubscriptionPanel(panel) {
-      if (!["overview", "up", "site"].includes(panel) || this.subscriptionPanel === panel) {
+      if (!["overview", "up", "site", "xhs"].includes(panel) || this.subscriptionPanel === panel) {
         return;
       }
       this.subscriptionPanel = panel;
+      this.xhsResetSteps = {};
       localStorage.setItem("subscription_panel", panel);
       this.scrollViewTop();
-      if (panel === "site") {
+      if (panel === "xhs") {
+        this.loadXhsSources();
+      } else if (panel === "site") {
         this.refreshSites();
         this.refreshSidebarCounts(["sites", "subscriptions"]).catch(() => {});
       } else if (panel === "overview") {
@@ -1935,12 +1869,12 @@ function galleryApp() {
     },
 
     subscriptionPanelIndex() {
-      return ["overview", "up", "site"].indexOf(this.subscriptionPanel);
+      return ["overview", "up", "site", "xhs"].indexOf(this.subscriptionPanel);
     },
 
     subscriptionPanelIndicatorStyle() {
       const index = Math.max(0, this.subscriptionPanelIndex());
-      return `width: calc(33.333% - 4px); transform: translateX(${index * 100}%);`;
+      return `width: calc(25% - 4px); transform: translateX(${index * 100}%);`;
     },
 
     isSitePanelActive() {
@@ -1999,7 +1933,8 @@ function galleryApp() {
       }
       return [
         { key: "up", title: "UP 主动态", items: items.filter((item) => !item.is_site) },
-        { key: "site", title: "站点订阅", items: items.filter((item) => item.is_site) },
+        { key: "site", title: "站点订阅", items: items.filter((item) => item.is_site && item.source_type !== 'xhs_likes') },
+        { key: "xhs", title: "小红书", items: items.filter((item) => item.source_type === 'xhs_likes') },
       ].filter((group) => group.items.length);
     },
 
@@ -2514,20 +2449,6 @@ function galleryApp() {
         this.galleryCardQuality = quality;
         return;
       }
-      if (!this.galleryCardObserver) {
-        this.galleryCardObserver = new IntersectionObserver((entries) => {
-          entries.forEach((entry) => {
-            const key = entry.target.getAttribute("data-gallery-key");
-            if (!key || entry.target.classList.contains("deleted-placeholder-card")) {
-              return;
-            }
-            if (entry.isIntersecting) {
-              const item = (this.gallery.items || []).find((candidate) => this.galleryItemKey(candidate) === key);
-              this.preloadGalleryTinyItem(item);
-            }
-          });
-        }, { root: null, rootMargin: "180% 0px", threshold: 0 });
-      }
       if (!this.gallerySmallObserver) {
         this.gallerySmallObserver = new IntersectionObserver((entries) => {
           entries.forEach((entry) => {
@@ -2538,7 +2459,7 @@ function galleryApp() {
             if (!key || entry.target.classList.contains("deleted-placeholder-card")) {
               return;
             }
-            const current = this.galleryCardQuality[key] || "tiny";
+            const current = this.galleryCardQuality[key] || "pending";
             if (this.galleryQualityRank(current) < this.galleryQualityRank("small")) {
               const item = (this.gallery.items || []).find((candidate) => this.galleryItemKey(candidate) === key);
               this.queueGallerySmallItem(item);
@@ -2555,24 +2476,21 @@ function galleryApp() {
         }
         nextObserved[key] = element;
         if (nextQuality[key] === undefined) {
-          nextQuality[key] = "tiny";
+          nextQuality[key] = "pending";
         }
         const previous = this.galleryObservedCardElements[key];
         if (previous === element) {
           return;
         }
         if (previous) {
-          this.galleryCardObserver.unobserve(previous);
           this.gallerySmallObserver.unobserve(previous);
         }
-        this.galleryCardObserver.observe(element);
         this.gallerySmallObserver.observe(element);
       });
       Object.entries(this.galleryObservedCardElements).forEach(([key, element]) => {
         if (nextObserved[key]) {
           return;
         }
-        this.galleryCardObserver.unobserve(element);
         this.gallerySmallObserver.unobserve(element);
       });
       this.galleryObservedCardElements = nextObserved;
@@ -2611,7 +2529,7 @@ function galleryApp() {
         }
         const rect = element.getBoundingClientRect();
         if (rect.bottom >= topLimit && rect.top <= bottomLimit) {
-          const current = this.galleryCardQuality[key] || "tiny";
+          const current = this.galleryCardQuality[key] || "pending";
           if (this.galleryQualityRank(current) < this.galleryQualityRank("small")) {
             this.queueGallerySmallItem(itemsByKey.get(key));
           }
@@ -2688,13 +2606,15 @@ function galleryApp() {
     openSubscriptions(panel = null) {
       this.closeGalleryLayers();
       this.currentView = "subscriptions";
-      if (["overview", "up", "site"].includes(panel)) {
+      if (["overview", "up", "site", "xhs"].includes(panel)) {
         this.subscriptionPanel = panel;
         localStorage.setItem("subscription_panel", panel);
       }
       this.closeSidebarDrawer();
       this.scrollViewTop();
-      if (this.subscriptionPanel === "site") {
+      if (this.subscriptionPanel === "xhs") {
+        this.loadXhsSources();
+      } else if (this.subscriptionPanel === "site") {
         this.refreshSites();
         this.refreshSidebarCounts(["subscriptions", "sites"]).catch(() => {});
       } else if (this.subscriptionPanel === "overview") {
@@ -2920,6 +2840,7 @@ function galleryApp() {
     },
 
     async openFolder(folderName) {
+      this.closeVideoNote();
       if (this.detailCloseTimer) {
         window.clearTimeout(this.detailCloseTimer);
         this.detailCloseTimer = null;
@@ -2943,6 +2864,7 @@ function galleryApp() {
         || (this.duplicateGroups || []).flatMap((group) => group.items || []).find((item) => item.folder_name === folderName);
       const cached = this.cachedDetail(folderName);
       if (cached) {
+        if (this.openVideoNote(cached)) return;
         this.detailLoading = false;
         this.detail = {
           ...cached,
@@ -2975,6 +2897,10 @@ function galleryApp() {
           return;
         }
         this.detailLoading = false;
+        if (this.openVideoNote(payload)) {
+          this.cacheDetailPayload(folderName, payload);
+          return;
+        }
         const detailPairs = this.normalizeDetailPairs(payload.pairs || [], false, this.detail.pairs || []);
         const applyDetailPayload = () => {
           this.detail = {
@@ -3002,6 +2928,39 @@ function galleryApp() {
         this.detailLoading = false;
         this.closeDetail(true);
       }
+    },
+
+    openVideoNote(payload) {
+      if (!String(payload.folder?.folder_name || '').startsWith('xhs_') || !payload.videos?.length) return false;
+      this.closeDetail(true);
+      this.pauseCurrentViewerMedia(true);
+      this.videoNote = { open: true, folder: payload.folder, video: payload.videos[0], error: '' };
+      this.syncBodyLock();
+      this.$nextTick(() => this.startVideoNote());
+      return true;
+    },
+
+    startVideoNote() {
+      const video = this.$refs?.xhsNoteVideo;
+      if (!video || !this.videoNote.open) return;
+      video.defaultMuted = true;
+      video.muted = true;
+      const playing = video.play();
+      playing?.catch(() => {
+        if (this.videoNote.open && video === this.$refs?.xhsNoteVideo)
+          this.videoNote.error = '自动播放未能开始，请点击播放器中的播放按钮。';
+      });
+    },
+
+    closeVideoNote() {
+      const video = this.$refs?.xhsNoteVideo;
+      if (video) {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+      }
+      this.videoNote = { open: false, folder: null, video: null, error: '' };
+      this.syncBodyLock();
     },
 
     galleryFolderSequence() {
@@ -3067,11 +3026,8 @@ function galleryApp() {
         return (this.gallery.items || [])
           .filter((item) => item.folder_name === folderName)
           .map((item) => ({
-            use_small_preview: this.galleryQualityFor(item) === "small",
-            initial_quality: this.galleryQualityFor(item),
             pair_index: Number(item.pair_index) || 0,
             image: item.image || {
-              tiny_thumb_url: item.tiny_thumb_url,
               small_thumb_url: item.small_thumb_url,
               thumb_url: item.thumb_url,
               url: item.preview_url,
@@ -3079,31 +3035,21 @@ function galleryApp() {
               height: item.height,
             },
             livephoto: item.livephoto || null,
-            preview_url: this.galleryQualityFor(item) === "small"
-              ? (item.small_thumb_url || item.tiny_thumb_url || item.preview_url || item.thumb_url)
-              : (item.tiny_thumb_url || item.preview_url || item.thumb_url),
+            preview_url: this.galleryPairImageUrl(item),
             preview_kind: item.preview_kind || (item.has_livephoto ? "paired" : "image"),
             complete: !!(item.has_images && item.has_livephoto),
             display_ratio: item.display_ratio || "1 / 1",
             promote_preview: false,
           }));
       }
-      const useSmall = previewFolder ? this.galleryQualityFor(previewFolder) === "small" : false;
-      const initialQuality = useSmall ? "small" : "tiny";
       const tiles = (previewFolder?.preview_tiles || []).map((tile, index) => ({
-        use_small_preview: useSmall,
-        initial_quality: initialQuality,
         pair_index: Number(tile.pair_index) || index + 1,
         image: {
           ...tile,
-          url: useSmall
-            ? (tile.small_thumb_url || tile.tiny_thumb_url || tile.url || tile.thumb_url)
-            : (tile.tiny_thumb_url || tile.cover_url || tile.url || tile.thumb_url),
+          url: this.galleryTileUrl(tile),
         },
         livephoto: null,
-        preview_url: useSmall
-          ? (tile.small_thumb_url || tile.tiny_thumb_url || tile.cover_url || tile.url || tile.thumb_url)
-          : (tile.tiny_thumb_url || tile.cover_url || tile.url || tile.thumb_url),
+        preview_url: this.galleryTileUrl(tile),
         preview_kind: "image",
         complete: false,
         display_ratio: this.assetRatio(tile),
@@ -3126,7 +3072,6 @@ function galleryApp() {
           complete: false,
           display_ratio: displayRatio,
           promote_preview: false,
-          initial_quality: "tiny",
           placeholder: true,
         });
       }
@@ -3139,15 +3084,9 @@ function galleryApp() {
       );
       return (pairs || []).map((pair) => {
         const previous = previousByIndex.get(Number(pair?.pair_index || 0));
-        const previousQuality = previous?.promote_preview
-          ? "thumb"
-          : (previous?.initial_quality || "small");
-        const keepSmall = previousQuality === "small" || previousQuality === "thumb";
         return {
           ...pair,
-          use_small_preview: !!pair.use_small_preview || keepSmall,
-          initial_quality: previousQuality || pair.initial_quality || "small",
-          promote_preview: !!promote || previousQuality === "thumb",
+          promote_preview: !!promote || !!previous?.promote_preview,
           __appearing: true,
         };
       });
@@ -3169,12 +3108,9 @@ function galleryApp() {
       const image = pair?.image || {};
       const livephoto = pair?.livephoto || {};
       if (pair?.promote_preview) {
-        return image.thumb_url || livephoto.thumb_url || image.small_thumb_url || livephoto.small_thumb_url || image.tiny_thumb_url || livephoto.tiny_thumb_url || "";
+        return image.thumb_url || livephoto.thumb_url || image.small_thumb_url || livephoto.small_thumb_url || "";
       }
-      if (!pair?.use_small_preview) {
-        return image.tiny_thumb_url || livephoto.tiny_thumb_url || image.small_thumb_url || livephoto.small_thumb_url || "";
-      }
-      return image.small_thumb_url || livephoto.small_thumb_url || image.tiny_thumb_url || livephoto.tiny_thumb_url || "";
+      return image.small_thumb_url || livephoto.small_thumb_url || image.thumb_url || livephoto.thumb_url || livephoto.cover_url || "";
     },
 
     preloadDetailPairImages(pairs) {
@@ -3492,11 +3428,11 @@ function galleryApp() {
     },
 
     syncBodyLock() {
-      const locked = this.detail.open || this.viewer.open || this.detailClosing || this.viewerClosing || this.taskInspector.open || this.sourcePreview.open;
+      const locked = this.videoNote.open || this.detail.open || this.viewer.open || this.detailClosing || this.viewerClosing || this.taskInspector.open || this.sourcePreview.open;
       const html = document.documentElement;
       const body = document.body;
       body.classList.toggle("detail-layer-open", this.detail.open || this.detailClosing || this.taskInspector.open || this.sourcePreview.open);
-      body.classList.toggle("viewer-layer-open", this.viewer.open || this.viewerClosing);
+      body.classList.toggle("viewer-layer-open", this.videoNote.open || this.viewer.open || this.viewerClosing);
       body.classList.toggle("overlay-locked", locked);
       if (locked) {
         if (this.bodyLockTop !== null) {
@@ -4473,11 +4409,9 @@ function galleryApp() {
       return (
         this.viewer.pair?.image?.thumb_url ||
         this.viewer.pair?.image?.small_thumb_url ||
-        this.viewer.pair?.image?.tiny_thumb_url ||
         this.viewer.pair?.preview_url ||
         this.viewer.pair?.livephoto?.thumb_url ||
         this.viewer.pair?.livephoto?.small_thumb_url ||
-        this.viewer.pair?.livephoto?.tiny_thumb_url ||
         this.viewer.pair?.livephoto?.cover_url ||
         this.viewer.pair?.image?.url ||
         ""
@@ -5373,6 +5307,9 @@ function galleryApp() {
       if (Array.isArray(stats.added_items) && stats.added_items.length) {
         lines.push("", `本次新增：${stats.added_items.length} 条`);
       }
+      if (Array.isArray(stats.resolution_diagnostics) && stats.resolution_diagnostics.length) {
+        lines.push("", "解析诊断：", this.formatInspectorJson(stats.resolution_diagnostics));
+      }
       if (events.length) {
         lines.push("", "事件日志：");
         events.slice(-40).forEach((event, index) => {
@@ -5573,6 +5510,7 @@ function galleryApp() {
         "subscription-icons": "动态图标",
         "site-icons": "站点图标",
         "duplicate-trash": "重复贴文删除",
+        "xhs-unlike": "小红书取消点赞",
         "duplicate-resolve": "仅保留贴文",
         "duplicate-cleanup": "重复图片清理",
         startup: "启动整理",
@@ -6359,6 +6297,10 @@ function galleryApp() {
     },
 
     canRetryTask(item) {
+      const action = item?.details?.retry_action;
+      if (action?.kind === "thumbnail-rebuild" && !["small", "thumb"].includes(action.level)) {
+        return false;
+      }
       return (item?.status === "failed" || (["partial", "cancelled"].includes(item?.status)
         && ["xhs-sync", "xhs-verify"].includes(item?.task_type))) && !!item?.details?.retry_action?.kind;
     },
@@ -6581,7 +6523,7 @@ function galleryApp() {
       }
       this.settingsSaving = true;
       try {
-        const { auth, intranet_config_error, ...settingsPayload } = this.settings || {};
+        const { auth, intranet_config_error, tiny_thumb_edge, tiny_thumb_quality, ...settingsPayload } = this.settings || {};
         const payload = {
           ...settingsPayload,
           scheduler_enabled: Boolean(settingsPayload.scheduler_enabled),
@@ -6601,8 +6543,6 @@ function galleryApp() {
           thumb_quality: Math.max(1, Math.min(100, Number(settingsPayload.thumb_quality) || 68)),
           small_thumb_edge: Math.max(64, Math.min(1024, Number(settingsPayload.small_thumb_edge) || 192)),
           small_thumb_quality: Math.max(1, Math.min(100, Number(settingsPayload.small_thumb_quality) || 48)),
-          tiny_thumb_edge: Math.max(16, Math.min(512, Number(settingsPayload.tiny_thumb_edge) || 32)),
-          tiny_thumb_quality: Math.max(1, Math.min(100, Number(settingsPayload.tiny_thumb_quality) || 28)),
           ad_filter_keywords: this.keywordText
             .split("\n")
             .map((item) => item.trim())
@@ -7355,7 +7295,6 @@ function galleryApp() {
     async refreshSites() {
       await Promise.all([
         this.loadSiteSources(),
-        this.loadXhsSources(),
         this.loadSiteRules(),
         this.loadSiteLogs(),
       ]);
@@ -7377,12 +7316,28 @@ function galleryApp() {
         nextSources.map((source) => [String(source.id), !!previousExpanded[String(source.id)]]),
       );
       this.siteSources = nextSources;
-      this.sidebarCounts = { ...this.sidebarCounts, sites: (payload.items || []).length };
+      this.sidebarCounts = { ...this.sidebarCounts, sites: nextSources.length };
+    },
+
+    async syncAllXhs() {
+      if (this.xhsBusy) return;
+      this.xhsBusy = true;
+      try {
+        const result = await this.api('/api/xhs/sync', { method: 'POST', body: '{}' });
+        await Promise.all([this.refreshTasks(), this.refreshStatus(), this.loadXhsSources()]);
+        this.notify('success', '小红书同步已提交', result.message);
+      } catch (error) { this.notify('error', '无法开始同步', error.message); }
+      finally { this.xhsBusy = false; }
     },
 
     async loadXhsSources() {
       const payload = await this.api("/api/xhs/status");
       this.xhsWorker = payload.worker || { state: 'NOT_CONFIGURED', owner_key: null };
+      if (this.xhsWorker.state === 'LOGIN_IN_PROGRESS' && !this.xhsLoginSession) {
+        this.xhsLoginSession = { viewer_url: '/api/xhs/browser/' };
+      } else if (this.xhsWorker.state !== 'LOGIN_IN_PROGRESS') {
+        this.xhsLoginSession = null;
+      }
       this.xhsAutomaticAvailable = !!payload.automatic_sync_available;
       if (!this.xhsNewSource.owner_key && this.xhsWorker.owner_key) this.xhsNewSource.owner_key = this.xhsWorker.owner_key;
       this.xhsSources = payload.items || [];
@@ -7409,11 +7364,15 @@ function galleryApp() {
     },
 
     xhsAuthText(state) {
-      return { NOT_CONFIGURED: '未配置浏览器服务', LOGIN_REQUIRED: '需要登录', MANUAL_ONLY: '清单导入模式',
+      return { NOT_CONFIGURED: '当前运行环境缺少内置浏览器', LOGIN_REQUIRED: '等待扫码登录', MANUAL_ONLY: '清单导入模式',
         LOGIN_IN_PROGRESS: '等待手动扫码', READY: '已登录', RUNNING: '正在读取', NEEDS_REAUTH: '登录已失效',
         NEEDS_REBIND: '账号不一致', NEEDS_MANUAL_VERIFICATION: '需要人工验证', RATE_LIMITED: '请求受限，已暂停',
         STRUCTURE_CHANGED: '页面结构变化，已暂停', CURSOR_ERROR: '分页异常，已暂停',
         UNAUTHORIZED: '浏览器服务凭证不匹配', BROWSER_UNAVAILABLE: '浏览器暂不可用',
+        BROWSER_SANDBOX_BLOCKED: '容器配置阻止了浏览器沙箱',
+        BROWSER_DISPLAY_UNAVAILABLE: '浏览器显示服务未就绪', BROWSER_NOT_INSTALLED: '镜像缺少浏览器',
+        BROWSER_MISSING_DEPENDENCIES: '浏览器运行库缺失', BROWSER_UNSUPPORTED_CPU: '处理器与浏览器不兼容',
+        BROWSER_OUT_OF_MEMORY: '浏览器启动内存不足',
         CANCELLED: '已取消', WORKER_ERROR: '浏览器服务暂不可用' }[state] || state;
     },
 
@@ -7425,12 +7384,19 @@ function galleryApp() {
         const result = await this.api(`/api/xhs/login/${action}`, { method: 'POST',
           body: JSON.stringify(action === 'revoke' ? { confirm_revoke: true } : {}) });
         if (action === 'start') {
+          window.clearTimeout(this.xhsLoginTimer);
           this.xhsLoginSession = result;
-          window.setTimeout(() => { this.xhsLoginSession = null; }, (result.expires_in || 600) * 1000);
-        } else { this.xhsLoginSession = null; }
+          this.xhsLoginTimer = window.setTimeout(() => { this.xhsLoginSession = null; }, (result.expires_in || 600) * 1000);
+        } else {
+          window.clearTimeout(this.xhsLoginTimer);
+          this.xhsLoginSession = null;
+        }
         await this.loadXhsSources();
         this.notify('success', '小红书账号状态已更新', this.xhsAuthText(result.state));
-      } catch (error) { this.notify('error', '账号操作未完成', error.message); }
+      } catch (error) {
+        this.notify('error', '账号操作未完成', error.message);
+        await this.loadXhsSources().catch(() => {});
+      }
       finally { this.xhsBusy = false; }
     },
 
@@ -7510,7 +7476,7 @@ function galleryApp() {
             initial_fetch_limit: this.xhsLimitValue(draft.initial_fetch_limit) }) });
         this.xhsDrafts[String(source.id)] = this.xhsDraft(saved);
         await this.loadXhsSources();
-        this.notify("success", "小红书设置已保存", "首次条数用于首次读取；锚点数量在下次可信扫描生效。");
+        this.notify("success", "小红书设置已保存");
       } catch (error) {
         this.notify("error", "保存失败", error.message);
       } finally { this.xhsBusy = false; }
@@ -7538,6 +7504,40 @@ function galleryApp() {
     async loadXhsNotes(source) {
       const payload = await this.api(`/api/xhs/sources/${source.id}/notes`);
       this.xhsNotes = { ...this.xhsNotes, [source.id]: payload.items || [] };
+    },
+
+    openXhsNote(source, note) {
+      if (note.folder_name) {
+        this.openFolder(note.folder_name);
+      } else {
+        this.notify('info', '笔记尚未归档', '请先点击“重试媒体”，完成后可在这里查看图片或播放视频。');
+      }
+    },
+
+    async confirmXhsReset(source) {
+      if (this.xhsBusy) return;
+      const step = Number(this.xhsResetSteps[source.id] || 0);
+      if (step < 3) {
+        this.xhsResetSteps = { ...this.xhsResetSteps, [source.id]: step + 1 };
+        return;
+      }
+      this.xhsBusy = true;
+      try {
+        const result = await this.api(`/api/xhs/sources/${source.id}/reset`, { method: 'POST',
+          body: JSON.stringify({ confirmations: 3, config_version: source.config_version }) });
+        this.closeGalleryLayers();
+        this.detailCache = {};
+        this.detailCacheOrder = [];
+        this.clearLocalGalleryCaches();
+        this.xhsNotes = {};
+        await Promise.all([this.loadXhsSources(), this.loadSubscriptions(), this.refreshTasks(), this.refreshStatus(), this.refreshGallery(true)]);
+        this.notify('success', '小红书抓取已重置', result.message);
+      } catch (error) {
+        this.notify('error', '重置未完成', error.message);
+      } finally {
+        this.xhsResetSteps = { ...this.xhsResetSteps, [source.id]: 0 };
+        this.xhsBusy = false;
+      }
     },
 
     xhsStopText(reason) {

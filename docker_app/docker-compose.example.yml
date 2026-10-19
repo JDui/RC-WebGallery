@@ -11,3 +11,10 @@ services:
     volumes:
       - ..:/workspace
     restart: unless-stopped
+    init: true
+    shm_size: 512mb
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE, KILL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./xhs_worker/seccomp_profile.json

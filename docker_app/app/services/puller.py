@@ -216,7 +216,12 @@ class PullManager:
             result = self.xhs_manager.execute(job_id, cooperate=self._cooperate,
                 cancelled=lambda: self._cancel_requested,
                 progress=lambda done, total: self._set_progress('xhs-sync', '正在归档小红书媒体', processed=done, total=total))
-            self._status = {'running': False, 'message': '小红书任务已结束', 'mode': 'idle', 'stats': result}
+            stats = dict(result or {})
+            auto_cleanup_stats = self._auto_storage_cleanup_if_enabled()
+            if auto_cleanup_stats is not None:
+                stats['auto_storage_cleanup'] = auto_cleanup_stats
+                stats['storage_stats'] = self._refresh_storage_stats_cache()
+            self._status = {'running': False, 'message': '小红书任务已结束', 'mode': 'idle', 'stats': stats}
         except Exception:
             self._status = {'running': False, 'message': '小红书任务执行失败，请查看任务记录', 'mode': 'idle'}
             self.xhs_manager.fail_job(job_id, 'SYNC_FAILED')
@@ -335,7 +340,7 @@ class PullManager:
         return {"ok": True, "message": "已加入任务队列" if queued else "已开始重建页面索引", "queued": queued}
 
     def start_thumbnail_rebuild(self, level: str) -> dict[str, Any]:
-        if level not in {"tiny", "small", "thumb"}:
+        if level not in {"small", "thumb"}:
             raise RuntimeError("缩略图等级无效")
         label = f"重建 {level} 缩略图"
         queued = self._queue_or_start("thumbnail-rebuild", label, self._run_thumbnail_rebuild, level)
@@ -932,6 +937,9 @@ class PullManager:
             stats = self._execute_pull()
             cleanup_stats = self.cleanup.run()
             stats["cleanup"] = cleanup_stats
+            auto_cleanup_stats = self._auto_storage_cleanup_if_enabled(sweep_orphans=False)
+            if auto_cleanup_stats is not None:
+                stats["auto_storage_cleanup"] = auto_cleanup_stats
             stats["storage_stats"] = self._refresh_storage_stats_cache()
             gallery_index_check, schedule_index_check = self._evaluate_auto_gallery_index_check("拉取")
             stats["gallery_index_check"] = gallery_index_check
@@ -968,6 +976,9 @@ class PullManager:
             cleanup_stats = self.cleanup.run()
             stats["validation"] = validation
             stats["cleanup"] = cleanup_stats
+            auto_cleanup_stats = self._auto_storage_cleanup_if_enabled(sweep_orphans=False)
+            if auto_cleanup_stats is not None:
+                stats["auto_storage_cleanup"] = auto_cleanup_stats
             stats["storage_stats"] = self._refresh_storage_stats_cache()
             gallery_index_check, schedule_index_check = self._evaluate_auto_gallery_index_check("全量校验拉取")
             stats["gallery_index_check"] = gallery_index_check
@@ -1006,6 +1017,9 @@ class PullManager:
             stats = self._execute_pull(target_uids=[uid], force_reload=False)
             cleanup_stats = self.cleanup.run()
             stats["cleanup"] = cleanup_stats
+            auto_cleanup_stats = self._auto_storage_cleanup_if_enabled(sweep_orphans=False)
+            if auto_cleanup_stats is not None:
+                stats["auto_storage_cleanup"] = auto_cleanup_stats
             stats["storage_stats"] = self._refresh_storage_stats_cache()
             gallery_index_check, schedule_index_check = self._evaluate_auto_gallery_index_check("订阅拉取")
             stats["gallery_index_check"] = gallery_index_check
@@ -1042,6 +1056,9 @@ class PullManager:
         try:
             stats = self.site_syncer.execute_sync(source_id, cooperate=self._cooperate)
             stats["retry_action"] = retry_action
+            auto_cleanup_stats = self._auto_storage_cleanup_if_enabled()
+            if auto_cleanup_stats is not None:
+                stats["auto_storage_cleanup"] = auto_cleanup_stats
             stats["storage_stats"] = self._refresh_storage_stats_cache()
             stats["events"] = self._runtime_events()
             self.db.finish_task_run(task_id, "success", "站点同步完成", stats)
@@ -1114,6 +1131,26 @@ class PullManager:
         finally:
             self._release()
             self._run_next_queued_task()
+
+    def _auto_storage_cleanup_if_enabled(self, *, sweep_orphans: bool = True) -> dict[str, Any] | None:
+        """按「定期清理垃圾文件」开关决定拉取结束后是否追加一次垃圾清理。
+
+        默认关闭；开启后每次拉取（动态、站点、小红书）完成时清理垃圾桶残留文件。
+        `sweep_orphans` 为 False 时跳过孤立记录扫描，用于拉取流程已经执行过
+        `cleanup.run()` 的场景，避免同一次任务里重复全量扫描素材表。
+        清理失败不影响拉取结果，只把错误写进任务统计。
+        """
+        if not bool(self.db.get_settings().get("auto_storage_cleanup")):
+            return None
+        try:
+            stats: dict[str, Any] = {
+                "trash": self.storage.cleanup_trash_asset_files(self.db.list_trash_items()),
+            }
+            if sweep_orphans:
+                stats["orphans"] = self.cleanup.run()
+            return stats
+        except Exception as exc:
+            return {"error": str(exc)}
 
     def _active_subscriptions(self, target_uids: list[str] | None = None) -> list[dict[str, Any]]:
         subscriptions = self.db.list_subscriptions(include_paused=True)

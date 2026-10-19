@@ -1,28 +1,46 @@
-FROM --platform=$BUILDPLATFORM rust:1.83-slim AS rust-build
+ARG DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn
 
-WORKDIR /opt/zzs
+FROM --platform=$BUILDPLATFORM python:3.12-slim-bookworm AS browser-download
+ARG TARGETARCH
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --timeout 120 --retries 5 --index-url https://pypi.tuna.tsinghua.edu.cn/simple playwright==1.58.0
+RUN case "$TARGETARCH" in amd64) browser_platform=debian12-x64 ;; arm64) browser_platform=debian12-arm64 ;; *) exit 1 ;; esac \
+    && PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$browser_platform" PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1 \
+       playwright install chromium --no-shell
+# Keep only the Chinese/English UI resources. XHS itself is web content and is
+# rendered with the bundled CJK font, so the other Chromium locale packs and the
+# Widevine/hyphen/ffmpeg payloads are not needed at runtime.
+RUN set -eux; \
+    for browser in /opt/ms-playwright/chromium-*; do \
+        [ -d "$browser" ] || continue; \
+        for chrome_dir in "$browser"/chrome-linux*; do \
+            [ -d "$chrome_dir" ] || continue; \
+            find "$chrome_dir/locales" -maxdepth 1 -type f \
+                ! -name 'en-US.pak*' ! -name 'zh-CN.pak*' -delete; \
+            rm -rf "$chrome_dir/WidevineCdm" "$chrome_dir/hyphen-data"; \
+        done; \
+    done; \
+    rm -rf /opt/ms-playwright/ffmpeg-*
 
-ARG TARGETPLATFORM
-ENV RUSTUP_DIST_SERVER=https://mirrors.tuna.tsinghua.edu.cn/rustup \
-    RUSTUP_UPDATE_ROOT=https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup
+# noVNC is only consumed as static core/vendor assets by browser.py. Pulling the
+# Debian package in the final stage would drag in nodejs, perl, numpy and the
+# OpenStack client stack (~200MB) for ~600KB of assets, so extract the .deb here
+# and copy just the files we serve.
+FROM --platform=$BUILDPLATFORM python:3.12-slim-bookworm AS novnc-assets
+ARG DEBIAN_MIRROR
+RUN set -eux; \
+    sed -i "s|http://deb.debian.org|$DEBIAN_MIRROR|g" /etc/apt/sources.list.d/debian.sources; \
+    apt-get update; \
+    cd /tmp; \
+    apt-get download novnc; \
+    mkdir -p /novnc; \
+    dpkg-deb -x novnc_*.deb /novnc; \
+    rm -f novnc_*.deb; \
+    rm -rf /var/lib/apt/lists/*
 
-COPY docker_app/rust ./docker_app/rust
-RUN mkdir -p /usr/local/cargo \
-    && printf '[source.crates-io]\nreplace-with = "tuna"\n[source.tuna]\nregistry = "sparse+https://mirrors.tuna.tsinghua.edu.cn/crates.io-index/"\n' > /usr/local/cargo/config.toml \
-    && if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
-        rustup target add x86_64-unknown-linux-musl \
-        && cargo build --release --target x86_64-unknown-linux-musl --manifest-path docker_app/rust/Cargo.toml \
-        && mkdir -p docker_app/rust/target/release-dist \
-        && cp docker_app/rust/target/x86_64-unknown-linux-musl/release/media-worker docker_app/rust/target/release-dist/media-worker \
-        && cp docker_app/rust/target/x86_64-unknown-linux-musl/release/indexer docker_app/rust/target/release-dist/indexer; \
-    else \
-        cargo build --release --manifest-path docker_app/rust/Cargo.toml \
-        && mkdir -p docker_app/rust/target/release-dist \
-        && cp docker_app/rust/target/release/media-worker docker_app/rust/target/release-dist/media-worker \
-        && cp docker_app/rust/target/release/indexer docker_app/rust/target/release-dist/indexer; \
-    fi
-
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
+ARG DEBIAN_MIRROR
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -33,12 +51,38 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     APP_STORAGE_ROOT=/storage \
     APP_MEDIA_WORKER_BIN=/opt/zzs/bin/media-worker \
     APP_INDEXER_BIN=/opt/zzs/bin/indexer \
-    APP_THUMBNAIL_WORKERS=1
+    APP_THUMBNAIL_WORKERS=1 \
+    XHS_EMBEDDED=1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+
+# Xvfb pulls in Mesa/LLVM through libgl1, but Chromium renders with its own
+# ANGLE/SwiftShader stack and x11vnc does not need DRI drivers. Removing these
+# in the same layer keeps the files out of the final image (~196MB).
+RUN sed -i "s|http://deb.debian.org|$DEBIAN_MIRROR|g" /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y --no-install-recommends xvfb x11vnc \
+       libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libdbus-1-3 \
+       libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
+       libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 \
+       fonts-liberation fonts-wqy-microhei \
+    && find /usr/lib -maxdepth 2 -type d -name dri -exec rm -rf {} + \
+    && find /usr/lib -maxdepth 2 \( -type f -o -type l \) \
+             \( -name 'libLLVM-*.so*' -o -name 'libz3.so*' \
+                -o -name 'libicu*.so*' -o -name 'libxml2.so*' \
+                -o -name 'libtcl*.so*' -o -name 'libtk*.so*' \) -delete \
+    && rm -rf /usr/share/tcltk \
+    && rm -f /usr/bin/tclsh8.6 /usr/bin/wish8.6 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/zzs/docker_app
 
 COPY docker_app/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --timeout 120 --retries 5 -r /tmp/requirements.txt
+COPY --from=browser-download /opt/ms-playwright /opt/ms-playwright
+# browser.py serves only core/ and vendor/ from /usr/share/novnc.
+COPY --from=novnc-assets /novnc/usr/share/novnc/core /usr/share/novnc/core
+COPY --from=novnc-assets /novnc/usr/share/novnc/vendor /usr/share/novnc/vendor
+COPY --from=novnc-assets /novnc/usr/share/doc/novnc /usr/share/doc/novnc
+RUN useradd --create-home --uid 1000 pwuser
 
 RUN mkdir -p /storage/config /storage/data /workspace /workspace/LivePhoto
 

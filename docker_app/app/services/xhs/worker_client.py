@@ -11,17 +11,22 @@ from urllib.parse import urlsplit
 from app.services.xhs.models import XhsNote, identifier
 from app.services.xhs.sync import ScanPage
 from app.services.xhs.transport import direct_session
+from app.services.xhs.browser_errors import BROWSER_ERRORS
 
 
 ERRORS = {'UNAUTHORIZED', 'WORKER_ERROR', 'WORKER_BUSY', 'PROFILE_BUSY', 'BROWSER_UNAVAILABLE',
           'LOGIN_REQUIRED', 'LOGIN_START_FAILED', 'NEEDS_REAUTH', 'NEEDS_REBIND', 'LIKES_NOT_VISIBLE',
           'NEEDS_MANUAL_VERIFICATION', 'RATE_LIMITED', 'STRUCTURE_CHANGED', 'CURSOR_ERROR',
           'SESSION_EXPIRED', 'MEDIA_DOWNLOAD_FAILED', 'MEDIA_NEEDS_RESOLUTION', 'NOTE_NOT_OBSERVED', 'MEDIA_QUOTA_EXCEEDED'}
+ERRORS.update({'UNLIKE_UNCONFIRMED', 'NOTE_LINK_UNAVAILABLE', 'NOTE_DETAIL_LOGIN_REQUIRED',
+               'NOTE_DETAIL_UNAVAILABLE', 'VIDEO_STREAM_UNAVAILABLE'})
+ERRORS.update(BROWSER_ERRORS)
 
 
 class WorkerError(RuntimeError):
-    def __init__(self, category):
+    def __init__(self, category, diagnostic=None):
         self.category = category if category in ERRORS else 'WORKER_ERROR'
+        self.diagnostic = diagnostic if isinstance(diagnostic, dict) else {}
         super().__init__(self.category)
 
 
@@ -64,10 +69,12 @@ class XhsWorkerClient:
                         raise WorkerError('UNAUTHORIZED')
                     if response.status_code != 200:
                         try:
-                            error = response.json().get('error_category')
+                            failure = response.json()
+                            error = failure.get('error_category')
                         except Exception:
                             error = 'WORKER_ERROR'
-                        raise WorkerError(error)
+                            failure = {}
+                        raise WorkerError(error, failure.get('diagnostic'))
                     yield response
         except WorkerError:
             raise

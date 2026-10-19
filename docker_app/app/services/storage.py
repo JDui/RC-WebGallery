@@ -70,7 +70,6 @@ class StorageService:
         targets = {
             "thumb": lambda thumbs: [item for item in thumbs.glob("*.webp") if item.is_file()],
             "small": lambda thumbs: [item for item in (thumbs / "small").glob("*.webp") if item.is_file()],
-            "tiny": lambda thumbs: [item for item in (thumbs / "tiny").glob("*.webp") if item.is_file()],
         }
         if level not in targets:
             raise ValueError("unsupported thumbnail level")

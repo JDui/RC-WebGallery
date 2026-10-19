@@ -17,7 +17,7 @@ from app.services.task_priority import TaskPriorityCoordinator
 from app.services.utils import dumps_json, format_pub_time, loads_json, now_iso
 
 
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".avif"}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".webm"}
 PAIR_PREFIX_RE = re.compile(r"^(?P<index>\d{3})__")
 THUMBNAIL_WORKERS_ENV = "APP_THUMBNAIL_WORKERS"
@@ -73,7 +73,7 @@ class MediaIndexer:
                 "title": title,
                 "text_prefix": text_prefix,
                 "pub_ts": pub_ts,
-                "pub_time": format_pub_time(pub_ts),
+                "pub_time": "" if (metadata or {}).get('source') == 'xhs' and pub_ts <= 0 else format_pub_time(pub_ts),
                 "top_dynamic_id": top_dynamic_id,
                 "source_dynamic_id": source_dynamic_id,
                 "subscription_uid": subscription_uid,
@@ -89,6 +89,8 @@ class MediaIndexer:
         self.db.replace_folder_assets(folder_name, "livephoto", [] if standalone_video else livephoto_assets)
         if standalone_video:
             self.db.replace_folder_assets(folder_name, "video", livephoto_assets)
+        else:
+            self.db.replace_folder_assets(folder_name, "video", [])
         self.refresh_gallery_index(folder_name)
 
     def reindex_library(
@@ -130,6 +132,7 @@ class MediaIndexer:
                 review_status=folder.get("review_status", "approved"),
                 review_reason=folder.get("review_reason"),
                 generate_derivatives=False,
+                metadata=loads_json(folder.get('metadata_json'), {}),
             )
             if progress:
                 progress(
@@ -245,7 +248,7 @@ class MediaIndexer:
                 if progress:
                     progress({"current": asset.get("filename") or asset.get("folder_name"), "step": 1})
         else:
-            results_by_key: dict[Any, tuple[str | None, str | None, str | None]] = {}
+            results_by_key: dict[Any, tuple[str | None, str | None]] = {}
             assets_by_key: dict[Any, dict] = {}
             executor = ThreadPoolExecutor(max_workers=workers)
             try:
@@ -270,45 +273,44 @@ class MediaIndexer:
             else:
                 executor.shutdown(wait=True)
             results = [
-                (asset, results_by_key.get(asset.get("id") or index, (None, None, None)))
+                (asset, results_by_key.get(asset.get("id") or index, (None, None)))
                 for index, asset in enumerate(assets)
             ]
 
-        for asset, (thumb_rel_path, small_thumb_rel_path, tiny_thumb_rel_path) in results:
-            if (thumb_rel_path or small_thumb_rel_path or tiny_thumb_rel_path) and asset.get("id"):
-                self.db.update_asset_thumbnails(int(asset["id"]), thumb_rel_path, small_thumb_rel_path, tiny_thumb_rel_path)
+        for asset, (thumb_rel_path, small_thumb_rel_path) in results:
+            if (thumb_rel_path or small_thumb_rel_path) and asset.get("id"):
+                self.db.update_asset_thumbnails(int(asset["id"]), thumb_rel_path, small_thumb_rel_path)
                 asset = {
                     **asset,
                     "thumb_rel_path": thumb_rel_path,
                     "small_thumb_rel_path": small_thumb_rel_path,
-                    "tiny_thumb_rel_path": tiny_thumb_rel_path,
+                    "tiny_thumb_rel_path": None,
                 }
             output.append(asset)
         return output
 
-    def _ensure_asset_thumbnails(self, asset: dict) -> tuple[str | None, str | None, str | None]:
+    def _ensure_asset_thumbnails(self, asset: dict) -> tuple[str | None, str | None]:
         self._background_checkpoint()
         media_type = asset.get("media_type")
+        media_path = self.storage.resolve_storage_path(asset.get("rel_path"))
         if media_type == "image":
-            source = self.storage.resolve_storage_path(asset.get("rel_path"))
-        elif media_type == "livephoto":
+            source = media_path
+        elif media_type in {"livephoto", "video"}:
             source = self.storage.resolve_storage_path(asset.get("cover_rel_path") or asset.get("thumb_rel_path"))
         else:
-            return None, None, None
+            return None, None
         if not source or not source.exists():
-            return None, None, None
-        thumb_root = source.parent.parent / ".thumbs" if source.parent.name == ".covers" else source.parent / ".thumbs"
-        thumb_target = thumb_root / f"{source.stem}.webp"
-        small_thumb_target = thumb_root / "small" / f"{source.stem}.webp"
-        tiny_thumb_target = thumb_root / "tiny" / f"{source.stem}.webp"
-        if media_type != "image" or not self._derive_image_with_sidecar(source, thumb_target, small_thumb_target, tiny_thumb_target):
+            return None, None
+        target_source = media_path or source
+        thumb_root = target_source.parent / ".thumbs"
+        thumb_target = thumb_root / f"{target_source.stem}.webp"
+        small_thumb_target = thumb_root / "small" / f"{target_source.stem}.webp"
+        if media_type != "image" or not self._derive_image_with_sidecar(source, thumb_target, small_thumb_target):
             self.thumbnailer.ensure_image_thumbnail(source, thumb_target)
             self.thumbnailer.ensure_small_image_thumbnail(source, small_thumb_target)
-            self.thumbnailer.ensure_tiny_image_thumbnail(source, tiny_thumb_target)
         return (
             self.storage.relative_to_storage(thumb_target) if thumb_target.exists() else None,
             self.storage.relative_to_storage(small_thumb_target) if small_thumb_target.exists() else None,
-            self.storage.relative_to_storage(tiny_thumb_target) if tiny_thumb_target.exists() else None,
         )
 
     def _replace_gallery_index(self, folder: dict, assets: list[dict]) -> None:
@@ -399,18 +401,16 @@ class MediaIndexer:
             next_pair_index = max(next_pair_index, pair_index + 1)
             thumb_path = folder_path / ".thumbs" / f"{file_path.stem}.webp"
             small_thumb_path = folder_path / ".thumbs" / "small" / f"{file_path.stem}.webp"
-            tiny_thumb_path = folder_path / ".thumbs" / "tiny" / f"{file_path.stem}.webp"
             width = height = None
             sidecar_result = None
             if generate_derivatives:
-                sidecar_result = self.sidecar.derive_image(file_path, thumb_path, small_thumb_path, tiny_thumb_path, self.thumbnailer.sidecar_options())
+                sidecar_result = self.sidecar.derive_image(file_path, thumb_path, small_thumb_path, self.thumbnailer.sidecar_options())
                 if sidecar_result:
                     width = sidecar_result.get("width")
                     height = sidecar_result.get("height")
                 else:
                     self.thumbnailer.ensure_image_thumbnail(file_path, thumb_path)
                     self.thumbnailer.ensure_small_image_thumbnail(file_path, small_thumb_path)
-                    self.thumbnailer.ensure_tiny_image_thumbnail(file_path, tiny_thumb_path)
             if width is None or height is None:
                 probe = self.sidecar.probe_image(file_path)
                 if probe:
@@ -429,7 +429,6 @@ class MediaIndexer:
                     "rel_path": self.storage.relative_to_storage(file_path),
                     "thumb_rel_path": self.storage.relative_to_storage(thumb_path) if thumb_path.exists() else None,
                     "small_thumb_rel_path": self.storage.relative_to_storage(small_thumb_path) if small_thumb_path.exists() else None,
-                    "tiny_thumb_rel_path": self.storage.relative_to_storage(tiny_thumb_path) if tiny_thumb_path.exists() else None,
                     "width": width,
                     "height": height,
                     "duplicate_fingerprint": image_fingerprint(small_thumb_path if small_thumb_path.exists() else file_path),
@@ -441,9 +440,9 @@ class MediaIndexer:
             )
         return assets
 
-    def _derive_image_with_sidecar(self, source: Path, thumb: Path, small: Path, tiny: Path) -> bool:
-        result = self.sidecar.derive_image(source, thumb, small, tiny, self.thumbnailer.sidecar_options())
-        return bool(result and thumb.exists() and small.exists() and tiny.exists())
+    def _derive_image_with_sidecar(self, source: Path, thumb: Path, small: Path) -> bool:
+        result = self.sidecar.derive_image(source, thumb, small, self.thumbnailer.sidecar_options())
+        return bool(result and thumb.exists() and small.exists())
 
     def _index_livephotos(
         self,
@@ -466,16 +465,24 @@ class MediaIndexer:
         for fallback_index, file_path in enumerate(video_files, start=1):
             self._background_checkpoint()
             cover_path = folder_path / ".covers" / f"{file_path.stem}.jpg"
+            provided_cover = None
+            if not generate_reverse:
+                provided_cover = next((asset for asset in image_assets or []
+                    if asset['pair_index'] == self._extract_pair_index(file_path.name)), None)
+                candidate = self.storage.resolve_storage_path((provided_cover or {}).get('rel_path'))
+                if candidate and candidate.is_file():
+                    cover_path = candidate
+                else:
+                    provided_cover = None
             cover_webp = folder_path / ".thumbs" / f"{file_path.stem}.webp"
             small_cover_webp = folder_path / ".thumbs" / "small" / f"{file_path.stem}.webp"
-            tiny_cover_webp = folder_path / ".thumbs" / "tiny" / f"{file_path.stem}.webp"
             reverse_path = folder_path / ".reverse" / file_path.name
             if generate_derivatives:
-                self.thumbnailer.ensure_video_cover(file_path, cover_path)
+                if not provided_cover:
+                    self.thumbnailer.ensure_video_cover(file_path, cover_path)
                 if cover_path.exists():
                     self.thumbnailer.ensure_image_thumbnail(cover_path, cover_webp)
                     self.thumbnailer.ensure_small_image_thumbnail(cover_path, small_cover_webp)
-                    self.thumbnailer.ensure_tiny_image_thumbnail(cover_path, tiny_cover_webp)
                 if generate_reverse:
                     self.thumbnailer.ensure_reverse_video(file_path, reverse_path)
             pair_index = self._extract_pair_index(file_path.name) or self._match_live_pair_index(
@@ -495,7 +502,6 @@ class MediaIndexer:
                     "rel_path": self.storage.relative_to_storage(file_path),
                     "thumb_rel_path": self.storage.relative_to_storage(cover_webp) if cover_webp.exists() else None,
                     "small_thumb_rel_path": self.storage.relative_to_storage(small_cover_webp) if small_cover_webp.exists() else None,
-                    "tiny_thumb_rel_path": self.storage.relative_to_storage(tiny_cover_webp) if tiny_cover_webp.exists() else None,
                     "cover_rel_path": self.storage.relative_to_storage(cover_path) if cover_path.exists() else None,
                     "reverse_rel_path": self.storage.relative_to_storage(reverse_path) if reverse_path.exists() else None,
                     "metadata": {
@@ -579,7 +585,6 @@ class MediaIndexer:
             "url": self.storage.storage_url(asset.get("rel_path")),
             "thumb_url": self.storage.storage_url(asset.get("thumb_rel_path")),
             "small_thumb_url": self.storage.storage_url(asset.get("small_thumb_rel_path")),
-            "tiny_thumb_url": self.storage.storage_url(asset.get("tiny_thumb_rel_path")),
             "cover_url": self.storage.storage_url(asset.get("cover_rel_path")),
             "reverse_url": self.storage.storage_url(asset.get("reverse_rel_path")),
             "width": asset.get("width"),

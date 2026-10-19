@@ -8,6 +8,7 @@ docker_app/.pytest_cache/
 docker_app/**/__pycache__/
 docker_app/dist/
 docker_app/review/
+docker_app/tests/
 downloaded/
 LivePhoto/downloaded/
 storage/

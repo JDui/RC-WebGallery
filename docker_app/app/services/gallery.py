@@ -300,6 +300,7 @@ class GalleryService:
     def _folder_card_from_index(self, item: dict) -> dict:
         image_count = int(item.get("image_count") or 0)
         livephoto_count = int(item.get("livephoto_count") or 0)
+        video_count = max(0, int(item.get('asset_count') or 0) - image_count - livephoto_count)
         return {
             "folder_name": item["folder_name"],
             "title": item.get("title") or item["folder_name"],
@@ -320,6 +321,7 @@ class GalleryService:
             "review_reason": item.get("review_reason"),
             "preview_tiles": loads_json(item.get("preview_assets_json"), []),
             "image_count": image_count,
+            "video_count": video_count,
             "livephoto_count": livephoto_count,
             "asset_count": image_count,
         }
@@ -353,6 +355,7 @@ class GalleryService:
             "review_reason": folder.get("review_reason"),
             "preview_tiles": [self._asset_json(asset) for asset in preview_assets[:4]],
             "image_count": image_count,
+            "video_count": sum(1 for asset in assets if asset['media_type'] == 'video'),
             "livephoto_count": livephoto_count,
             "asset_count": image_count,
         }
@@ -382,12 +385,6 @@ class GalleryService:
                 (image or {}).get("small_thumb_url")
                 or (livephoto or {}).get("small_thumb_url")
             ),
-            "tiny_thumb_url": (
-                (image or {}).get("tiny_thumb_url")
-                or (livephoto or {}).get("tiny_thumb_url")
-                or (image or {}).get("small_thumb_url")
-                or (livephoto or {}).get("small_thumb_url")
-            ),
             "image": image,
             "livephoto": livephoto,
             "display_ratio": item.get("display_ratio"),
@@ -407,7 +404,6 @@ class GalleryService:
             "url": self.storage.storage_url(asset["rel_path"]),
             "thumb_url": self.storage.storage_url(asset.get("thumb_rel_path")),
             "small_thumb_url": self.storage.storage_url(asset.get("small_thumb_rel_path")),
-            "tiny_thumb_url": self.storage.storage_url(asset.get("tiny_thumb_rel_path")),
             "cover_url": self.storage.storage_url(asset.get("cover_rel_path")),
             "reverse_url": self.storage.storage_url(asset.get("reverse_rel_path")),
             "width": asset.get("width"),
@@ -574,7 +570,6 @@ class GalleryService:
                         "preview_kind": pair.get("preview_kind"),
                         "thumb_url": preview.get("thumb_url") or preview.get("cover_url") or preview.get("url"),
                         "small_thumb_url": preview.get("small_thumb_url"),
-                        "tiny_thumb_url": preview.get("tiny_thumb_url") or preview.get("small_thumb_url"),
                         "image": pair.get("image"),
                         "livephoto": pair.get("livephoto"),
                         "display_ratio": pair.get("display_ratio"),

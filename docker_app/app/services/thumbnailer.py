@@ -34,10 +34,8 @@ class ThumbnailService:
     def apply_settings(self, settings: dict) -> None:
         self.thumb_size = self._edge_size(settings.get("thumb_edge"), 576)
         self.small_thumb_size = self._edge_size(settings.get("small_thumb_edge"), 192)
-        self.tiny_thumb_size = self._edge_size(settings.get("tiny_thumb_edge"), 32)
         self.thumb_quality = self._quality(settings.get("thumb_quality"), 68)
         self.small_thumb_quality = self._quality(settings.get("small_thumb_quality"), 48)
-        self.tiny_thumb_quality = self._quality(settings.get("tiny_thumb_quality"), 28)
 
     def sidecar_options(self) -> dict[str, int]:
         return {
@@ -45,8 +43,6 @@ class ThumbnailService:
             "thumb_quality": self.thumb_quality,
             "small_edge": min(self.small_thumb_size),
             "small_quality": self.small_thumb_quality,
-            "tiny_edge": min(self.tiny_thumb_size),
-            "tiny_quality": self.tiny_thumb_quality,
         }
 
     def _edge_size(self, value: object, fallback: int) -> tuple[int, int]:
@@ -96,6 +92,7 @@ class ThumbnailService:
         return self.ensure_image_thumbnail(source, target, size=self.small_thumb_size, quality=self.small_thumb_quality)
 
     def ensure_tiny_image_thumbnail(self, source: Path, target: Path) -> bool:
+        """仅用于订阅与站点头像背景，图库媒体不生成此级别。"""
         try:
             return self.ensure_image_thumbnail(source, target, size=self.tiny_thumb_size, quality=self.tiny_thumb_quality)
         except Exception:

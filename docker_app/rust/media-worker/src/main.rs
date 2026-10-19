@@ -15,7 +15,6 @@ struct ImageResult {
     height: u32,
     thumb: Option<String>,
     small: Option<String>,
-    tiny: Option<String>,
 }
 
 fn main() {
@@ -45,19 +44,16 @@ fn run() -> Result<()> {
                 height,
                 thumb: None,
                 small: None,
-                tiny: None,
             })
         }
         Some("derive-image") => {
             let source = arg_path(&args, "--source")?;
             let thumb = arg_path(&args, "--thumb")?;
             let small = arg_path(&args, "--small")?;
-            let tiny = arg_path(&args, "--tiny")?;
             let image = image::open(&source).with_context(|| format!("open image {}", source.display()))?;
             let (width, height) = image.dimensions();
             write_resized_webp(&image, &thumb, 576)?;
             write_resized_webp(&image, &small, 192)?;
-            write_resized_webp(&image, &tiny, 32)?;
             print_json(&ImageResult {
                 ok: true,
                 source: source.display().to_string(),
@@ -65,10 +61,9 @@ fn run() -> Result<()> {
                 height,
                 thumb: Some(thumb.display().to_string()),
                 small: Some(small.display().to_string()),
-                tiny: Some(tiny.display().to_string()),
             })
         }
-        _ => bail!("usage: media-worker probe-image --source PATH | derive-image --source PATH --thumb PATH --small PATH --tiny PATH"),
+        _ => bail!("usage: media-worker probe-image --source PATH | derive-image --source PATH --thumb PATH --small PATH"),
     }
 }
 

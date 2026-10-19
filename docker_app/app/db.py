@@ -45,6 +45,7 @@ DEFAULT_SETTINGS = {
     "gallery_index_rebuilt_at": None,
     "gallery_index_rebuilding": False,
     "auto_gallery_index_check": True,
+    "auto_storage_cleanup": False,
     "site_default_start_date": "2026-04-01",
     "site_request_sleep": 0.4,
     "site_request_timeout": 300,
@@ -58,8 +59,6 @@ DEFAULT_SETTINGS = {
     "thumb_quality": 68,
     "small_thumb_edge": 192,
     "small_thumb_quality": 48,
-    "tiny_thumb_edge": 32,
-    "tiny_thumb_quality": 28,
     "storage_stats_cache": {
         "image_bytes": 0,
         "thumbnail_bytes": 0,
@@ -1299,11 +1298,16 @@ class Database:
 
     def site_stats(self) -> dict[str, Any]:
         with self.connect() as conn:
-            source_count = conn.execute("select count(*) from site_sources").fetchone()[0]
-            post_count = conn.execute("select count(*) from site_posts where is_blocked = 0").fetchone()[0]
-            favorite_count = conn.execute("select count(*) from site_posts where is_favorite = 1 and is_blocked = 0").fetchone()[0]
-            blocked_count = conn.execute("select count(*) from site_posts where is_blocked = 1").fetchone()[0]
-            asset_count = conn.execute("select count(*) from site_assets where status = 'ready'").fetchone()[0]
+            source_count = conn.execute("select count(*) from site_sources where source_type != 'xhs_likes'").fetchone()[0]
+            post_count = conn.execute("""select count(*) from site_posts p join site_sources s on s.id = p.source_id
+                where p.is_blocked = 0 and s.source_type != 'xhs_likes'""").fetchone()[0]
+            favorite_count = conn.execute("""select count(*) from site_posts p join site_sources s on s.id = p.source_id
+                where p.is_favorite = 1 and p.is_blocked = 0 and s.source_type != 'xhs_likes'""").fetchone()[0]
+            blocked_count = conn.execute("""select count(*) from site_posts p join site_sources s on s.id = p.source_id
+                where p.is_blocked = 1 and s.source_type != 'xhs_likes'""").fetchone()[0]
+            asset_count = conn.execute("""select count(*) from site_assets a
+                join site_posts p on p.id = a.post_id join site_sources s on s.id = p.source_id
+                where a.status = 'ready' and s.source_type != 'xhs_likes'""").fetchone()[0]
         return {
             "source_count": source_count,
             "post_count": post_count,
@@ -2065,7 +2069,7 @@ class Database:
                 ).fetchone()[0]
                 output["subscriptions"] = {"count": int(count or 0), "label": labels["subscriptions"]}
             if "sites" in keys:
-                count = conn.execute("select count(*) from site_sources").fetchone()[0]
+                count = conn.execute("select count(*) from site_sources where source_type != 'xhs_likes'").fetchone()[0]
                 output["sites"] = {"count": int(count or 0), "label": labels["sites"]}
         return {key: value for key, value in output.items() if key in keys}
 

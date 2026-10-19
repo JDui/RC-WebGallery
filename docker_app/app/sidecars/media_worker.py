@@ -39,13 +39,11 @@ def derive_image(args: argparse.Namespace) -> None:
     source = Path(args.source)
     thumb = Path(args.thumb)
     small = Path(args.small)
-    tiny = Path(args.tiny)
     with Image.open(source) as image:
         normalized = ImageOps.exif_transpose(image).convert("RGB")
         width, height = normalized.size
         save_webp(normalized, thumb, args.thumb_edge, args.thumb_quality)
         save_webp(normalized, small, args.small_edge, args.small_quality)
-        save_webp(normalized, tiny, args.tiny_edge, args.tiny_quality)
     print_json(
         {
             "ok": True,
@@ -54,7 +52,6 @@ def derive_image(args: argparse.Namespace) -> None:
             "height": height,
             "thumb": str(thumb),
             "small": str(small),
-            "tiny": str(tiny),
         }
     )
 
@@ -69,13 +66,10 @@ def build_parser() -> argparse.ArgumentParser:
     derive.add_argument("--source", required=True)
     derive.add_argument("--thumb", required=True)
     derive.add_argument("--small", required=True)
-    derive.add_argument("--tiny", required=True)
     derive.add_argument("--thumb-edge", type=int, default=576)
     derive.add_argument("--thumb-quality", type=int, default=68)
     derive.add_argument("--small-edge", type=int, default=192)
     derive.add_argument("--small-quality", type=int, default=48)
-    derive.add_argument("--tiny-edge", type=int, default=32)
-    derive.add_argument("--tiny-quality", type=int, default=28)
     derive.set_defaults(func=derive_image)
     return parser
 

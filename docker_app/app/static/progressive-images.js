@@ -54,20 +54,6 @@
       let latest = "", committed = "", failed = "", epoch = 0, disposed = false, suspended = false, committing = false;
       let loading = false, pending = null, old = null, animation = null, finishTimer = null;
       image.setAttribute("data-progressive-image", "1");
-      function clearBackdrop() {
-        // 仅回收已被新图覆盖的 tiny 背景，容器与业务属性保持原样。
-        const host = image.closest(".photo-collage-tile, .asset-visual, .detail-thumb");
-        const targets = host ? [host] : [];
-        const collage = host?.closest(".photo-visual:not(.asset-visual)");
-        if (collage && [...collage.querySelectorAll('img[data-progressive-image]')].every((img) => img.dataset.progressiveReady === "1")) targets.push(collage);
-        for (const target of targets) {
-          const background = target.style.backgroundImage;
-          if (!background || background === "none") continue;
-          retire(target, () => {
-            if (target.style.backgroundImage === background) target.style.removeProperty("background-image");
-          });
-        }
-      }
       function finishFade() {
         if (finishTimer !== null) env.clearTimeout(finishTimer);
         finishTimer = null;
@@ -81,7 +67,6 @@
         image.style.removeProperty("opacity");
         image.style.removeProperty("will-change");
         image.removeAttribute("data-image-transition");
-        if (committed) clearBackdrop();
         if (!disposed && !suspended && !loading && latest !== committed) loadLatest();
       }
       async function loadLatest() {
@@ -141,7 +126,7 @@
         image.style.willChange = "opacity";
         animation = image.animate([{opacity: 0}, {opacity: 1}], {duration, easing: "ease-out"});
         animation.onfinish = finishFade;
-        // 页面隐藏或动画事件丢失时也必须完成回收。
+        // 页面隐藏或动画事件丢失时也必须完成淡入收尾。
         finishTimer = env.setTimeout(finishFade, duration + 80);
       }
       const controller = {

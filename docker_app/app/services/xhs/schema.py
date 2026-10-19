@@ -81,3 +81,15 @@ def migrate(conn: sqlite3.Connection) -> None:
         select l.site_post_id,'pending',coalesce(a.last_checkpoint_scan_id,'migration'),l.last_seen_at
         from xhs_like_state l join xhs_source_accounts a on a.source_id=l.source_id''')
     conn.execute("insert or ignore into xhs_schema_migrations values (3, datetime('now'))")
+    if 'media_revision' not in {row[1] for row in conn.execute('pragma table_info(xhs_note_downloads)')}:
+        conn.execute('alter table xhs_note_downloads add column media_revision integer not null default 0')
+    if not conn.execute('select 1 from xhs_schema_migrations where version=4').fetchone():
+        conn.execute("""update xhs_note_downloads set status='pending',error_category=null
+            where status='ready' and post_id in (select l.site_post_id from xhs_like_state l
+            join xhs_source_accounts a on a.source_id=l.source_id where a.auth_mode='browser')""")
+        conn.execute("insert into xhs_schema_migrations values (4, datetime('now'))")
+    if not conn.execute('select 1 from xhs_schema_migrations where version=5').fetchone():
+        conn.execute("""update xhs_note_downloads set status='pending',error_category=null
+            where status='blocked' and error_category='FILTERED' and post_id in
+            (select id from site_posts where is_blocked=0)""")
+        conn.execute("insert into xhs_schema_migrations values (5, datetime('now'))")

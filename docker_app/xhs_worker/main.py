@@ -57,14 +57,15 @@ def create_app(runtime=None, token: str | None = None):
         try:
             return await method(*args)
         except BrowserFault as exc:
-            return JSONResponse({'error_category': str(exc)}, status_code=409)
+            return JSONResponse({'error_category': str(exc), 'diagnostic': exc.diagnostic}, status_code=409)
         except Exception:
             return JSONResponse({'error_category': 'WORKER_ERROR'}, status_code=503)
 
     @app.get('/status')
     async def status():
         engine = app.state.runtime
-        return {'state': engine.state, 'owner_key': engine.owner_key, 'network_mode': 'direct'}
+        return {'state': engine.state, 'owner_key': engine.owner_key, 'network_mode': 'direct',
+                'launch_error': getattr(engine, 'last_launch_error', None)}
 
     @app.post('/auth/{action}')
     async def auth(action: str):
@@ -91,6 +92,9 @@ def create_app(runtime=None, token: str | None = None):
             return await perform(app.state.runtime.session_close, session_id)
         if action == 'cancel':
             return await perform(app.state.runtime.cancel, session_id)
+        if action == 'unlike':
+            payload = await request.json()
+            return await perform(app.state.runtime.unlike, session_id, identifier(payload.get('note_id')))
         if action == 'resolve':
             payload = await request.json()
             return await perform(app.state.runtime.resolve, session_id, identifier(payload.get('note_id')))
@@ -111,7 +115,7 @@ def create_app(runtime=None, token: str | None = None):
                 'X-Asset-Duration': str(meta.get('duration', 0)),
             }, background=BackgroundTask(path.unlink, missing_ok=True))
         except MediaRejected as exc:
-            return JSONResponse({'error_category': str(exc)}, status_code=409)
+            return JSONResponse({'error_category': str(exc), 'diagnostic': exc.diagnostic}, status_code=409)
         except Exception:
             return JSONResponse({'error_category': 'MEDIA_DOWNLOAD_FAILED'}, status_code=409)
 

@@ -1,6 +1,6 @@
 # B 站动态相簿 BiliGalleryRC
 
-BiliGalleryRC v10.6 是一个面向个人收藏场景的 B 站动态相簿。它负责把动态图片与 Live Photo 整理到本地图库，并提供浏览、筛选、审核和后台维护能力；Web 应用位于 <code>docker_app/</code>，也可通过 Docker Compose 部署到 AMD64 NAS。
+BiliGalleryRC v10.14 是一个面向个人收藏场景的 B 站动态相簿。它负责把动态图片与 Live Photo 整理到本地图库，并提供浏览、筛选、审核和后台维护能力；Web 应用位于 <code>docker_app/</code>，也可通过 Docker Compose 部署到 AMD64 NAS。
 
 ## 功能特性
 
@@ -11,9 +11,9 @@ BiliGalleryRC v10.6 是一个面向个人收藏场景的 B 站动态相簿。它
 - **审核与过滤**：对命中过滤规则的动态进入待审核列表，并保留过滤日志；审核项可以查看原始动态、放行下载或永久忽略。关键词和长图等规则可在设置中调整。
 - **任务队列**：拉取、审核下载、校验、页面索引、缩略图重建、重复内容处理、垃圾清理和站点同步等工作统一进入任务中心，可查看进度和日志，支持暂停、继续、取消与重试。
 - **订阅与站点源**：管理 B 站 UP 主订阅和外部站点订阅；站点源支持 RSS、Sitemap 或 HTML 列表页，并可配置定时同步、筛选规则和网络代理。
-- **小红书个人点赞**：独立浏览器扫码与持久化登录，支持本人点赞笔记扫描、媒体归档、失败重试和手工清单导入；首次拉取条数默认 100，可设 1–10000 或不限，锚点数默认 3、可设 1–20。固定直连，刷新周期独立设置，每轮随机前后抖动 1–22 分钟；图库提供独立小红书药丸。首次使用需完成本人账号、分页与访问规则确认。
+- **小红书个人点赞**：内置浏览器扫码与持久化登录，支持本人点赞笔记扫描、媒体归档、失败重试和手工清单导入；首次拉取条数默认 100，可设 1–10000 或不限，锚点数默认 3、可设 1–20。固定直连，刷新周期独立设置，每轮随机前后抖动 1–22 分钟；图库提供独立小红书药丸。首次使用需完成本人账号、分页与访问规则确认。
 - **登录与运行控制**：支持 B 站二维码登录、Cookie 状态检查和退出登录；可以配置定时拉取间隔、站点同步间隔及过滤关键词。
-- **缩略图与性能调度**：为原图生成 tiny、small、thumb 等分级缩略图，配合页面按需加载和本地索引；前台浏览拥有更高优先级，后台拉取、清理、索引和重复检测会主动让行。
+- **缩略图与性能调度**：为原图生成 small、thumb 两级缩略图，配合页面按需加载和本地索引；前台浏览拥有更高优先级，后台拉取、清理、索引和重复检测会主动让行。
 
 ## 效果展示
 
@@ -79,12 +79,12 @@ Compose 中的关键环境变量如下：
 
 ### AMD64 NAS 使用预构建镜像
 
-v10.6 的 AMD64 镜像包不纳入 Git 工作树。请从[项目 Releases 页面](https://github.com/JDui/bili-gallery/releases)或其他正式发布交付物取得对应版本的 tar 包和 <code>.sha256</code> 校验文件；页面上的版本和资产名称以实际发布内容为准。将取得的镜像包和 <code>docker_app/docker-compose.nas-amd64.yml</code> 复制到 NAS 后，在部署目录执行：
+v10.14 的 AMD64 镜像包不纳入 Git 工作树。请从[项目 Releases 页面](https://github.com/JDui/bili-gallery/releases)或其他正式发布交付物取得对应版本的 tar 包和 <code>.sha256</code> 校验文件；页面上的版本和资产名称以实际发布内容为准。将镜像包和对应部署包解压到 NAS，保留其中的目录关系；部署包已包含默认 Compose 和浏览器沙箱配置。在部署目录执行：
 
 ~~~bash
-sha256sum -c zzs-bili-gallery_v10.6_amd64.tar.sha256
-docker load -i zzs-bili-gallery_v10.6_amd64.tar
-docker image inspect zzs-bili-gallery:10.6-amd64 --format '{{.Id}}'
+sha256sum -c zzs-bili-gallery_v10.14_amd64.tar.sha256
+docker load -i zzs-bili-gallery_v10.14_amd64.tar
+docker image inspect zzs-bili-gallery:10.14-amd64 --format '{{.Id}}'
 ~~~
 
 启动前必须编辑 <code>docker_app/docker-compose.nas-amd64.yml</code> 的 <code>volumes</code>。文件中的示例宿主机路径是占位配置，请改成 NAS 上真实、可写的目录，并保留容器目标路径：
@@ -112,7 +112,7 @@ NAS Compose 已将容器端口 <code>7860</code> 映射到宿主机 <code>7860</
 docker compose -f docker_app/docker-compose.nas-amd64.yml down
 
 # 载入新 tar 后重建容器
-docker load -i zzs-bili-gallery_v10.6_amd64.tar
+docker load -i zzs-bili-gallery_v10.14_amd64.tar
 docker compose -f docker_app/docker-compose.nas-amd64.yml up -d
 ~~~
 
@@ -153,10 +153,12 @@ NAS Compose 使用 <code>APP_REPO_ROOT=/workspace</code>、<code>APP_STORAGE_ROO
 cd docker_app
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 PYTHONPATH=. APP_REPO_ROOT=.. APP_STORAGE_ROOT=../storage \
   uvicorn app.main:app --host 127.0.0.1 --port 7860
 ~~~
+
+<code>requirements-dev.txt</code> 在运行时依赖之外加装 <code>pytest</code> 与 <code>httpx</code>；生产镜像只安装 <code>requirements.txt</code>。
 
 在另一个终端运行测试：
 
@@ -168,7 +170,7 @@ PYTHONPATH=. .venv/bin/pytest -q
 页面审查截图使用隔离占位数据。<code>review_capture.sh</code> 当前针对 macOS 的 Lima Docker 流程：需要本机已有可运行的 <code>limactl</code>、Lima 的 <code>lima-docker</code> context、Docker、Playwright 浏览器和审查镜像；脚本会在 <code>docker_app/review/&lt;时间戳&gt;/</code> 下生成临时运行目录与截图：
 
 ~~~bash
-bash docker_app/scripts/review_capture.sh zzs-bili-gallery:10.6-amd64
+bash docker_app/scripts/review_capture.sh zzs-bili-gallery:10.14-amd64
 ~~~
 
 脚本内部调用 <code>seed_review_data.py</code>，不会读取真实 <code>storage/</code>。如果只需要生成占位数据库和媒体，可单独执行：
@@ -178,55 +180,56 @@ docker_app/.venv/bin/python docker_app/scripts/seed_review_data.py \
   --storage-root /tmp/bili-gallery-review
 ~~~
 
-当前应用版本由 <code>docker_app/app/version.py</code> 中的 <code>APP_VERSION = "10.6"</code> 定义；对应 NAS 镜像标签为 <code>zzs-bili-gallery:10.6-amd64</code>，镜像包文件名为 <code>zzs-bili-gallery_v10.6_amd64.tar</code>。
+当前应用版本由 <code>docker_app/app/version.py</code> 中的 <code>APP_VERSION = "10.14"</code> 定义；对应 NAS 镜像标签为 <code>zzs-bili-gallery:10.14-amd64</code>，镜像包文件名为 <code>zzs-bili-gallery_v10.14_amd64.tar</code>。
 
 ## 小红书个人点赞
 
-小红书使用独立浏览器容器，首次在真实页面手动扫码，后续复用私有浏览器配置目录。主应用不读取或导出 Cookie。此功能只归档本人点赞，不支持他人点赞、发布或自动点赞；登录失效、验证码、平台限制和网页结构异常会停止任务，等待人工处理。页面适配尚需使用者在自己的账号环境验证，不能将合成测试当作真实账号验收。
+小红书浏览器内置于主应用，首次在真实页面手动扫码，后续复用私有浏览器配置目录。主应用不读取或导出 Cookie。此功能只归档本人点赞，不支持他人点赞、发布或自动点赞；登录失效、验证码、平台限制和网页结构异常会停止任务，等待人工处理。页面适配尚需使用者在自己的账号环境验证，不能将合成测试当作真实账号验收。
 
-### 启动可选浏览器服务
+### 开箱使用
 
-首次在仓库根目录执行：
+v10.14 主镜像内置浏览器。按前文使用默认 NAS Compose 启动即可，整个应用只有一个容器和网页端口 `7860`；不需要另外部署浏览器服务、创建密钥、映射登录端口或设置 SSH 转发。源码部署也使用默认的 `docker-compose.example.yml`。
 
-```bash
-python3 docker_app/scripts/setup_xhs.py
-docker compose -f docker_app/docker-compose.example.yml \
-  -f docker_app/docker-compose.xhs.yml --profile xhs up -d --build
-```
+升级时导入新镜像，使用本版本部署包中的 `docker_app/docker-compose.nas-amd64.yml`，保留原来的两条配置、数据挂载路径，然后正常重建主容器。部署包中的 `docker_app/xhs_worker/seccomp_profile.json` 与 Compose 保持相对位置；默认配置会自动使用它启用 Chromium 沙箱。
 
-NAS 使用预构建镜像时，先导入 v10.6 镜像包（包含主应用和 Worker），保留 `docker_app/docker-compose.nas-amd64.yml`、`docker_app/docker-compose.xhs.yml`、`docker_app/xhs_worker/seccomp_profile.json` 和 `docker_app/scripts/setup_xhs.py` 的相对目录关系，修改原有图库挂载路径，再执行：
+首次启动自动在持久化配置目录下初始化 `xhs-private/`，保存浏览器 Profile、账号摘要盐和内部通信密钥。此目录及其密钥保持私有权限，整个配置目录不对 HTTP 静态文件接口开放。升级和重建时保留原配置挂载，登录状态会继续复用；备份时备份整个配置目录，恢复浏览器数据前先停止容器。浏览器进程以非 root 身份运行；主服务负责自动启动、异常重启和退出清理，浏览器及内部通信端口仅监听容器回环地址。Chromium 沙箱依赖 NAS 内核支持，出现异常时页面显示错误，不会自动关闭沙箱继续运行。沙箱配置基于 [Playwright 官方 Docker 指引](https://playwright.dev/python/docs/docker)。
 
-```bash
-python3 docker_app/scripts/setup_xhs.py
-docker compose -f docker_app/docker-compose.nas-amd64.yml \
-  -f docker_app/docker-compose.xhs.yml --profile xhs up -d
-```
+### 旧容器升级后的浏览器启动检查
 
-没有 Python 的 NAS 可用已导入的主镜像生成密钥：
+仅替换镜像会保留旧容器的安全限制。若启动扫码时报“容器配置阻止了浏览器沙箱”，在部署包目录保留原有配置、数据挂载路径，使用随包默认配置重建一次主容器：
 
 ```bash
-mkdir -p .secrets
-chmod 700 .secrets
-docker run --rm -v "$PWD/.secrets:/private-secrets" --entrypoint python \
-  zzs-bili-gallery:10.6-amd64 scripts/setup_xhs.py --secrets-dir /private-secrets
+docker compose -f docker_app/docker-compose.nas-amd64.yml up -d --force-recreate
 ```
 
-密钥保存在不纳入 Git、镜像或 HTTP 存储的 `.secrets/` 私有目录，通过只读 Docker Secret 提供给两个服务。浏览器以 UID/GID 1000 非 root 运行，启用 Chromium 沙箱和固定 Playwright 版本；专用 Profile 命名卷仅挂载给 Worker。升级时保留 Compose 项目名和该命名卷，不执行 `down -v`。主应用仍使用原配置与图库目录。Chromium 沙箱受 NAS 内核影响，不能启动时应修正内核或容器配置，不要通过关闭沙箱继续运行。沙箱配置基于 [Playwright 官方 Docker 指引](https://playwright.dev/python/docs/docker)，随附 seccomp 来自固定版本的官方配置。
+随包的 `docker_app/xhs_worker/seccomp_profile.json` 与 Compose 保持相对位置即可，无需单独启动服务。应用内登录窗口显示的是内置 Chromium 的画面，不需要本机另装浏览器。启动失败时，小红书 tab 会显示脱敏原因与处理建议；不会自动关闭 Chromium 沙箱。
+
+### 媒体归档与视频播放
+
+本人点赞的笔记默认全部允许归档，不使用 B 站或普通站点的关键词、白名单和自动审核规则。旧版被这类规则拦截的笔记会重新排队；用户主动删除、屏蔽或移入垃圾桶的内容继续保留该操作。
+
+笔记媒体从官方页面的完整详情数据读取，不采集正文中的表情、头像或列表占位图。无法确认完整图片清单或视频地址时保留为待解析，不标记为已归档。升级后，旧版浏览器来源已归档的笔记会重新进入待修复队列；点击该来源的“重试媒体”，可重新读取并替换旧的错误归档。
+
+每个小红书订阅提供“完全重置抓取”按钮，连续三次确认后清除此来源的媒体、收藏、扫描与任务历史，保留登录与来源设置，恢复首次拉取状态并重新开始；有执行中或排队任务时须先停止。
+
+小红书贴文的删除操作先清理本地内容，并在后台尝试取消原帖点赞；取消失败不会恢复本地内容，结果写入任务记录。其他来源的垃圾桶操作不变。
+
+“查看最近 50 条笔记”的标题打开应用内归档；尚未归档时会提示重试媒体。小红书视频笔记使用独立播放浮窗，打开即尝试静音播放，可使用原生播放控件开启声音；关闭浮窗会停止播放。未知发布日期显示未知，不使用 1970 年占位日期。
 
 ### 首次登录和订阅
 
-1. 打开“订阅管理 → 站点订阅 → 小红书 · 我的点赞”，点击“启动手动登录”。NAS 上的登录端口只绑定 `127.0.0.1:6080`；本机部署直接访问，远程 NAS 先执行 `ssh -L 6080:127.0.0.1:6080 用户名@NAS地址`。
-2. 点击“打开本机登录窗口”，输入界面给出的一次性远程桌面密码，在真实小红书页面内自行扫码或完成官方验证。十分钟后登录入口自动关闭。不要将登录窗口裸露到公网。
-3. 点击“完成扫码”，账号标识自动填入创建表单；填写首次拉取条数、锚点数和独立刷新周期，创建来源。
+1. 打开“订阅管理 → 小红书 → 我的点赞”，点击“启动手动登录”。
+2. 直接在页面内出现的官方登录窗口扫码或完成验证，随后点击“完成扫码”。无需输入远程桌面密码；窗口十分钟后自动关闭，也可以在应用同一地址的新窗口中打开。
+3. 登录后账号标识自动填入创建表单；填写首次拉取条数、锚点数和独立刷新周期，创建来源。
 4. 在该来源中确认本人账号、点赞页可翻页及访问规则。只有实际确认排序稳定时才勾选“启用锚点早停”；未确认时使用保守完整扫描。点击“验证本人点赞源”后可立即同步，也可单独开启自动刷新。
 
-小红书不继承站点代理、系统环境代理或 B 站刷新周期。基础周期至少 23 分钟，每次任务完成后重新抽取提前或延后 1–22 分钟的偏移。首次读取达到条数上限时记为部分扫描，不据此判断旧点赞已取消；正常锚点早停也不会取消旧点赞。仅可信自然末页会更新取消点赞状态，保留本地归档和收藏。还可使用“忽略锚点完整扫描”进行核对。
+小红书不继承站点代理、系统环境代理或 B 站刷新周期。基础周期至少 23 分钟，每次任务完成后重新抽取提前或延后 1–22 分钟的偏移。首次拉取条数始终可修改；变更后下次同步按新上限重新扫描，跳过旧锚点并复用已下载文件。首次读取达到条数上限时记为部分扫描，不据此判断旧点赞已取消；正常锚点早停也不会取消旧点赞。仅可信自然末页会更新取消点赞状态，保留本地归档和收藏。还可使用“忽略锚点完整扫描”进行核对。
 
-媒体以网页实际可访问版本保存，记录 SHA-256、尺寸和视频时长，不承诺作者原件或固定无水印版本。未知资源先保留解析待办；可用“重试媒体”重新解析过期地址，已下载成功的文件不重复下载。“检查本地归档”离线比对下载缓存与图库文件的 SHA-256，将缺失或损坏项保留为待重试，不访问小红书。图文、视频封面与明确存在的 Live Photo 分别归档；普通视频不计为 Live Photo。命中过滤的笔记可在来源笔记清单中审核放行。
+媒体以网页实际可访问版本保存，记录 SHA-256、尺寸和视频时长，不承诺作者原件或固定无水印版本。未知资源先保留解析待办；可用“重试媒体”重新解析过期地址，已下载成功的文件不重复下载。“检查本地归档”离线比对下载缓存与图库文件的 SHA-256，将缺失或损坏项保留为待重试，不访问小红书。图文、视频封面与明确存在的 Live Photo 分别归档；普通视频不计为 Live Photo。本人点赞笔记不经过普通站点的关键词过滤；手动排除仍生效。
 
 任务统一进入任务中心，支持暂停、继续、取消、重试并遵循前台优先级。主应用重启会将未结束的小红书任务标记为可重试，清理孤立 `.part` 文件；已提交笔记、待办与读取锚点保留。注销登录态需要确认，只清除私有浏览器 Profile 并停用对应来源，既有图库文件不删除。
 
-不启用 Worker 时，仍可导入净化的 [Manifest v1 示例](docs/examples/xhs-manifest.example.json)。清单最多 4 MiB，不能包含 Cookie、认证头、签名 URL 或 `xsec_token`；手工清单不会改变扫描锚点或推断取消点赞。
+也可直接导入净化的 [Manifest v1 示例](docs/examples/xhs-manifest.example.json)。清单最多 4 MiB，不能包含 Cookie、认证头、签名 URL 或 `xsec_token`；手工清单不会改变扫描锚点或推断取消点赞。
 
 ## 内网自动跳转
 
@@ -267,4 +270,4 @@ docker run --rm -v "$PWD/.secrets:/private-secrets" --entrypoint python \
 
 界面与内网检测页的圆角统一使用 `docker_app/app/static/ui-tokens.css` 中的令牌：按钮和表单控件 10px、卡片 12px、外框及弹窗 18px、内嵌缩略图和标签 8px。组合按钮外框按内层圆角加内边距计算；开关、进度轨道和圆形状态点保留功能形状。
 
-缩略图分级升级先完成新图解码，再以 260ms 交叠淡入；旧图层、临时预加载图片及已覆盖的 tiny 背景在过渡结束后进入空闲清理队列，并设 80ms 清理兜底。连续切换只提交最后请求的等级，加载失败保留可用旧图，关闭或隐藏页面会取消待处理任务并清理资源。查看器原图淡入完成后移除预览层。悬浮说明使用半透明渐变、磨砂模糊与内侧高光，并保留键盘及触屏操作。
+图库使用 small → thumb → 原图的加载层级，不再生成媒体 tiny 缩略图；订阅与站点头像仍保留独立 tiny 背景。历史媒体 tiny 文件不会自动删除，可通过重建页面索引清理，旧数据库字段保留兼容。缩略图分级升级先完成新图解码，再以 260ms 交叠淡入；旧图层和临时预加载图片在过渡结束后进入空闲清理队列，并设 80ms 清理兜底。连续切换只提交最后请求的等级，加载失败保留可用旧图，关闭或隐藏页面会取消待处理任务并清理资源。查看器原图淡入完成后移除预览层。悬浮说明使用半透明渐变、磨砂模糊与内侧高光，并保留键盘及触屏操作。

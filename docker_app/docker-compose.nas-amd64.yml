@@ -1,11 +1,16 @@
-version: "3.8"
-
 services:
   bili-gallery:
-    image: zzs-bili-gallery:10.6-amd64
+    image: zzs-bili-gallery:10.14-amd64
     container_name: bili-gallery
     restart: unless-stopped
     user: "0:0"
+    init: true
+    shm_size: 512mb
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE, KILL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./xhs_worker/seccomp_profile.json
 
     ports:
       - "7860:7860"

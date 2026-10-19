@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from app.services.xhs.models import MAX_MANIFEST_BYTES, XhsValidationError
 from app.services.xhs.sync import XhsConflict, XhsSyncService
 from app.services.xhs.worker_client import WorkerError
+from app.services.xhs.browser_errors import browser_error_text
 
 
 async def read_body(request: Request, maximum: int = MAX_MANIFEST_BYTES) -> bytes:
@@ -47,7 +48,7 @@ async def read_object(request: Request) -> dict:
 
 
 def create_router(get_service: Callable[[], XhsSyncService], on_schedule_changed: Callable[[], None] | None = None,
-                  get_manager=None) -> APIRouter:
+                  get_manager=None, browser_gateway=None) -> APIRouter:
     router = APIRouter(prefix="/api/xhs")
 
     async def execute(action, *args):
@@ -59,7 +60,7 @@ def create_router(get_service: Callable[[], XhsSyncService], on_schedule_changed
         except XhsConflict as exc:
             raise HTTPException(409, str(exc)) from None
         except WorkerError as exc:
-            raise HTTPException(409, f'小红书浏览器状态：{exc.category}') from None
+            raise HTTPException(409, browser_error_text(exc.category)) from None
         except (sqlite3.Error, OSError):
             raise HTTPException(503, "小红书数据暂时无法写入，请稍后重试") from None
 
@@ -72,6 +73,18 @@ def create_router(get_service: Callable[[], XhsSyncService], on_schedule_changed
         if not get_manager:
             raise HTTPException(409, 'Worker 未配置')
         result = await execute(get_manager().login, action, await read_object(request))
+        if browser_gateway:
+            if action == 'start':
+                payload = json.loads(result.body)
+                browser_gateway.begin(payload.pop('viewer_password'), int(payload.get('expires_in', 600)))
+                payload['viewer_url'] = browser_gateway.PATH + '/'
+                result = JSONResponse(payload, headers={'Cache-Control': 'no-store'})
+                result.set_cookie(browser_gateway.COOKIE, browser_gateway.token, max_age=600,
+                                  httponly=True, samesite='strict', secure=request.url.scheme == 'https',
+                                  path=browser_gateway.PATH)
+            elif action in {'finish', 'revoke'}:
+                browser_gateway.revoke()
+                result.delete_cookie(browser_gateway.COOKIE, path=browser_gateway.PATH)
         if on_schedule_changed:
             await run_in_threadpool(on_schedule_changed)
         return result
@@ -90,6 +103,15 @@ def create_router(get_service: Callable[[], XhsSyncService], on_schedule_changed
         if not get_manager:
             raise HTTPException(409, 'Worker 未配置')
         return await execute(get_manager().start_sync, source_id, await read_object(request))
+
+    @router.post('/sources/{source_id}/reset')
+    async def reset(source_id: int, request: Request):
+        if not get_manager:
+            raise HTTPException(409, 'Worker 未配置')
+        result = await execute(get_manager().reset_source, source_id, await read_object(request))
+        if on_schedule_changed:
+            await run_in_threadpool(on_schedule_changed)
+        return result
 
     @router.post('/sync')
     async def sync_all(request: Request):

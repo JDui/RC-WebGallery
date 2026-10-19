@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Body, FastAPI, HTTPException, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.concurrency import run_in_threadpool
 import requests
 
 from app.config import load_config
@@ -30,6 +31,8 @@ from app.services.site_syncer import SiteSyncManager
 from app.services.xhs.routes import create_router as create_xhs_router
 from app.services.xhs.sync import XhsSyncService
 from app.services.xhs.manager import XhsManager
+from app.services.xhs.embedded import EmbeddedWorker
+from app.services.xhs.browser import BrowserGateway, create_browser_router
 from app.services.xhs.sync import XhsConflict
 from app.services.storage import StorageService
 from app.services.thumbnailer import ThumbnailService
@@ -64,6 +67,8 @@ pull_manager.attach_duplicate_service(duplicates)
 site_syncer.bind_task_queue(pull_manager)
 scheduler = SchedulerService(db, pull_manager, site_syncer)
 xhs_manager = XhsManager(db, storage, indexer)
+embedded_xhs = EmbeddedWorker(config)
+xhs_browser = BrowserGateway()
 pull_manager.attach_xhs_manager(xhs_manager)
 scheduler.xhs.run_sync = xhs_manager.scheduled_sync
 scheduler.xhs.ready = xhs_manager.ready
@@ -81,9 +86,16 @@ _site_icon_reset_lock = threading.Lock()
 
 
 class CacheControlStaticFiles(StaticFiles):
-    def __init__(self, *args: Any, cache_control: str, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, cache_control: str, private_dir: Path | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.cache_control = cache_control
+        self.private_dir = private_dir.resolve() if private_dir else None
+
+    def lookup_path(self, path: str):
+        full_path, stat_result = super().lookup_path(path)
+        if full_path and self.private_dir and Path(full_path).resolve().is_relative_to(self.private_dir):
+            return '', None
+        return full_path, stat_result
 
     async def get_response(self, path: str, scope: dict[str, Any]):
         response = await super().get_response(path, scope)
@@ -97,18 +109,27 @@ async def lifespan(app: FastAPI):
     storage.ensure()
     ensure_config(config.config_dir)
     db.init()
-    xhs_manager.recover()
-    thumbnailer.apply_settings(db.get_settings())
-    scheduler.start()
-    pull_manager.start_startup_sync()
     try:
+        if embedded_xhs.enabled:
+            xhs_manager.worker = await run_in_threadpool(embedded_xhs.start)
+        xhs_manager.recover()
+        thumbnailer.apply_settings(db.get_settings())
+        scheduler.start()
+        pull_manager.start_startup_sync()
         yield
     finally:
-        scheduler.shutdown()
+        try:
+            scheduler.shutdown()
+        finally:
+            xhs_browser.revoke()
+            if embedded_xhs.enabled:
+                await run_in_threadpool(embedded_xhs.stop)
 
 
 app = FastAPI(title=APP_TITLE, lifespan=lifespan)
-app.include_router(create_xhs_router(lambda: XhsSyncService(db), lambda: scheduler.reload_xhs(), lambda: xhs_manager))
+app.include_router(create_xhs_router(lambda: XhsSyncService(db), lambda: scheduler.reload_xhs(), lambda: xhs_manager,
+                                   browser_gateway=xhs_browser))
+app.include_router(create_browser_router(xhs_browser, lambda: xhs_manager.worker))
 app.add_middleware(TaskPriorityMiddleware, coordinator=task_priority)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.mount(
@@ -123,6 +144,7 @@ app.mount(
     "/storage",
     CacheControlStaticFiles(
         directory=str(config.storage_root),
+        private_dir=config.config_dir,
         check_dir=False,
         cache_control="public, max-age=900",
     ),
@@ -1152,10 +1174,21 @@ def trash_items() -> dict[str, Any]:
 
 
 @app.post("/api/gallery/folders/{folder_name}/trash")
-def trash_folder(folder_name: str, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+def trash_folder(folder_name: str, request: Request, background_tasks: BackgroundTasks, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     reason = str(payload.get("reason") or "不喜欢")
     try:
-        return pull_manager.move_to_trash(folder_name, reason=reason)
+        target = xhs_manager.unlike_target(folder_name)
+        if target:
+            origin = request.headers.get('origin')
+            if request.headers.get('sec-fetch-site') == 'cross-site' or (origin and urlparse(origin).netloc != request.headers.get('host')):
+                raise HTTPException(403, '不允许跨站删除小红书贴文')
+        result = pull_manager.move_to_trash(folder_name, reason=reason)
+        if target:
+            task_id = db.create_task_run('xhs-unlike', 'running', '本地已删除，正在取消原帖点赞',
+                                         {'source_id': target[0], 'note_id': target[1], 'local_deleted': True})
+            background_tasks.add_task(xhs_manager.unlike_note, *target, task_id)
+            result.update({'unlike_pending': True, 'task_id': task_id, 'message': '本地已删除，正在取消原帖点赞'})
+        return result
     except RuntimeError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

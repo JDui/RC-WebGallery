@@ -13,16 +13,20 @@ import shutil
 import subprocess
 import time
 import threading
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 from uuid import uuid4
 
 from app.services.xhs.models import XhsNote, identifier
+from app.services.xhs.browser_errors import launch_diagnostic
 from xhs_worker.media import download_public_media
-from xhs_worker.parser import normalize_note, response_page
+from xhs_worker.parser import extract_detail_note, normalize_note, response_page, media_url, video_diagnostic
 
 
 class BrowserFault(RuntimeError):
-    pass
+    def __init__(self, category, diagnostic=None):
+        super().__init__(category)
+        self.diagnostic = diagnostic
+
 
 
 class BrowserRuntime:
@@ -60,6 +64,7 @@ class BrowserRuntime:
         self.detail_payload = {}
         self.capture_tasks = set()
         self.cancel_event = threading.Event()
+        self.last_launch_error = None
 
     async def _launch(self, headed=False):
         from playwright.async_api import async_playwright
@@ -83,9 +88,12 @@ class BrowserRuntime:
             self.context.set_default_timeout(20000)
             self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
             self.context.on('response', self._on_response)
-        except Exception:
+            self.last_launch_error = None
+        except Exception as exc:
+            self.last_launch_error = launch_diagnostic(exc)
             await self._close()
-            raise BrowserFault('BROWSER_UNAVAILABLE') from None
+            self.state = self.last_launch_error['category']
+            raise BrowserFault(self.state) from None
 
     async def _close(self):
         for process in self.viewer_processes:
@@ -197,8 +205,9 @@ class BrowserRuntime:
         commands = [
             ['x11vnc', '-display', os.environ.get('DISPLAY', ':99'), '-localhost', '-rfbport', '5900',
              '-rfbauth', str(password_file), '-forever', '-shared'],
-            ['websockify', '--web', '/usr/share/novnc', '0.0.0.0:6080', '127.0.0.1:5900'],
         ]
+        if os.environ.get('XHS_EMBEDDED') != '1':
+            commands.append(['websockify', '--web', '/usr/share/novnc', '0.0.0.0:6080', '127.0.0.1:5900'])
         self.viewer_processes = [subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for command in commands]
         return password
 
@@ -294,6 +303,19 @@ class BrowserRuntime:
                     raise BrowserFault(self.state)
                 if self.queue:
                     raws, end, reliable = self.queue.popleft()
+                    visible_links = await self.page.evaluate('''() => Array.from(document.querySelectorAll('a[href]'))
+                        .slice(0, 2000).map(node => node.href)''')
+                    observed_links = {}
+                    for link in visible_links or []:
+                        parsed = urlsplit(link)
+                        match = re.fullmatch(r'/(?:explore|discovery/item)/([A-Za-z0-9_-]+)', parsed.path)
+                        query = parse_qs(parsed.query)
+                        token = query.get('xsec_token', [''])[0]
+                        if (parsed.scheme == 'https' and parsed.netloc == 'www.xiaohongshu.com' and match
+                                and re.fullmatch(r'[A-Za-z0-9_+/=-]{1,1024}', token)):
+                            source = query.get('xsec_source', ['pc_user'])[0]
+                            source = source if re.fullmatch(r'[A-Za-z0-9_-]{1,64}', source) else 'pc_user'
+                            observed_links[match[1]] = urlunsplit(('https', parsed.netloc, parsed.path, urlencode({'xsec_token': token, 'xsec_source': source}), ''))
                     result = []
                     for raw in raws:
                         note, candidates = normalize_note(raw)
@@ -303,10 +325,14 @@ class BrowserRuntime:
                         from dataclasses import asdict
                         result.append(asdict(safe_note))
                         self.seen.add(safe_note.note_id)
-                        token = raw.get('xsec_token') or raw.get('xsecToken')
-                        if isinstance(token, str) and re.fullmatch(r'[A-Za-z0-9_=-]{1,1024}', token):
-                            from urllib.parse import urlencode
-                            self.note_links[safe_note.note_id] = safe_note.url + '?' + urlencode({'xsec_token': token, 'xsec_source': 'pc_user'})
+                        card = raw.get('note_card') or raw.get('noteCard') or raw
+                        token = raw.get('xsec_token') or raw.get('xsecToken') or card.get('xsec_token') or card.get('xsecToken')
+                        if isinstance(token, str) and re.fullmatch(r'[A-Za-z0-9_+/=-]{1,1024}', token):
+                            source = raw.get('xsec_source') or raw.get('xsecSource') or card.get('xsec_source') or card.get('xsecSource') or 'pc_user'
+                            source = source if isinstance(source, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,64}', source) else 'pc_user'
+                            self.note_links[safe_note.note_id] = safe_note.url + '?' + urlencode({'xsec_token': token, 'xsec_source': source})
+                        if safe_note.note_id in observed_links:
+                            self.note_links[safe_note.note_id] = observed_links[safe_note.note_id]
                     return {'notes': result, 'end_of_feed': end, 'integrity_ok': reliable}
                 await self.page.mouse.wheel(0, 1100)
                 await asyncio.sleep(0.5)
@@ -324,36 +350,140 @@ class BrowserRuntime:
             note_id = identifier(note_id)
             if note_id not in self.seen:
                 raise BrowserFault('NOTE_NOT_OBSERVED')
+            if note_id not in self.note_links:
+                raise BrowserFault('NOTE_LINK_UNAVAILABLE')
             detail = await self.context.new_page()
+            player_responses = []
+            def capture_player(response):
+                if (response.status in {200, 206} and response.request.resource_type == 'media'
+                        and response.headers.get('content-type', '').split(';')[0].lower() == 'video/mp4'):
+                    url = media_url(response.url)
+                    if url and len(player_responses) < 20:
+                        player_responses.append(url)
+            detail.on('response', capture_player)
             try:
-                await detail.goto(self.note_links.get(note_id, f'https://www.xiaohongshu.com/explore/{note_id}'), wait_until='domcontentloaded')
+                self.detail_payload.pop(note_id, None)
+                await detail.goto(self.note_links[note_id], wait_until='domcontentloaded')
+                if urlsplit(getattr(detail, 'url', '')).path.rstrip('/') == '/login':
+                    raise BrowserFault('NOTE_DETAIL_LOGIN_REQUIRED')
+                raw = None
+                last_video = False
+                last_video_fields = []
                 for _ in range(20):
-                    if note_id in self.detail_payload:
-                        break
+                    raw = self.detail_payload.pop(note_id, None)
+                    if not raw:
+                        state = await detail.evaluate('''(id) => {
+                            const source = window.__INITIAL_STATE__?.note;
+                            const map = source?.noteDetailMap || source?.note_detail_map || {};
+                            for (const entry of Object.values(map)) {
+                                const note = entry?.note || entry?.note_card || entry?.noteCard;
+                                if (note && String(note.noteId || note.note_id || note.id) === id)
+                                    return {note: {noteDetailMap: {[id]: {note}}}};
+                            }
+                            return null;
+                        }''', note_id)
+                        raw = extract_detail_note(state, note_id)
+                    if raw:
+                        candidate_note, _ = normalize_note(raw, detail=True)
+                        if candidate_note['type'] != 'video' or any(asset['kind'] == 'video' for asset in candidate_note['assets']):
+                            break
+                        last_video = True
+                        card = raw.get('note_card') or raw.get('noteCard') or raw
+                        last_video_fields = video_diagnostic(card.get('video'))
+                        player = await detail.evaluate('''() => {
+                            const root = document.querySelector('#noteContainer, .note-detail-mask, .note-container');
+                            if (!root) return null;
+                            const videos = Array.from(root.querySelectorAll('video')).filter(node => node.getClientRects().length);
+                            if (videos.length !== 1) return null;
+                            const video = videos[0];
+                            return {urls: [video.currentSrc, video.src, ...Array.from(video.querySelectorAll('source')).map(node => node.src)]};
+                        }''')
+                        if isinstance(player, dict) and isinstance(player.get('urls'), list):
+                            urls = player['urls'] + player_responses
+                            url = next((media_url(value) for value in urls if media_url(value)), None)
+                            if url:
+                                card = dict(card)
+                                card['video'] = {'media': {'stream': {'h264': [{'master_url': url}]}}}
+                                raw = {'id': note_id, 'note_card': card}
+                                break
+                        raw = None
                     await asyncio.sleep(0.25)
                 if self.state in {'NEEDS_REAUTH', 'NEEDS_MANUAL_VERIFICATION', 'RATE_LIMITED'}:
                     raise BrowserFault(self.state)
-                raw = self.detail_payload.pop(note_id, None)
-                if raw:
-                    note, candidates = normalize_note(raw)
-                else:
-                    images = await detail.locator('.note-detail-mask img.note-slider-img, .note-content img').evaluate_all('(nodes) => nodes.map(n => n.currentSrc || n.src)')
-                    videos = await detail.locator('.note-detail-mask video').evaluate_all('(nodes) => nodes.map(n => n.currentSrc || n.src)')
-                    note = {'note_id': note_id, 'assets': []}
-                    candidates = []
-                    for ordinal, url in enumerate(dict.fromkeys(images)):
-                        if url.startswith('https://'):
-                            note['assets'].append({'ordinal': ordinal, 'kind': 'image'})
-                            candidates.append((ordinal, 'image', url))
-                    for ordinal, url in enumerate(videos[:1]):
-                        if url.startswith('https://'):
-                            note['assets'].append({'ordinal': ordinal, 'kind': 'video'})
-                            candidates.append((ordinal, 'video', url))
+                if not raw:
+                    raise BrowserFault('VIDEO_STREAM_UNAVAILABLE' if last_video else 'NOTE_DETAIL_UNAVAILABLE',
+                                       {'video_fields': last_video_fields, 'media_responses': len(player_responses)})
+                note, candidates = normalize_note(raw, detail=True)
+                card = raw.get('note_card') or raw.get('noteCard') or raw
+                images = card.get('image_list') or card.get('imageList') or []
+                image_count = sum(asset['kind'] == 'image' for asset in note['assets'])
+                declared = card.get('image_count', card.get('imageCount', len(images)))
+                if (note['note_id'] != note_id or not candidates or len(note['assets']) > 100
+                        or (note['type'] == 'video' and not any(asset['kind'] == 'video' for asset in note['assets']))
+                        or (note['type'] != 'video' and (not images or image_count != len(images)
+                            or (isinstance(declared, int) and declared > image_count)))):
+                    raise BrowserFault('MEDIA_NEEDS_RESOLUTION')
+                from dataclasses import asdict
+                parsed_note = XhsNote.parse(note)
+                safe_note = asdict(parsed_note)
+                safe_note['assets'] = [asdict(asset) for asset in parsed_note.assets]
                 for ordinal, kind, url in candidates:
                     self.assets[(note_id, ordinal, kind)] = url
-                return {'note_id': note_id, 'assets': note['assets']}
+                return {'note_id': note_id, 'assets': note['assets'], 'note': safe_note, 'media_complete': True}
             finally:
                 await detail.close()
+
+    async def unlike(self, session_id, note_id):
+        async with self.lock:
+            self._require_session(session_id)
+            note_id = identifier(note_id)
+            if note_id not in self.seen or note_id not in self.note_links:
+                raise BrowserFault('NOTE_NOT_OBSERVED')
+            page = await self.context.new_page()
+            try:
+                await page.goto(self.note_links[note_id], wait_until='domcontentloaded')
+                selector = '.interact-container .like-wrapper, .engage-bar .like-wrapper, button[aria-label="取消点赞"], button[aria-label="点赞"]'
+                async def state():
+                    return await page.evaluate('''({id, selector}) => {
+                        const map = window.__INITIAL_STATE__?.note?.noteDetailMap || window.__INITIAL_STATE__?.note?.note_detail_map || {};
+                        const note = Object.values(map).map(entry => entry?.note || entry?.note_card || entry?.noteCard)
+                            .find(note => note && String(note.noteId || note.note_id || note.id) === id);
+                        if (!note) return null;
+                        const buttons = Array.from(document.querySelectorAll(selector)).filter(node => node.getClientRects().length);
+                        if (buttons.length !== 1) return null;
+                        const node = buttons[0], label = node.getAttribute('aria-label');
+                        if (label === '取消点赞' || node.getAttribute('aria-pressed') === 'true') return true;
+                        if (label === '点赞' || node.getAttribute('aria-pressed') === 'false') return false;
+                        const icon = node.querySelector('use');
+                        const href = icon?.getAttribute('href') || icon?.getAttribute('xlink:href') || '';
+                        if (href.endsWith('#liked')) return true;
+                        if (href.endsWith('#like')) return false;
+                        const info = note.interactInfo || note.interact_info;
+                        return typeof info?.liked === 'boolean' ? info.liked : null;
+                    }''', {'id': note_id, 'selector': selector})
+                before = None
+                for _ in range(20):
+                    before = await state()
+                    if before is not None:
+                        break
+                    await asyncio.sleep(0.25)
+                if before is None:
+                    raise BrowserFault('UNLIKE_UNCONFIRMED')
+                if before:
+                    buttons = page.locator(selector)
+                    visible = [buttons.nth(i) for i in range(await buttons.count()) if await buttons.nth(i).is_visible()]
+                    if len(visible) != 1:
+                        raise BrowserFault('UNLIKE_UNCONFIRMED')
+                    await visible[0].click()
+                    for _ in range(20):
+                        if await state() is False:
+                            break
+                        await asyncio.sleep(0.25)
+                    else:
+                        raise BrowserFault('UNLIKE_UNCONFIRMED')
+                return {'note_id': note_id, 'unliked': True}
+            finally:
+                await page.close()
 
     async def asset(self, session_id, note_id, ordinal, kind):
         async with self.lock:

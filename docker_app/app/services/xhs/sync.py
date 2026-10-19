@@ -113,8 +113,10 @@ class XhsSyncService:
                 raise XhsValidationError("启用状态必须为布尔值")
             conn.execute(
                 """update xhs_source_accounts set anchor_count = ?, initial_fetch_limit = ?,
-                   refresh_interval_minutes = ?, refresh_enabled = ?, ordering_stable = ?, full_scan_interval_days = ?, config_version = config_version + 1
-                   where source_id = ?""", (count, limit, refresh_interval, int(refresh_enabled), int(ordering), full_interval, source_id),
+                   refresh_interval_minutes = ?, refresh_enabled = ?, ordering_stable = ?, full_scan_interval_days = ?,
+                   initial_fetch_completed = case when initial_fetch_limit is not ? then 0 else initial_fetch_completed end,
+                   config_version = config_version + 1
+                   where source_id = ?""", (count, limit, refresh_interval, int(refresh_enabled), int(ordering), full_interval, limit, source_id),
             )
             conn.execute("update site_sources set enabled = ?, updated_at = ? where id = ?", (int(enabled), now_iso(), source_id))
         return self.get_source(source_id)
@@ -166,8 +168,10 @@ class XhsSyncService:
         with self.db.connect() as conn:
             self.get_source(source_id, conn)
             return [dict(row) for row in conn.execute(
-                """select l.note_id, l.first_seen_at, l.last_seen_at, l.is_currently_liked,
-                       p.title, p.url, p.pub_date, p.asset_count, d.status as download_status, d.error_category
+                """select l.note_id, l.note_type, l.first_seen_at, l.last_seen_at, l.is_currently_liked,
+                       p.title, p.url, p.pub_date, p.asset_count, d.status as download_status, d.error_category,
+                       (select f.folder_name from folders f where f.folder_name =
+                           'xhs_' || l.source_id || '_' || l.note_id limit 1) as folder_name
                    from xhs_like_state l join site_posts p on p.id = l.site_post_id
                    left join xhs_note_downloads d on d.post_id = p.id where l.source_id = ?
                    order by l.first_seen_at desc, p.id desc limit 50""", (source_id,),
@@ -199,7 +203,7 @@ class XhsSyncService:
             if source["owner_key"] != owner_key:
                 raise XhsConflict("NEEDS_REBIND：账号与来源不一致")
             with self.db.connect() as conn:
-                anchors = set(self._anchors(conn, source)) if not ignore_anchors else set()
+                anchors = set(self._anchors(conn, source)) if not ignore_anchors and source["initial_fetch_completed"] else set()
             notes: dict[str, XhsNote] = {}
             started, clock = now_iso(), time.monotonic()
             hit, complete, reliable, reason, asset_count = None, False, True, "cursor_error", 0
@@ -349,6 +353,11 @@ class XhsSyncService:
                            values (?, ?, ?, ?, 'needs_resolution', ?, ?) on conflict(post_id, url) do nothing""",
                         (post_id, stable_key, asset.kind, f"{asset.ordinal:03d}-{asset.kind}", now, now),
                     )
+                if note.type == 'video':
+                    conn.execute("""update xhs_note_downloads set status='pending',error_category=null
+                        where post_id=? and status='ready' and not exists
+                        (select 1 from site_assets where post_id=? and media_type='video' and status='ready')""",
+                                 (post_id, post_id))
                 conn.execute("update site_posts set asset_count = (select count(*) from site_assets where post_id = ?) where id = ?", (post_id, post_id))
             if complete:
                 conn.execute(

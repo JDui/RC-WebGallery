@@ -633,7 +633,6 @@ class DuplicateService:
             "url": self.storage.storage_url(asset.get("rel_path")),
             "thumb_url": self.storage.storage_url(asset.get("thumb_rel_path")),
             "small_thumb_url": self.storage.storage_url(asset.get("small_thumb_rel_path")),
-            "tiny_thumb_url": self.storage.storage_url(asset.get("tiny_thumb_rel_path")),
             "width": asset.get("width"),
             "height": asset.get("height"),
             "metadata": loads_json(asset.get("metadata_json"), {}),
