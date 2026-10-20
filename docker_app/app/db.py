@@ -557,6 +557,7 @@ class Database:
             "all": "全部项目",
             "favorites": "收藏",
             "livephoto": "Live Photo",
+            "video": "视频",
             "duplicates": "重复内容",
             "review": "待审核",
             "logs": "过滤日志",
@@ -2017,7 +2018,9 @@ class Database:
     def refresh_sidebar_count_cache(self, keys: list[str] | None = None) -> dict[str, Any]:
         requested = {str(key) for key in keys or [] if str(key)}
         if not requested:
-            requested = {"all", "favorites", "livephoto", "review", "logs", "tasks", "trash", "subscriptions", "sites"}
+            requested = {"all", "favorites", "livephoto", "video", "review", "logs", "tasks", "trash", "subscriptions", "sites"}
+        if requested & {"all", "livephoto"}:
+            requested.add("video")
         computed = self._compute_sidebar_counts(requested)
         now = now_iso()
         with self.connect() as conn:
@@ -2047,6 +2050,7 @@ class Database:
             "all": "全部项目",
             "favorites": "收藏",
             "livephoto": "Live Photo",
+            "video": "视频",
             "duplicates": "重复内容",
             "review": "待审核",
             "logs": "过滤日志",
@@ -2071,6 +2075,13 @@ class Database:
                 output["all"] = {"count": int(row["all_count"] or 0), "label": labels["all"]}
                 output["livephoto"] = {"count": int(row["livephoto_count"] or 0), "label": labels["livephoto"]}
                 output["favorites"] = {"count": int(row["favorites_count"] or 0), "label": labels["favorites"]}
+            if "video" in keys:
+                count = conn.execute("""
+                    select count(*) from folders f where exists (
+                        select 1 from assets a where a.folder_name = f.folder_name and a.media_type = 'video'
+                    )
+                """).fetchone()[0]
+                output["video"] = {"count": int(count or 0), "label": labels["video"]}
             if "review" in keys:
                 count = conn.execute("select count(*) from review_items where status = 'pending'").fetchone()[0]
                 output["review"] = {"count": int(count or 0), "label": labels["review"]}
@@ -2708,6 +2719,7 @@ class Database:
                 """
                 select
                     count(*) as all_count,
+                    sum(case when exists (select 1 from assets a where a.folder_name = folder_index.folder_name and a.media_type = 'video') then 1 else 0 end) as video_count,
                     sum(case when has_images = 1 then 1 else 0 end) as images_count,
                     sum(case when has_livephoto = 1 then 1 else 0 end) as livephoto_count,
                     sum(case when has_images = 1 and has_livephoto = 1 then 1 else 0 end) as paired_count,
@@ -2746,6 +2758,7 @@ class Database:
             "counts": {
                 "all": int(counts_row["all_count"] or 0),
                 "images": int(counts_row["images_count"] or 0),
+                "video": int(counts_row["video_count"] or 0),
                 "livephoto": int(counts_row["livephoto_count"] or 0),
                 "paired": int(counts_row["paired_count"] or 0),
                 "unpaired": int(counts_row["unpaired_count"] or 0),
@@ -2831,6 +2844,8 @@ class Database:
             params.extend([range_start, range_end])
         if category == "images":
             clauses.append(f"{column('has_images' if not pair_mode else 'has_image')} = 1")
+        elif category == "video":
+            clauses.append(f"exists (select 1 from assets a where a.folder_name = {column('folder_name')} and a.media_type = 'video')")
         elif category == "livephoto":
             clauses.append(f"{column('has_livephoto')} = 1")
         elif category == "paired":

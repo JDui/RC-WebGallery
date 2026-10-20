@@ -182,6 +182,7 @@ const UI_THEME_ENGINE = {
 function galleryApp() {
   // Keep native Window objects outside Alpine's reactive proxies.
   let xhsLoginPopup = null;
+  let masonryObserver = null;
   return {
     currentView: "gallery",
     category: "all",
@@ -190,6 +191,7 @@ function galleryApp() {
       { key: "search", label: "搜索", short: "搜", copy: "按标题、正文、订阅源搜索" },
       { key: "favorites", label: "收藏", short: "藏", copy: "只看已收藏动态" },
       { key: "livephoto", label: "Live Photo", short: "动", copy: "只看可播放动态" },
+      { key: "video", label: "视频", short: "视", copy: "独立视频，按当前排序连续观看" },
     ],
     meta: { counts: {}, years: {} },
     sidebarCounts: {},
@@ -472,8 +474,18 @@ function galleryApp() {
     hoverPreviewLoadCard: null,
     sidebarCollapsed: localStorage.getItem("gallery_sidebar_collapsed") === "1",
     subscriptionSectionCollapsed: true,
+    narrowViewport: false,
+    videoFeed: { active: false, items: [], index: -1, page: 1, totalPages: 1, params: '', busy: false },
+    videoFeedToken: 0,
+    videoFeedGesture: null,
+    videoFeedMessage: '',
+    videoFeedHintVisible: false,
+    videoFeedHintTimer: null,
+    videoFeedDirection: 1,
+    subscriptionPullPending: false,
     compactViewport: false,
     sidebarDrawerOpen: false,
+    favoritePending: {},
     pendingTrashFolder: null,
     pendingRestoreTrashId: null,
     clearDataConfirmStep: 0,
@@ -929,6 +941,7 @@ function galleryApp() {
     updateViewportMode() {
       const nextCompact = window.matchMedia("(max-width: 1100px), (max-aspect-ratio: 11/10)").matches;
       this.compactViewport = nextCompact;
+      this.narrowViewport = window.matchMedia("(max-width: 760px), (max-width: 1100px) and (orientation: portrait)").matches;
       if (!nextCompact) {
         this.sidebarDrawerOpen = false;
       }
@@ -1095,6 +1108,13 @@ function galleryApp() {
         this.handleEscape();
         return;
       }
+      if (this.videoNote.open && this.videoFeed.active && !event.target?.closest?.('input, textarea, select')) {
+        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+          event.preventDefault();
+          this.stepVideoFeed(event.key === 'ArrowDown' ? 1 : -1);
+          return;
+        }
+      }
       if (!this.viewer.open) {
         return;
       }
@@ -1169,7 +1189,7 @@ function galleryApp() {
       if (this.currentView === "logs") return "过滤日志";
       if (this.currentView === "tasks") return "任务队列";
       if (this.currentView === "trash") return "内容垃圾桶";
-      if (this.currentView === "settings") return "拉取与设置";
+      if (this.currentView === "settings") return "设置";
       if (this.currentView === "subscriptions") return "订阅管理";
       const subscription = this.activeSelectedSubscription();
       if (subscription) return subscription.uname || subscription.name || subscription.uid;
@@ -1408,6 +1428,7 @@ function galleryApp() {
           all: counts.all ?? this.meta.counts?.all ?? 0,
           favorites: counts.favorites ?? this.meta.counts?.favorites ?? 0,
           livephoto: counts.livephoto ?? this.meta.counts?.livephoto ?? 0,
+          video: counts.video ?? this.meta.counts?.video ?? 0,
         },
       };
       if (counts.sites !== undefined) {
@@ -1523,6 +1544,11 @@ function galleryApp() {
 
     updateFixedLayoutMetrics() {
       const root = document.documentElement;
+      const header = this.$refs.topbar;
+      if (header) {
+        const top = Number.parseFloat(getComputedStyle(header).top) || 0;
+        this.setRootStyleVar('--page-toolbar-top', `${Math.ceil(header.getBoundingClientRect().height + top + 6)}px`);
+      }
       const pinned = window.matchMedia("(min-width: 1101px) and (min-aspect-ratio: 11/10)").matches;
       if (!pinned) {
         root.classList.remove("layout-pinned");
@@ -1577,7 +1603,7 @@ function galleryApp() {
       root.classList.add("layout-pinned");
 
       const topbarHeight = Math.ceil(topbar.getBoundingClientRect().height || 0);
-      const measuredReserve = Math.max(88, topbarHeight + 18);
+      const measuredReserve = Math.max(44, topbarHeight + 10);
       const reserve = this.headerCompact && this.layoutTopbarReserve
         ? Math.max(this.layoutTopbarReserve, measuredReserve)
         : measuredReserve;
@@ -1600,6 +1626,7 @@ function galleryApp() {
     },
 
     resolveGalleryColumns() {
+      if (this.narrowViewport) return 2;
       const target = Math.max(1, Number(this.galleryColumnCount) || 1);
       const width = this.$refs.galleryStage?.clientWidth || window.innerWidth || 1280;
       if (this.galleryColumnCache && Math.abs(width - this.galleryColumnCacheWidth) < 24) {
@@ -1842,7 +1869,7 @@ function galleryApp() {
 
     gallerySmallUrlsForItem(item) {
       const urls = new Set();
-      const tiles = item?.preview_tiles || [];
+      const tiles = this.galleryPreviewTiles(item);
       if (tiles.length) {
         for (const tile of tiles.slice(0, 4)) {
           const url = this.galleryTileUrl(tile);
@@ -2554,7 +2581,7 @@ function galleryApp() {
       if (this.randomModeActive()) {
         return "";
       }
-      return `gallery-page:sources-v2:${params.toString()}`;
+      return `gallery-page:video-v3:${params.toString()}`;
     },
 
     readLocalGalleryCache(key) {
@@ -2670,6 +2697,7 @@ function galleryApp() {
     },
 
     observeGalleryCards() {
+      this.observeNarrowMasonry();
       if (typeof IntersectionObserver === "undefined") {
         const quality = {};
         this.galleryWindowItems().forEach((item) => {
@@ -2817,6 +2845,7 @@ function galleryApp() {
     openGallery(category) {
       this.currentView = "gallery";
       this.category = category;
+      if (category === "video") this.galleryViewMode = "folder";
       this.selectedSubscriptionUids = [];
       this.queuedCancelConfirmId = null;
       this.closeSidebarDrawer();
@@ -2952,6 +2981,7 @@ function galleryApp() {
       if (mode !== "folder" && mode !== "pair") {
         return;
       }
+      if (this.category === "video") mode = "folder";
       this.galleryViewMode = mode;
       localStorage.setItem("gallery_view_mode", mode);
       this.closeGalleryLayers();
@@ -3070,13 +3100,136 @@ function galleryApp() {
     },
 
     isStandaloneVideoFolder(folder, folderName = "") {
-      const name = String(folder?.folder_name || folderName || "");
-      const videoCount = Number(folder?.video_count || folder?.videos?.length || 0);
-      const livePhotoCount = Number(folder?.livephoto_count || 0);
-      const hasLivePhoto = !!folder?.has_livephoto || livePhotoCount > 0;
-      const imageCount = Number(folder?.image_count || 0);
-      if (videoCount <= 0 || hasLivePhoto) return false;
-      return name.startsWith("xhs_") || imageCount === 0;
+      return Number(folder?.video_count || folder?.videos?.length || 0) > 0;
+    },
+
+    galleryPreviewTiles(item) {
+      const tiles = item?.preview_tiles || [];
+      return this.narrowViewport || this.isStandaloneVideoFolder(item) ? tiles.slice(0, 1) : tiles;
+    },
+
+    galleryCoverStyle(item) {
+      if (!this.narrowViewport) return null;
+      const tile = this.galleryPreviewTiles(item)[0];
+      const ratio = tile?.width > 0 && tile?.height > 0 ? tile.width / tile.height : 3 / 4;
+      return `aspect-ratio: ${Math.max(.65, Math.min(1.3, ratio))};`;
+    },
+
+    observeNarrowMasonry() {
+      if (typeof document === 'undefined') return;
+      masonryObserver?.disconnect();
+      const cards = document.querySelectorAll('.gallery-page .gallery-item-card');
+      if (!this.narrowViewport) {
+        cards.forEach(card => card.style.removeProperty('grid-row-end'));
+        return;
+      }
+      const measure = content => {
+        const card = content.parentElement;
+        const height = content.getBoundingClientRect().height;
+        if (height > 0) card.style.gridRowEnd = `span ${Math.ceil((height + 8) / 12)}`;
+      };
+      if (!masonryObserver) masonryObserver = new ResizeObserver(entries => entries.forEach(entry => measure(entry.target)));
+      cards.forEach(card => {
+        const content = card.firstElementChild?.tagName === 'TEMPLATE' ? card.querySelector(':scope > div') : card.firstElementChild;
+        if (content) { measure(content); masonryObserver.observe(content); }
+      });
+    },
+
+    prepareVideoFeed(folder) {
+      if (this.currentView !== 'gallery') return;
+      const seen = new Set();
+      const items = [...(this.gallery.items || []), ...(this.galleryBatchQueue || [])]
+        .filter(item => !item.__deleted_placeholder && this.isStandaloneVideoFolder(item))
+        .filter(item => !seen.has(item.folder_name) && seen.add(item.folder_name));
+      if (!items.some(item => item.folder_name === folder.folder_name)) items.push(folder);
+      const params = new URLSearchParams({
+        category: this.category === 'search' ? 'all' : this.category,
+        view_mode: 'folder', sort_order: this.sortOrder,
+        page_size: String(this.gallery.page_size || this.preferredGalleryPageSize()),
+      });
+      if (this.timeFilterApplied.startMonth) params.set('start_month', this.timeFilterApplied.startMonth);
+      if (this.timeFilterApplied.endMonth) params.set('end_month', this.timeFilterApplied.endMonth);
+      if (this.selectedSubscriptionUids.length) params.set('subscription_uids', this.selectedSubscriptionUids.join(','));
+      else if (this.sourceKind !== 'all') params.set('source_kind', this.sourceKind);
+      if (this.category === 'search' && this.searchQuery) params.set('search_query', this.searchQuery);
+      this.videoFeed = { active: true, items, index: items.findIndex(item => item.folder_name === folder.folder_name),
+        page: this.lastLoadedGalleryPage(), totalPages: this.randomModeActive() ? 1 : this.galleryTotalPages(), params: params.toString(), busy: false };
+      this.videoFeedMessage = '';
+    },
+
+    async stepVideoFeed(direction) {
+      if (!this.videoNote.open || !this.videoFeed.active || this.videoFeed.busy) return;
+      const token = ++this.videoFeedToken;
+      this.videoFeed.busy = true;
+      this.videoFeedMessage = '';
+      this.videoFeedDirection = direction;
+      try {
+        const index = this.videoFeed.index + direction;
+        while (index >= this.videoFeed.items.length && this.videoFeed.page < this.videoFeed.totalPages) {
+          const page = this.videoFeed.page + 1;
+          const params = new URLSearchParams(this.videoFeed.params);
+          params.set('page', String(page));
+          const payload = await this.api(`/api/gallery/items?${params}`);
+          if (token !== this.videoFeedToken || !this.videoNote.open) return;
+          const seen = new Set(this.videoFeed.items.map(item => item.folder_name));
+          const items = (payload.items || []).filter(item => this.isStandaloneVideoFolder(item) && !seen.has(item.folder_name) && seen.add(item.folder_name));
+          this.videoFeed.items.push(...items);
+          this.videoFeed.page = page;
+          this.videoFeed.totalPages = Number(payload.total_pages || page);
+        }
+        if (index < 0 || index >= this.videoFeed.items.length) {
+          this.videoFeedMessage = direction > 0 ? '已经是最后一条视频' : '已经是第一条视频';
+          return;
+        }
+        const item = this.videoFeed.items[index];
+        const payload = this.cachedDetail(item.folder_name) || await this.api(`/api/gallery/folders/${encodeURIComponent(item.folder_name)}`);
+        if (token !== this.videoFeedToken || !this.videoNote.open) return;
+        if (!payload.videos?.length) {
+          this.videoFeedMessage = '这条视频暂时无法播放，请重试或切换下一条';
+          this.videoFeed.items.splice(index, 1);
+          if (direction < 0) this.videoFeed.index -= 1;
+          return;
+        }
+        this.cacheDetailPayload(item.folder_name, payload);
+        this.videoFeed.index = index;
+        this.pendingTrashFolder = null;
+        this.$refs?.xhsNoteVideo?.pause();
+        // Recreate the player so the previous source cannot continue playing.
+        this.videoNote.video = null;
+        await this.$nextTick();
+        if (token !== this.videoFeedToken || !this.videoNote.open) return;
+        this.openVideoNote(payload);
+      } catch (error) {
+        if (token === this.videoFeedToken) this.videoFeedMessage = error.message || '读取视频失败，请重试';
+      } finally {
+        if (token === this.videoFeedToken) this.videoFeed.busy = false;
+      }
+    },
+
+    startVideoFeedGesture(event) {
+      this.videoFeedGesture = null;
+      if (!this.narrowViewport || !this.videoFeed.active || event.touches.length !== 1 || event.target.closest('button, a, input, header, .video-feed-caption')) return;
+      const touch = event.touches[0];
+      const player = this.$refs?.xhsNoteVideo;
+      if (player && touch.clientY > player.getBoundingClientRect().bottom - 72) return;
+      this.videoFeedGesture = { x: touch.clientX, y: touch.clientY };
+    },
+
+    moveVideoFeedGesture(event) {
+      if (event.touches.length !== 1) { this.videoFeedGesture = null; return; }
+      if (!this.videoFeedGesture) return;
+      const dy = event.touches[0].clientY - this.videoFeedGesture.y;
+      const dx = event.touches[0].clientX - this.videoFeedGesture.x;
+      if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx) && event.cancelable) event.preventDefault();
+    },
+
+    endVideoFeedGesture(event) {
+      const start = this.videoFeedGesture;
+      this.videoFeedGesture = null;
+      if (!start || !event.changedTouches.length) return;
+      const dx = event.changedTouches[0].clientX - start.x;
+      const dy = event.changedTouches[0].clientY - start.y;
+      if (Math.abs(dy) >= 60 && Math.abs(dy) > Math.abs(dx) * 1.4) this.stepVideoFeed(dy < 0 ? 1 : -1);
     },
 
     async openFolder(folderName, previewOverride = null) {
@@ -3104,6 +3257,7 @@ function galleryApp() {
         || (this.gallery.items || []).find((item) => item.folder_name === folderName)
         || (this.duplicateGroups || []).flatMap((group) => group.items || []).find((item) => item.folder_name === folderName);
       const likelyVideo = this.isStandaloneVideoFolder(previewFolder, folderName);
+      if (likelyVideo) this.prepareVideoFeed(previewFolder);
       const cached = this.cachedDetail(folderName);
       if (cached) {
         if (this.openVideoNote(cached)) return;
@@ -3214,9 +3368,22 @@ function galleryApp() {
       this.closeDetail(true);
       this.pauseCurrentViewerMedia(true);
       this.videoNote = { open: true, loading: false, folder, video: payload.videos[0], error: '' };
+      if (this.narrowViewport && this.videoFeed.active && !this.videoFeed.hintShown) {
+        this.videoFeed.hintShown = true;
+        this.showVideoFeedHint();
+      }
       this.syncBodyLock();
       this.$nextTick(() => this.startVideoNote());
       return true;
+    },
+
+    showVideoFeedHint() {
+      if (this.videoFeedHintTimer) window.clearTimeout(this.videoFeedHintTimer);
+      this.videoFeedHintVisible = true;
+      this.videoFeedHintTimer = window.setTimeout(() => {
+        this.videoFeedHintVisible = false;
+        this.videoFeedHintTimer = null;
+      }, 2000);
     },
 
     startVideoNote() {
@@ -3239,6 +3406,16 @@ function galleryApp() {
     },
 
     closeVideoNote() {
+      if (this.videoFeedHintTimer) window.clearTimeout(this.videoFeedHintTimer);
+      this.videoFeedHintTimer = null;
+      this.videoFeedHintVisible = false;
+      this.pendingTrashFolder = null;
+      this.detailRequestId += 1;
+      this.videoFeedToken += 1;
+      this.videoFeed.active = false;
+      this.videoFeed.busy = false;
+      this.videoFeedGesture = null;
+      this.videoFeedMessage = '';
       const video = this.$refs?.xhsNoteVideo;
       if (video) {
         video.pause();
@@ -3740,7 +3917,8 @@ function galleryApp() {
           bodyWidth: body.style.width || "",
           bodyPaddingRight: body.style.paddingRight || "",
         };
-        html.style.scrollbarGutter = "stable";
+        html.style.overflow = "hidden";
+        html.style.scrollbarGutter = "auto";
         body.style.scrollbarGutter = "auto";
         body.style.overflow = "hidden";
         body.style.position = "fixed";
@@ -6434,43 +6612,40 @@ function galleryApp() {
       }
     },
 
-    async toggleFavorite(item, event = null) {
-      if (event) {
-        event.stopPropagation();
+    applyFolderFavorite(folderName, favorite) {
+      const folders = [...(this.gallery.items || []), ...(this.videoFeed.items || []), this.detail.folder, this.videoNote.folder];
+      for (const folder of folders) {
+        if (folder?.folder_name === folderName) folder.is_favorite = !!favorite;
       }
+      this.updateCachedDetailFavorite(folderName, !!favorite);
+    },
+
+    async toggleFavorite(item, event = null) {
+      event?.stopPropagation();
+      if (!item?.folder_name || this.favoritePending[item.folder_name]) return;
+      const folderName = item.folder_name;
+      this.favoritePending[folderName] = true;
       const favorite = !item.is_favorite;
       const previous = !!item.is_favorite;
       item.is_favorite = favorite;
-      if (this.detail.folder?.folder_name === item.folder_name) {
-        this.detail.folder.is_favorite = favorite;
-      }
-      this.updateCachedDetailFavorite(item.folder_name, favorite);
-      if (this.category === "favorites" && !favorite) {
-        this.removeFolderFromGallery(item.folder_name);
-      }
-      this.refreshMeta().catch(() => {});
+      this.applyFolderFavorite(folderName, favorite);
+      if (this.category === "favorites" && !favorite) this.removeFolderFromGallery(folderName);
       try {
-        const result = await this.api(`/api/gallery/folders/${encodeURIComponent(item.folder_name)}/favorite`, {
+        const result = await this.api(`/api/gallery/folders/${encodeURIComponent(folderName)}/favorite`, {
           method: "POST",
           body: JSON.stringify({ favorite }),
         });
         item.is_favorite = result.favorite;
-        if (this.detail.folder?.folder_name === item.folder_name) {
-          this.detail.folder.is_favorite = result.favorite;
-        }
-        this.updateCachedDetailFavorite(item.folder_name, result.favorite);
-        await Promise.all([
-          this.refreshMeta(),
-          this.applyMutationSidebarCounts(result, ["all", "favorites", "livephoto"]),
-        ]);
+        this.applyFolderFavorite(folderName, result.favorite);
+        await Promise.all([this.refreshMeta(), this.applyMutationSidebarCounts(result, ["all", "favorites", "livephoto"])]);
         this.notify("success", result.favorite ? "已收藏" : "已取消收藏", result.message);
       } catch (error) {
         item.is_favorite = previous;
-        if (this.detail.folder?.folder_name === item.folder_name) {
-          this.detail.folder.is_favorite = previous;
-        }
-        this.updateCachedDetailFavorite(item.folder_name, previous);
-        await this.refreshGallery(true);
+        this.applyFolderFavorite(folderName, previous);
+        await this.refreshGallery(true).catch(() => {});
+        this.notify("error", "收藏失败", error.message || "请稍后重试");
+      } finally {
+        delete this.favoritePending[folderName];
       }
     },
 
@@ -7400,40 +7575,20 @@ function galleryApp() {
     },
 
     async runPull() {
-      let url = "/api/pull/run";
-      const isXhsPull = this.currentView === 'gallery' && this.sourceKind === 'xhs';
-      if (isXhsPull) url = '/api/xhs/sync';
-      if (this.currentView === "gallery" && this.selectedSubscriptionUids.length === 1) {
-        url = `/api/subscriptions/${encodeURIComponent(this.selectedSubscriptionUids[0])}/pull`;
+      if (this.currentView !== 'subscriptions' || this.subscriptionPanel !== 'up' || this.subscriptionPullPending) return;
+      this.subscriptionPullPending = true;
+      try {
+        this.setImmediateTaskFeedback('正在提交 UP 主动态拉取任务...');
+        const result = await this.api('/api/pull/run', { method: 'POST' });
+        this.clearLocalGalleryCaches();
+        this.scheduleStatusRefresh();
+        await Promise.all([this.refreshStatus(), this.refreshTasks(), this.applyMutationSidebarCounts(result, ['all', 'video', 'livephoto', 'tasks'])]);
+        this.notify('info', 'UP 主拉取已提交', result.message);
+      } catch (error) {
+        this.notify('error', '拉取失败', error.message || '请稍后重试');
+      } finally {
+        this.subscriptionPullPending = false;
       }
-      const isSitePull = this.selectedSubscriptionUids.length === 1 && String(this.selectedSubscriptionUids[0]).startsWith("site:");
-      if (isXhsPull) {
-        this.setImmediateTaskFeedback('正在提交小红书同步任务...');
-      } else if (isSitePull) {
-        this.setImmediateSiteTaskFeedback("正在提交站点拉取任务...", { running: true });
-      } else {
-        this.setImmediateTaskFeedback("正在提交拉取任务...");
-      }
-      const result = await this.api(url, { method: "POST", ...(isXhsPull ? { body: '{}' } : {}) });
-      this.clearLocalGalleryCaches();
-      this.scheduleStatusRefresh();
-      await Promise.all([
-        this.refreshStatus(),
-        this.refreshTasks(),
-        this.applyMutationSidebarCounts(result, ["all", "favorites", "livephoto", "review", "logs", "tasks", "subscriptions", "sites"]),
-      ]);
-      this.notify("info", "任务已提交", result.message);
-    },
-
-    runPullButtonLabel() {
-      if (this.currentView === 'gallery' && this.sourceKind === 'xhs') return this.compactViewport ? '同步' : '同步小红书';
-      if (this.compactViewport) {
-        return "拉取";
-      }
-      if (this.currentView === "gallery" && this.selectedSubscriptionUids.length === 1) {
-        return "拉取当前订阅";
-      }
-      return "立即拉取";
     },
 
     async refreshStatus() {

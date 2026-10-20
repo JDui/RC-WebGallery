@@ -28,6 +28,8 @@ class GalleryService:
         view_mode: str = "folder",
         sort_order: str = "desc",
     ) -> dict:
+        if category == "video":
+            view_mode = "folder"
         source_kind = self._normalize_source_kind(source_kind)
         cacheable = sort_order != "random"
         cache_signature = self.db.gallery_page_cache_signature() if cacheable else ""
@@ -493,13 +495,15 @@ class GalleryService:
     def _fallback_gallery_meta(self) -> dict:
         folders = self.db.list_folders()
         years: dict[str, list[str]] = {}
-        counts = {"all": 0, "images": 0, "livephoto": 0, "paired": 0, "unpaired": 0, "favorites": 0}
+        counts = {"all": 0, "images": 0, "video": 0, "livephoto": 0, "paired": 0, "unpaired": 0, "favorites": 0}
         subscriptions: dict[str, dict] = {}
         for folder in folders:
             pub_time = folder.get("pub_time", "")
             year = pub_time[:4] if pub_time else "未知"
             month = pub_time[:7] if pub_time else "未知"
             counts["all"] += 1
+            if any(asset["media_type"] == "video" for asset in self.db.list_assets_for_folder(folder["folder_name"])):
+                counts["video"] += 1
             if folder["has_images"]:
                 counts["images"] += 1
             if folder["has_livephoto"]:
@@ -613,6 +617,8 @@ class GalleryService:
                 return False
         if category == "all":
             return True
+        if category == "video":
+            return any(asset["media_type"] == "video" for asset in self.db.list_assets_for_folder(folder["folder_name"]))
         if category == "images":
             return bool(folder["has_images"])
         if category == "livephoto":
