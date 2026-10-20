@@ -244,6 +244,8 @@ def normalize_note(raw: dict, *, detail: bool = False) -> tuple[dict, list[tuple
         title_value = ''
     if not title_value.strip():
         title_value = card.get('desc') or card.get('content') or card.get('description') or card.get('note_desc') or ''
+    if not isinstance(title_value, str) or title_value.strip() == note_id:
+        title_value = ''
     title = re.sub(r'\s+', ' ', re.sub(r'[\x00-\x1f]', ' ', str(title_value))).strip()[:1000] or note_id
     note = {'note_id': note_id, 'url': f'https://www.xiaohongshu.com/explore/{note_id}', 'title': title,
             'author_id': author, 'type': 'video' if card.get('type') == 'video' or bool(video) else 'image',
