@@ -19,7 +19,7 @@ from uuid import uuid4
 from app.services.xhs.models import XhsNote, identifier
 from app.services.xhs.browser_errors import launch_diagnostic
 from xhs_worker.media import download_public_media
-from xhs_worker.parser import extract_detail_note, normalize_note, response_page, media_url, video_diagnostic
+from xhs_worker.parser import extract_detail_note, normalize_note, response_page, media_url, extract_video_urls, video_diagnostic
 
 
 class BrowserFault(RuntimeError):
@@ -58,6 +58,8 @@ class BrowserRuntime:
         self.session_deadline = 0.0
         self.queue = deque(maxlen=12)
         self.assets = {}
+        self.asset_candidates = {}
+        self.avatar_url = None
         self.note_links = {}
         self.seen = set()
         self.cursors = set()
@@ -175,6 +177,28 @@ class BrowserRuntime:
         except Exception:
             return
 
+    @staticmethod
+    def _safe_avatar_url(value):
+        if not isinstance(value, str) or len(value) > 2048:
+            return None
+        value = value.replace("\\u002F", "/").replace("\\/", "/")
+        if value.startswith("//"):
+            value = "https:" + value
+        elif value.startswith("http://"):
+            value = "https://" + value[7:]
+        try:
+            parsed = urlsplit(value)
+            host = (parsed.hostname or "").lower()
+            trusted_host = (
+                host == "xiaohongshu.com" or host.endswith(".xiaohongshu.com")
+                or host == "xhscdn.com" or host.endswith(".xhscdn.com")
+            )
+            if parsed.scheme != "https" or not trusted_host or parsed.port not in (None, 443):
+                return None
+        except ValueError:
+            return None
+        return value
+
     async def _identity(self) -> str:
         challenges = self.page.locator('.captcha-container, .security-verify, iframe[src*="captcha"]')
         for index in range(await challenges.count()):
@@ -183,19 +207,29 @@ class BrowserRuntime:
                 raise BrowserFault(self.state)
         links = self.page.locator('a.channel[href*="/user/profile/"], .side-bar a[href*="/user/profile/"], a.user[href*="/user/profile/"], [data-testid="self-profile"][href]')
         href = None
+        profile_link = None
         for index in range(await links.count()):
             link = links.nth(index)
             if await link.is_visible() and ('我' in await link.inner_text() or await link.get_attribute('data-testid') == 'self-profile'):
                 href = await link.get_attribute('href')
+                profile_link = link
                 break
         match = re.search(r'/user/profile/([A-Za-z0-9_-]+)', href or '')
         target = urlsplit(urljoin('https://www.xiaohongshu.com/', href or ''))
         if not match or target.scheme != 'https' or target.netloc != 'www.xiaohongshu.com':
             self.state = 'NEEDS_REAUTH'
             raise BrowserFault('NEEDS_REAUTH')
+        avatar = None
+        if profile_link is not None:
+            try:
+                avatar = await profile_link.locator('img').first.evaluate(
+                    "(node) => node.currentSrc || node.src || node.getAttribute('data-src') || node.getAttribute('data-lazy-src') || ''"
+                )
+            except Exception:
+                avatar = None
+        self.avatar_url = self._safe_avatar_url(avatar)
         self.profile_url = urljoin('https://www.xiaohongshu.com/', href)
         return 'acct_' + hmac.new(self.owner_salt, match[1].encode(), hashlib.sha256).hexdigest()[:32]
-
     def _viewer(self):
         password = secrets.token_urlsafe(6)[:8]
         password_file = self.work / ('vnc-' + uuid4().hex)
@@ -240,12 +274,12 @@ class BrowserRuntime:
             self.owner_key = owner
             await self._close()
             self.state = 'READY'
-            return {'state': self.state, 'owner_key': owner}
+            return {'state': self.state, 'owner_key': owner, 'avatar_url': self.avatar_url}
 
     async def check(self):
         async with self.lock:
             if self.session_id or self.login_deadline:
-                return {'state': self.state, 'owner_key': self.owner_key}
+                return {'state': self.state, 'owner_key': self.owner_key, 'avatar_url': self.avatar_url}
             try:
                 await self._launch()
                 await self.page.goto('https://www.xiaohongshu.com/explore', wait_until='domcontentloaded')
@@ -255,7 +289,7 @@ class BrowserRuntime:
                 self.owner_key, self.state = owner, 'READY'
             finally:
                 await self._close()
-            return {'state': self.state, 'owner_key': self.owner_key}
+            return {'state': self.state, 'owner_key': self.owner_key, 'avatar_url': self.avatar_url}
 
     async def session_start(self, owner_key, allowed_notes=()):
         async with self.lock:
@@ -266,6 +300,7 @@ class BrowserRuntime:
                 self.queue.clear()
                 self.cancel_event.clear()
                 self.assets.clear()
+                self.asset_candidates.clear()
                 self.note_links.clear()
                 self.seen.clear()
                 self.cursors.clear()
@@ -320,7 +355,11 @@ class BrowserRuntime:
                     for raw in raws:
                         note, candidates = normalize_note(raw)
                         for ordinal, kind, url in candidates:
-                            self.assets[(note['note_id'], ordinal, kind)] = url
+                            key = (note['note_id'], ordinal, kind)
+                            self.assets[key] = url
+                            if kind == 'video':
+                                card = raw.get('note_card') or raw.get('noteCard') or raw
+                                self.asset_candidates[key] = extract_video_urls(card.get('video'))
                         safe_note = XhsNote.parse(note)
                         from dataclasses import asdict
                         result.append(asdict(safe_note))
@@ -428,7 +467,10 @@ class BrowserRuntime:
                 safe_note = asdict(parsed_note)
                 safe_note['assets'] = [asdict(asset) for asset in parsed_note.assets]
                 for ordinal, kind, url in candidates:
-                    self.assets[(note_id, ordinal, kind)] = url
+                    key = (note_id, ordinal, kind)
+                    self.assets[key] = url
+                    if kind == 'video':
+                        self.asset_candidates[key] = extract_video_urls(card.get('video'))
                 return {'note_id': note_id, 'assets': note['assets'], 'note': safe_note, 'media_complete': True}
             finally:
                 await detail.close()
@@ -493,8 +535,24 @@ class BrowserRuntime:
             if not url:
                 raise BrowserFault('MEDIA_NEEDS_RESOLUTION')
             target = self.work / (uuid4().hex + '.media')
-            metadata = await asyncio.to_thread(download_public_media, url, target, cancelled=self.cancel_event.is_set)
-            return target, metadata
+            candidate_urls = self.asset_candidates.get(key) or [url]
+            last_error = None
+            for candidate in candidate_urls[:16]:
+                if self.cancel_event.is_set():
+                    raise BrowserFault('CANCELLED')
+                try:
+                    metadata = await asyncio.to_thread(
+                        download_public_media, candidate, target, cancelled=self.cancel_event.is_set
+                    )
+                    return target, metadata
+                except Exception as exc:
+                    last_error = exc
+                    target.unlink(missing_ok=True)
+                    if self.cancel_event.is_set():
+                        raise BrowserFault('CANCELLED') from None
+            if last_error:
+                raise last_error
+            raise BrowserFault('MEDIA_NEEDS_RESOLUTION')
 
     async def cancel(self, session_id):
         self._require_session(session_id)
@@ -513,6 +571,7 @@ class BrowserRuntime:
             await self._close()
             self.session_id = None
             self.assets.clear()
+            self.asset_candidates.clear()
             self.note_links.clear()
             self.detail_payload.clear()
             self.queue.clear()

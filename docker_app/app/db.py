@@ -13,7 +13,7 @@ from app.services.xhs.schema import migrate as migrate_xhs
 
 DEFAULT_SETTINGS = {
     "host_mid": 31968078,
-    "app_title": os.environ.get("APP_TITLE", "BiliGalleryRC"),
+    "app_title": os.environ.get("APP_TITLE", "RC-WebGallery"),
     "pull_images": True,
     "image_min_count": 6,
     "pull_livephoto": True,
@@ -59,6 +59,8 @@ DEFAULT_SETTINGS = {
     "thumb_quality": 68,
     "small_thumb_edge": 192,
     "small_thumb_quality": 48,
+    "video_default_loop": True,
+    "video_default_volume": 0,
     "storage_stats_cache": {
         "image_bytes": 0,
         "thumbnail_bytes": 0,

@@ -224,7 +224,7 @@ function galleryApp() {
     pullStatus: {},
     qr: {},
     detail: { open: false, pairs: [], folder: null, videos: [] },
-    videoNote: { open: false, folder: null, video: null, error: '' },
+    videoNote: { open: false, loading: false, folder: null, video: null, error: '' },
     detailCache: {},
     detailCacheOrder: [],
     detailCacheLimit: 3,
@@ -2839,7 +2839,17 @@ function galleryApp() {
       await this.refreshGallery(true);
     },
 
-    async openFolder(folderName) {
+    isStandaloneVideoFolder(folder, folderName = "") {
+      const name = String(folder?.folder_name || folderName || "");
+      const videoCount = Number(folder?.video_count || folder?.videos?.length || 0);
+      const livePhotoCount = Number(folder?.livephoto_count || 0);
+      const hasLivePhoto = !!folder?.has_livephoto || livePhotoCount > 0;
+      const imageCount = Number(folder?.image_count || 0);
+      if (videoCount <= 0 || hasLivePhoto) return false;
+      return name.startsWith("xhs_") || imageCount === 0;
+    },
+
+    async openFolder(folderName, previewOverride = null) {
       this.closeVideoNote();
       if (this.detailCloseTimer) {
         window.clearTimeout(this.detailCloseTimer);
@@ -2860,39 +2870,48 @@ function galleryApp() {
       this.detailClosing = false;
       this.detailRequestId += 1;
       const requestId = this.detailRequestId;
-      const previewFolder = (this.gallery.items || []).find((item) => item.folder_name === folderName)
+      const previewFolder = previewOverride
+        || (this.gallery.items || []).find((item) => item.folder_name === folderName)
         || (this.duplicateGroups || []).flatMap((group) => group.items || []).find((item) => item.folder_name === folderName);
+      const likelyVideo = this.isStandaloneVideoFolder(previewFolder, folderName);
       const cached = this.cachedDetail(folderName);
       if (cached) {
         if (this.openVideoNote(cached)) return;
-        this.detailLoading = false;
+        if (!likelyVideo) {
+          this.detailLoading = false;
+          this.detail = {
+            ...cached,
+            open: true,
+            folder: previewFolder ? { ...cached.folder, ...previewFolder } : cached.folder,
+          };
+          this.resetDetailWindow();
+          this.syncBodyLock();
+          resetDetailScroll();
+          this.scheduleDetailThumbnailPromotion(folderName, requestId);
+          return;
+        }
+      }
+
+      this.detailLoading = false;
+      if (likelyVideo) {
+        this.openVideoNoteLoading(previewFolder || cached?.folder || { folder_name: folderName, title: folderName });
+      } else {
+        const previewPairs = this.detailPreviewPairs(folderName, previewFolder);
         this.detail = {
-          ...cached,
           open: true,
-          folder: previewFolder ? { ...cached.folder, ...previewFolder } : cached.folder,
+          pairs: this.detail.folder?.folder_name === folderName ? this.detail.pairs : previewPairs,
+          folder: previewFolder || this.detail.folder || { folder_name: folderName, title: folderName },
+          videos: this.detail.folder?.folder_name === folderName ? (this.detail.videos || []) : [],
         };
         this.resetDetailWindow();
         this.syncBodyLock();
         resetDetailScroll();
-        this.scheduleDetailThumbnailPromotion(folderName, requestId);
-        return;
       }
-      this.detailLoading = false;
-      const previewPairs = this.detailPreviewPairs(folderName, previewFolder);
-      this.detail = {
-        open: true,
-        pairs: this.detail.folder?.folder_name === folderName ? this.detail.pairs : previewPairs,
-        folder: previewFolder || this.detail.folder || { folder_name: folderName, title: folderName },
-        videos: this.detail.folder?.folder_name === folderName ? (this.detail.videos || []) : [],
-      };
-      this.resetDetailWindow();
-      this.syncBodyLock();
-      resetDetailScroll();
       if (requestId !== this.detailRequestId) {
         return;
       }
       try {
-        const payload = await this.api(`/api/gallery/folders/${encodeURIComponent(folderName)}`);
+        const payload = await this.api(\`/api/gallery/folders/\${encodeURIComponent(folderName)}\`);
         if (requestId !== this.detailRequestId) {
           return;
         }
@@ -2900,6 +2919,19 @@ function galleryApp() {
         if (this.openVideoNote(payload)) {
           this.cacheDetailPayload(folderName, payload);
           return;
+        }
+        if (likelyVideo || this.isStandaloneVideoFolder(payload.folder, folderName)) {
+          if (!this.videoNote.open || this.videoNote.folder?.folder_name !== folderName) {
+            this.openVideoNoteLoading(payload.folder || previewFolder || { folder_name: folderName, title: folderName });
+          }
+          this.videoNote.folder = payload.folder || this.videoNote.folder;
+          this.videoNote.loading = false;
+          this.videoNote.error = "视频尚未成功归档，或详情中没有可播放的视频文件。请重试媒体后再打开。";
+          this.syncBodyLock();
+          return;
+        }
+        if (this.videoNote.open && this.videoNote.folder?.folder_name === folderName) {
+          this.closeVideoNote();
         }
         const detailPairs = this.normalizeDetailPairs(payload.pairs || [], false, this.detail.pairs || []);
         const applyDetailPayload = () => {
@@ -2926,15 +2958,32 @@ function galleryApp() {
           return;
         }
         this.detailLoading = false;
+        if (this.videoNote.open && this.videoNote.folder?.folder_name === folderName) {
+          this.videoNote.loading = false;
+          this.videoNote.error = "读取视频详情失败，请检查归档文件或重试媒体。";
+          return;
+        }
         this.closeDetail(true);
       }
     },
 
-    openVideoNote(payload) {
-      if (!String(payload.folder?.folder_name || '').startsWith('xhs_') || !payload.videos?.length) return false;
+    openVideoNoteLoading(folder) {
       this.closeDetail(true);
       this.pauseCurrentViewerMedia(true);
-      this.videoNote = { open: true, folder: payload.folder, video: payload.videos[0], error: '' };
+      this.detail = { open: false, pairs: [], folder: folder || null, videos: [] };
+      this.videoNote = { open: true, loading: true, folder: folder || null, video: null, error: '' };
+      this.syncBodyLock();
+    },
+
+    openVideoNote(payload) {
+      const folder = payload?.folder;
+      const isXhs = String(folder?.folder_name || '').startsWith('xhs_');
+      const standalone = this.isStandaloneVideoFolder(folder)
+        || (isXhs && payload?.videos?.length > 0 && !folder?.has_livephoto);
+      if (!standalone || !payload?.videos?.length) return false;
+      this.closeDetail(true);
+      this.pauseCurrentViewerMedia(true);
+      this.videoNote = { open: true, loading: false, folder, video: payload.videos[0], error: '' };
       this.syncBodyLock();
       this.$nextTick(() => this.startVideoNote());
       return true;
@@ -2943,12 +2992,19 @@ function galleryApp() {
     startVideoNote() {
       const video = this.$refs?.xhsNoteVideo;
       if (!video || !this.videoNote.open) return;
-      video.defaultMuted = true;
-      video.muted = true;
+      const configuredVolume = Number(this.settings?.video_default_volume);
+      const volumePercent = Number.isFinite(configuredVolume) ? configuredVolume : 0;
+      const volume = Math.max(0, Math.min(100, volumePercent)) / 100;
+      video.loop = this.settings?.video_default_loop !== false;
+      video.volume = volume;
+      video.muted = volume <= 0;
+      video.defaultMuted = video.muted;
       const playing = video.play();
       playing?.catch(() => {
         if (this.videoNote.open && video === this.$refs?.xhsNoteVideo)
-          this.videoNote.error = '自动播放未能开始，请点击播放器中的播放按钮。';
+          this.videoNote.error = volume > 0
+            ? '浏览器阻止了带声音的自动播放，请点击播放器中的播放按钮。'
+            : '自动播放未能开始，请点击播放器中的播放按钮。';
       });
     },
 
@@ -2959,7 +3015,7 @@ function galleryApp() {
         video.removeAttribute('src');
         video.load();
       }
-      this.videoNote = { open: false, folder: null, video: null, error: '' };
+      this.videoNote = { open: false, loading: false, folder: null, video: null, error: '' };
       this.syncBodyLock();
     },
 
@@ -6538,7 +6594,9 @@ function galleryApp() {
           site_proxy_port: Math.max(1, Math.min(65535, Number(settingsPayload.site_proxy_port) || 7890)),
           review_source_open_mode: settingsPayload.review_source_open_mode === "popup" ? "popup" : "browser",
           duplicate_image_threshold: Math.max(1, Math.min(100, Number(settingsPayload.duplicate_image_threshold) || 2)),
-          app_title: String(settingsPayload.app_title || "BiliGalleryRC").trim() || "BiliGalleryRC",
+          app_title: String(settingsPayload.app_title || "RC-WebGallery").trim() || "RC-WebGallery",
+          video_default_loop: settingsPayload.video_default_loop !== false,
+          video_default_volume: Math.max(0, Math.min(100, Math.round(Number(settingsPayload.video_default_volume) || 0))),
           thumb_edge: Math.max(128, Math.min(2048, Number(settingsPayload.thumb_edge) || 576)),
           thumb_quality: Math.max(1, Math.min(100, Number(settingsPayload.thumb_quality) || 68)),
           small_thumb_edge: Math.max(64, Math.min(1024, Number(settingsPayload.small_thumb_edge) || 192)),
@@ -7137,6 +7195,9 @@ function galleryApp() {
       const previousRecentUpdateDisclosure = this.cloneRecentUpdateDisclosure();
       const previousCache = this.detailCache[folderName] ? this.cloneDetailPayload(this.detailCache[folderName]) : null;
       this.pendingTrashFolder = null;
+      if (this.videoNote.folder?.folder_name === folderName) {
+        this.closeVideoNote();
+      }
       if (this.detail.folder?.folder_name === folderName) {
         this.closeDetail();
       }
@@ -7391,7 +7452,7 @@ function galleryApp() {
           window.clearTimeout(this.xhsLoginTimer);
           this.xhsLoginSession = null;
         }
-        await this.loadXhsSources();
+        await Promise.all([this.loadXhsSources(), this.loadSubscriptions()]);
         this.notify('success', '小红书账号状态已更新', this.xhsAuthText(result.state));
       } catch (error) {
         this.notify('error', '账号操作未完成', error.message);
@@ -7508,7 +7569,17 @@ function galleryApp() {
 
     openXhsNote(source, note) {
       if (note.folder_name) {
-        this.openFolder(note.folder_name);
+        const isVideo = note.note_type === 'video';
+        this.openFolder(note.folder_name, {
+          folder_name: note.folder_name,
+          title: note.title || note.note_id,
+          original_url: note.url || `https://www.xiaohongshu.com/explore/${note.note_id}`,
+          video_count: isVideo ? 1 : 0,
+          image_count: isVideo ? 0 : 1,
+          livephoto_count: 0,
+          has_livephoto: false,
+          has_images: !isVideo,
+        });
       } else {
         this.notify('info', '笔记尚未归档', '请先点击“重试媒体”，完成后可在这里查看图片或播放视频。');
       }

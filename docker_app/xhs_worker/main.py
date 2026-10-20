@@ -64,8 +64,8 @@ def create_app(runtime=None, token: str | None = None):
     @app.get('/status')
     async def status():
         engine = app.state.runtime
-        return {'state': engine.state, 'owner_key': engine.owner_key, 'network_mode': 'direct',
-                'launch_error': getattr(engine, 'last_launch_error', None)}
+        return {'state': engine.state, 'owner_key': engine.owner_key, 'avatar_url': engine.avatar_url,
+                'network_mode': 'direct', 'launch_error': getattr(engine, 'last_launch_error', None)}
 
     @app.post('/auth/{action}')
     async def auth(action: str):

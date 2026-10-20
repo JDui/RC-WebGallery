@@ -83,8 +83,9 @@ class XhsSyncService:
             with self.db.connect() as connection:
                 return self.get_source(source_id, connection)
         row = conn.execute(
-            """select s.id, s.name, s.source_type, s.enabled, a.* from site_sources s
-               join xhs_source_accounts a on a.source_id = s.id where s.id = ? and s.source_type = 'xhs_likes'""",
+            """select s.id, s.name, s.source_type, s.enabled, s.icon_url, s.icon_tiny_url, a.*
+               from site_sources s join xhs_source_accounts a on a.source_id = s.id
+               where s.id = ? and s.source_type = 'xhs_likes'""",
             (source_id,),
         ).fetchone()
         if not row:
@@ -324,8 +325,12 @@ class XhsSyncService:
                 parsed = XhsLikesAdapter.to_post(note)
                 if row:
                     post_id = row["site_post_id"]
+                    existing_post = conn.execute("select title from site_posts where id = ?", (post_id,)).fetchone()
+                    title = parsed.title
+                    if title == note.note_id and existing_post and existing_post["title"] and existing_post["title"] != note.note_id:
+                        title = existing_post["title"]
                     conn.execute("update site_posts set title = ?, pub_date = coalesce(?, pub_date), updated_at = ? where id = ?",
-                                 (parsed.title, parsed.pub_date, now, post_id))
+                                 (title, parsed.pub_date, now, post_id))
                 else:
                     new_count += 1
                     cursor = conn.execute(

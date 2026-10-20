@@ -52,9 +52,15 @@ class XhsManager:
         owner, state = result.get('owner_key'), result.get('state', 'ERROR')
         if state == 'RUNNING':
             state = 'READY'
+        avatar_url = result.get('avatar_url')
+        checked_at = now_iso()
         with self.db.connect() as conn:
             conn.execute('''update xhs_source_accounts set auth_status = ?, last_auth_check_at = ?
-                where owner_key = ?''', (state, now_iso(), owner))
+                where owner_key = ?''', (state, checked_at, owner))
+            if isinstance(avatar_url, str) and avatar_url.startswith('https://'):
+                conn.execute('''update site_sources set icon_url = ?, icon_tiny_url = ?, updated_at = ?
+                    where id in (select source_id from xhs_source_accounts where owner_key = ?)''',
+                    (avatar_url, avatar_url, checked_at, owner))
 
     def login(self, action, payload):
         fields(payload, {'confirm_revoke'}, set())
@@ -359,7 +365,10 @@ class XhsManager:
                 note = XhsNote.parse(resolved.get('note'))
                 if note.note_id != post['note_id'] or tuple(sorted(assets, key=lambda asset: (asset.ordinal, asset.kind))) != note.assets:
                     raise WorkerError('MEDIA_NEEDS_RESOLUTION')
-                post['title'], post['note_type'] = note.title, note.type
+                resolved_title = note.title
+                if resolved_title == note.note_id and post.get('title') and post['title'] != note.note_id:
+                    resolved_title = post['title']
+                post['title'], post['note_type'] = resolved_title, note.type
                 if note.published_at:
                     post['pub_date'] = datetime.fromisoformat(note.published_at).astimezone(TIMEZONE).date().isoformat()
                 with self.db.connect() as conn:

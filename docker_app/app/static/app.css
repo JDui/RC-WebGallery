@@ -1555,9 +1555,22 @@ html.is-interacting .detail-card {
     background:
         linear-gradient(var(--surface-strong), var(--surface-strong)) padding-box,
         linear-gradient(135deg, #d86d88, #e4b260, #3fb7b0, #4c7ee8) border-box;
-    border: 2px solid transparent;
+    border: 3.2px solid transparent;
     background-size: 200% 200%;
     animation: none;
+}
+
+.photo-card.video {
+    background:
+        linear-gradient(var(--surface-strong), var(--surface-strong)) padding-box,
+        linear-gradient(120deg, #f59e0b, #fff7ed, #fb923c, #ffffff, #c2410c, #fff7ed) border-box;
+    border: 3.2px solid transparent;
+    background-size: 100% 100%, 300% 300%;
+    animation: video-border-flow 4s linear infinite;
+}
+
+.photo-card.video.is-appearing {
+    animation: card-fade-in 260ms var(--ease-soft) both, video-border-flow 4s linear infinite;
 }
 
 .photo-visual {
@@ -3237,7 +3250,7 @@ html.is-interacting .detail-card {
     background:
         linear-gradient(rgba(251, 252, 255, 0.96), rgba(251, 252, 255, 0.96)) padding-box,
         linear-gradient(135deg, #d86d88, #e4b260, #3fb7b0, #4c7ee8) border-box;
-    border: 2px solid transparent;
+    border: 3.2px solid transparent;
 }
 
 .detail-card:hover {
@@ -5234,6 +5247,20 @@ html.is-interacting .detail-card {
 }
 .xhs-video-head h3 { margin: 0; overflow-wrap: anywhere; }
 .xhs-video-head button { flex-shrink: 0; }
+.xhs-video-head-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.xhs-video-loading {
+    display: grid;
+    min-height: 220px;
+    place-items: center;
+    color: var(--muted, #667386);
+    font-size: 14px;
+}
 .xhs-video-shell > video {
     display: block;
     width: 100%;
@@ -5263,4 +5290,17 @@ html.is-interacting .detail-card {
     border: 1px solid rgba(174, 49, 66, 0.35);
     border-radius: 14px;
     background: rgba(255, 235, 239, 0.7);
+}
+
+
+@keyframes video-border-flow {
+    0% { background-position: 0 0, 0% 50%; }
+    100% { background-position: 0 0, 100% 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .photo-card.video,
+    .photo-card.video.is-appearing {
+        animation: none;
+    }
 }

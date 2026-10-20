@@ -12,6 +12,7 @@ from app.services.xhs.models import identifier
 def media_url(value):
     if not isinstance(value, str):
         return None
+    value = value.replace("\\u002F", "/").replace("\\/", "/")
     if value.startswith('//'):
         value = 'https:' + value
     elif value.startswith('http://'):
@@ -52,6 +53,8 @@ def origin_video_url(value):
     url = media_url(value)
     if url:
         return url
+    if isinstance(value, str) and value.startswith('/') and not value.startswith('//'):
+        value = value.lstrip('/')
     if (not isinstance(value, str) or len(value) > 2048 or value.startswith('/')
             or not re.fullmatch(r'[A-Za-z0-9_./-]+', value)
             or any(part in {'', '.', '..'} for part in value.split('/'))):
@@ -59,9 +62,10 @@ def origin_video_url(value):
     return 'https://sns-video-bd.xhscdn.com/' + value
 
 
-def extract_video_url(video):
+def extract_video_urls(video):
+    """Return video URL candidates in best-effort unwatermarked-first order."""
     if not isinstance(video, dict):
-        return None
+        return []
     variants = [video]
     media_v2 = video.get('mediaV2') or video.get('media_v2')
     if isinstance(media_v2, str) and len(media_v2) <= 256 * 1024:
@@ -71,6 +75,48 @@ def extract_video_url(video):
             media_v2 = None
     if isinstance(media_v2, dict):
         variants.append(media_v2)
+    urls = []
+    def add_url(value):
+        url = media_url(value)
+        if url and url not in urls and len(urls) < 32:
+            urls.append(url)
+    # The original upload key is the strongest known candidate for a clean source.
+    for variant in variants:
+        consumers = [variant.get('consumer')]
+        nested_video = variant.get('video')
+        if isinstance(nested_video, dict):
+            consumers.append(nested_video.get('consumer'))
+        for consumer in consumers:
+            if not isinstance(consumer, dict):
+                continue
+            key = consumer.get('origin_video_key') or consumer.get('originVideoKey')
+            origin = origin_video_url(key)
+            if origin:
+                add_url(origin)
+        origin = origin_video_url(variant.get('origin_video_key') or variant.get('originVideoKey'))
+        if origin:
+            add_url(origin)
+    # Some responses expose an unwatermarked screencast URL only inside mediaV2.opaque1.
+    for variant in variants:
+        nested_video = variant.get('video') if isinstance(variant.get('video'), dict) else {}
+        opaque1 = nested_video.get('opaque1') or variant.get('opaque1') or {}
+        if isinstance(opaque1, dict):
+            for key in ('hd_screencast_stream', 'default_screencast_stream'):
+                value = opaque1.get(key)
+                if isinstance(value, dict):
+                    for url_key in ('masterUrl', 'master_url', 'url', 'streamUrl', 'stream_url'):
+                        add_url(value.get(url_key))
+                elif isinstance(value, list):
+                    for entry in value:
+                        if isinstance(entry, dict):
+                            for url_key in ('masterUrl', 'master_url', 'url', 'streamUrl', 'stream_url'):
+                                add_url(entry.get(url_key))
+                        else:
+                            add_url(entry)
+                else:
+                    add_url(value)
+    stream_candidates = []
+    ordinal = 0
     for variant in variants:
         media = variant.get('media') or {}
         streams = media.get('stream') if isinstance(media, dict) else None
@@ -78,32 +124,50 @@ def extract_video_url(video):
         if not isinstance(streams, dict):
             continue
         groups = ['h264', 'h265', 'av1', *(key for key in streams if key not in {'h264', 'h265', 'av1'})]
-        entries = [entry for key in groups if isinstance(streams.get(key), list)
-                   for entry in streams[key] if isinstance(entry, dict)]
-        def codec_priority(entry):
-            codec = str(entry.get('video_codec') or entry.get('videoCodec') or '').lower()
-            if '264' in codec or 'avc' in codec:
-                return 0
-            if 'av1' in codec:
-                return 1
-            return 3 if '265' in codec or 'hevc' in codec else 2
-        for entry in sorted(entries, key=codec_priority):
-            backups = entry.get('backup_urls') or entry.get('backupUrls') or []
-            if not isinstance(backups, list):
-                backups = []
-            for candidate in [entry.get('master_url'), entry.get('masterUrl'), *backups]:
-                url = media_url(candidate)
-                if url:
-                    return url
-    for variant in variants:
-        consumer = variant.get('consumer') or {}
-        if isinstance(consumer, dict):
-            url = origin_video_url(consumer.get('origin_video_key') or consumer.get('originVideoKey'))
-            if url:
-                return url
-    return None
+        for codec in groups:
+            entries = streams.get(codec)
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                stream_type = str(entry.get('stream_type') or entry.get('streamType') or '').strip()
+                stream_desc = str(entry.get('stream_desc') or entry.get('streamDesc') or '').upper()
+                watermark_hint = bool(re.search(r'\bWM\b|WATER.?MARK|水印', stream_desc, re.IGNORECASE))
+                if stream_type in {'259', '309'} or watermark_hint:
+                    watermark_rank = 100
+                elif stream_type in {'258', '301'} or 'X264_MP4' in stream_desc:
+                    watermark_rank = 0
+                else:
+                    watermark_rank = 10
+                codec_value = str(entry.get('video_codec') or entry.get('videoCodec') or codec).lower()
+                codec_rank = 0 if ('264' in codec_value or 'avc' in codec_value or codec == 'h264') else (
+                    1 if ('av1' in codec_value or codec == 'av1') else 2
+                )
+                try:
+                    height = int(entry.get('height') or entry.get('video_height') or 0)
+                except (TypeError, ValueError):
+                    height = 0
+                try:
+                    bitrate = int(entry.get('video_bitrate') or entry.get('videoBitrate') or entry.get('bitrate') or 0)
+                except (TypeError, ValueError):
+                    bitrate = 0
+                backups = entry.get('backup_urls') or entry.get('backupUrls') or []
+                if not isinstance(backups, list):
+                    backups = []
+                for candidate in [entry.get('master_url'), entry.get('masterUrl'), *backups]:
+                    url = media_url(candidate)
+                    if url and url not in urls:
+                        stream_candidates.append((watermark_rank, -height, -bitrate, codec_rank, ordinal, url))
+                        ordinal += 1
+    for _, _, _, _, _, url in sorted(stream_candidates):
+        add_url(url)
+    return urls[:16]
 
 
+def extract_video_url(video):
+    candidates = extract_video_urls(video)
+    return candidates[0] if candidates else None
 def video_diagnostic(video):
     fields = []
     def visit(value, path, depth):
@@ -175,7 +239,12 @@ def normalize_note(raw: dict, *, detail: bool = False) -> tuple[dict, list[tuple
     if video_url:
         assets.append({'ordinal': 0, 'kind': 'video'})
         candidates.append((0, 'video', video_url))
-    title = re.sub(r'[\x00-\x1f]', ' ', str(card.get('display_title') or card.get('title') or note_id))[:1000]
+    title_value = card.get('display_title') or card.get('title') or ''
+    if not isinstance(title_value, str) or title_value.strip() == note_id:
+        title_value = ''
+    if not title_value.strip():
+        title_value = card.get('desc') or card.get('content') or card.get('description') or card.get('note_desc') or ''
+    title = re.sub(r'\s+', ' ', re.sub(r'[\x00-\x1f]', ' ', str(title_value))).strip()[:1000] or note_id
     note = {'note_id': note_id, 'url': f'https://www.xiaohongshu.com/explore/{note_id}', 'title': title,
             'author_id': author, 'type': 'video' if card.get('type') == 'video' or bool(video) else 'image',
             'published_at': published, 'observed_at': now_iso(), 'assets': assets}

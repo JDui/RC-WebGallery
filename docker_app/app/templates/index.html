@@ -301,9 +301,9 @@
                                                 :data-gallery-index="item.__gallery_index ?? ''"
                                                 :data-year-key="item.year_key"
                                                 :data-month-key="item.month_key"
-                                                :class="{ live: item.has_livephoto, 'deleted-placeholder-card': item.__deleted_placeholder, 'is-appearing': item.__appearing, 'small-quality': galleryQualityFor(item) === 'small' }"
+                                                :class="{ live: item.has_livephoto, video: isStandaloneVideoFolder(item, item.folder_name), 'deleted-placeholder-card': item.__deleted_placeholder, 'is-appearing': item.__appearing, 'small-quality': galleryQualityFor(item) === 'small' }"
                                                 :style="item.__deleted_placeholder ? galleryPlaceholderStyle(item) : null"
-                                                @click="item.__deleted_placeholder ? null : openFolder(item.folder_name)"
+                                                @click="item.__deleted_placeholder ? null : openFolder(item.folder_name, item)"
                                                 >
                                                     <template x-if="item.__deleted_placeholder">
                                                         <div class="deleted-placeholder-content">
@@ -328,6 +328,7 @@
                                                         <span class="photo-badge date-warning" x-show="futureDate(item.pub_time)" title="来源日期晚于当前时间，请核对原帖">来源日期待核实</span>
                                                     </div>
                                                     <span class="photo-badge live photo-badge-corner" x-show="item.has_livephoto">Live Photo</span>
+                                                    <span class="photo-badge video photo-badge-corner" x-show="isStandaloneVideoFolder(item, item.folder_name)">视频</span>
                                                     <div class="photo-count-badge" x-show="item.asset_count > 0" x-text="`${item.asset_count} 项`"></div>
                                                     </div>
                                                     <button class="favorite-button" :class="{ active: item.is_favorite }" :aria-pressed="item.is_favorite" @click.stop="toggleFavorite(item, $event)" aria-label="收藏">
@@ -988,7 +989,7 @@
                     <article class="settings-card thumbnail-settings-card" x-show="settingsGroup === 'media'" data-settings-group="media">
                         <h4 class="heading-with-help">界面与缩略图<button type="button" class="help-button" aria-label="界面与缩略图说明" data-tooltip="瀑布流使用 small，详情按需升级 thumb，查看器再加载原图。">?</button></h4>
                         <div class="interface-settings-grid">
-                            <label>应用标题 <input class="ui-field" type="text" x-model="settings.app_title" placeholder="BiliGalleryRC"></label>
+                            <label>应用标题 <input class="ui-field" type="text" x-model="settings.app_title" placeholder="RC-WebGallery"></label>
                             <label>显示性能模式
                                 <select class="ui-field" x-model="performanceMode" @change="setPerformanceMode($event.target.value)" :data-tooltip="resolvedPerformanceMode === 'low' ? '已降低模糊和阴影，媒体功能不受影响。' : '保留完整视觉效果。'">
                                     <option value="auto">自动</option>
@@ -997,6 +998,11 @@
                                 </select>
                             </label>
                             <label class="toggle-row interface-preview-toggle switch-row"><input type="checkbox" :checked="hoverPreviewEnabled" @change="setHoverPreviewEnabled($event.target.checked)"> 自动预览 Live Photo</label>
+                            <label class="toggle-row interface-preview-toggle switch-row"><input type="checkbox" x-model="settings.video_default_loop"> 视频默认循环播放</label>
+                            <label>视频默认音量（0 为静音）
+                                <input class="ui-field" type="range" min="0" max="100" step="5" x-model.number="settings.video_default_volume">
+                                <output x-text="Number(settings.video_default_volume || 0) + '%'"></output>
+                            </label>
                         </div>
                         <div class="thumbnail-level-grid">
                             <div class="thumbnail-level-row">
@@ -1746,14 +1752,29 @@
             </section>
         </div>
 
-        <div class="xhs-video-backdrop" data-testid="xhs-video-backdrop" data-modal-layer="video-note" role="dialog" aria-modal="true" aria-label="小红书视频播放器" tabindex="-1" x-show="videoNote.open" @click.self="closeVideoNote()" x-cloak>
+        <div class="xhs-video-backdrop" data-testid="xhs-video-backdrop" data-modal-layer="video-note" role="dialog" aria-modal="true" aria-label="视频播放器" tabindex="-1" x-show="videoNote.open" @click.self="closeVideoNote()" x-cloak>
             <section class="xhs-video-shell">
                 <header class="xhs-video-head">
-                    <div><h3 x-text="videoNote.folder?.title || '小红书视频笔记'"></h3></div>
-                    <button type="button" class="secondary-button" data-modal-close @click="closeVideoNote()">关闭</button>
+                    <div><h3 x-text="videoNote.folder?.title || '视频笔记'"></h3></div>
+                    <div class="xhs-video-head-actions">
+                        <button type="button" class="secondary-button" @click="openReviewSource(videoNote.folder)" :disabled="!reviewSourceUrl(videoNote.folder)">原贴</button>
+                        <template x-if="pendingTrashFolder !== videoNote.folder?.folder_name">
+                            <button type="button" class="secondary-button danger-button" @click="askTrashFolder(videoNote.folder?.folder_name)" x-text="videoNote.folder?.folder_name?.startsWith('xhs_') ? '删除并取消点赞' : '移入垃圾桶'"></button>
+                        </template>
+                        <template x-if="pendingTrashFolder === videoNote.folder?.folder_name">
+                            <div class="button-row">
+                                <button type="button" class="primary-button danger-button" @click="trashFolderCard(videoNote.folder?.folder_name)" x-text="videoNote.folder?.folder_name?.startsWith('xhs_') ? '确认删除并取消点赞' : '确认移入垃圾桶'"></button>
+                                <button type="button" class="secondary-button" @click="cancelTrashCurrentFolder()">取消</button>
+                            </div>
+                        </template>
+                        <button type="button" class="secondary-button" data-modal-close @click="closeVideoNote()">关闭</button>
+                    </div>
                 </header>
+                <template x-if="videoNote.open && videoNote.loading">
+                    <div class="xhs-video-loading" role="status">正在读取视频详情…</div>
+                </template>
                 <template x-if="videoNote.open && videoNote.video">
-                    <video x-ref="xhsNoteVideo" :src="videoNote.video.url" :poster="videoNote.video.cover_url || ''" controls autoplay muted playsinline preload="metadata" @error="videoNote.error = '视频无法播放，请检查归档文件或重试媒体。'"></video>
+                    <video x-ref="xhsNoteVideo" :src="videoNote.video.url" :poster="videoNote.video.cover_url || ''" :loop="settings.video_default_loop !== false" controls autoplay playsinline preload="metadata" @error="videoNote.error = '视频无法播放，请检查归档文件或重试媒体。'"></video>
                 </template>
                 <p class="field-copy" role="status" x-show="videoNote.error" x-text="videoNote.error"></p>
             </section>
