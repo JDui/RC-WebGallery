@@ -2911,7 +2911,7 @@ function galleryApp() {
         return;
       }
       try {
-        const payload = await this.api(\`/api/gallery/folders/\${encodeURIComponent(folderName)}\`);
+        const payload = await this.api(`/api/gallery/folders/${encodeURIComponent(folderName)}`);
         if (requestId !== this.detailRequestId) {
           return;
         }

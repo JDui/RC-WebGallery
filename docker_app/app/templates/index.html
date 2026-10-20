@@ -1774,7 +1774,7 @@
                     <div class="xhs-video-loading" role="status">正在读取视频详情…</div>
                 </template>
                 <template x-if="videoNote.open && videoNote.video">
-                    <video x-ref="xhsNoteVideo" :src="videoNote.video.url" :poster="videoNote.video.cover_url || ''" :loop="settings.video_default_loop !== false" controls autoplay playsinline preload="metadata" @error="videoNote.error = '视频无法播放，请检查归档文件或重试媒体。'"></video>
+                    <video x-ref="xhsNoteVideo" :src="videoNote.video.url" :poster="videoNote.video.cover_url || ''" :loop="settings.video_default_loop !== false" :muted="Number(settings.video_default_volume || 0) <= 0" controls autoplay playsinline preload="metadata" @error="videoNote.error = '视频无法播放，请检查归档文件或重试媒体。'"></video>
                 </template>
                 <p class="field-copy" role="status" x-show="videoNote.error" x-text="videoNote.error"></p>
             </section>
