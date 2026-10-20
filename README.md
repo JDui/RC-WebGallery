@@ -1,6 +1,8 @@
-# B 站动态相簿 BiliGalleryRC
+# RC-WebGallery｜多平台媒体采集与个人内容归档
 
-BiliGalleryRC v10.14 是一个面向个人收藏场景的 B 站动态相簿。它负责把动态图片与 Live Photo 整理到本地图库，并提供浏览、筛选、审核和后台维护能力；Web 应用位于 <code>docker_app/</code>，也可通过 Docker Compose 部署到 AMD64 NAS。
+RC-WebGallery 是一个面向个人收藏与自托管场景的多平台媒体采集、归档和 Web 图库管理项目。项目从 B 站动态相簿演进而来，但不再局限于 B 站：目前支持 B 站动态与 Live Photo、小红书本人点赞笔记，以及通过 RSS、Sitemap 或 HTML 列表页配置的通用站点来源。各来源汇入统一的任务队列、SQLite 索引和图库界面，可在 Docker Compose 环境中部署到个人服务器或 AMD64 NAS。
+
+> **来源范围说明**：B 站支持 UP 主动态媒体；小红书功能仅面向本人账号的点赞列表归档，不是任意用户抓取器；通用站点源取决于页面结构和可访问内容。平台页面结构、登录验证与资源地址可能变化，因此应将采集视为个人备份工具，而非官方 API 的稳定替代。
 
 ## 功能特性
 
@@ -11,7 +13,7 @@ BiliGalleryRC v10.14 是一个面向个人收藏场景的 B 站动态相簿。�
 - **审核与过滤**：对命中过滤规则的动态进入待审核列表，并保留过滤日志；审核项可以查看原始动态、放行下载或永久忽略。关键词和长图等规则可在设置中调整。
 - **任务队列**：拉取、审核下载、校验、页面索引、缩略图重建、重复内容处理、垃圾清理和站点同步等工作统一进入任务中心，可查看进度和日志，支持暂停、继续、取消与重试。
 - **订阅与站点源**：管理 B 站 UP 主订阅和外部站点订阅；站点源支持 RSS、Sitemap 或 HTML 列表页，并可配置定时同步、筛选规则和网络代理。
-- **小红书个人点赞**：内置浏览器扫码与持久化登录，支持本人点赞笔记扫描、媒体归档、失败重试和手工清单导入；首次拉取条数默认 100，可设 1–10000 或不限，锚点数默认 3、可设 1–20。固定直连，刷新周期独立设置，每轮随机前后抖动 1–22 分钟；图库提供独立小红书药丸。首次使用需完成本人账号、分页与访问规则确认。
+- **小红书个人点赞**：内置浏览器扫码与持久化登录，支持本人点赞笔记扫描、图文/视频/Live Photo 媒体解析与归档、失败重试和手工清单导入；首次拉取条数默认 100，可设 1–10000 或不限，锚点数默认 3、可设 1–20。固定直连，刷新周期独立设置，每轮随机前后抖动 1–22 分钟；图库提供独立的小红书来源筛选入口。首次使用需完成本人账号、分页与访问规则确认。
 - **登录与运行控制**：支持 B 站二维码登录、Cookie 状态检查和退出登录；可以配置定时拉取间隔、站点同步间隔及过滤关键词。
 - **缩略图与性能调度**：为原图生成 small、thumb 两级缩略图，配合页面按需加载和本地索引；前台浏览拥有更高优先级，后台拉取、清理、索引和重复检测会主动让行。
 
@@ -79,7 +81,7 @@ Compose 中的关键环境变量如下：
 
 ### AMD64 NAS 使用预构建镜像
 
-v10.14 的 AMD64 镜像包不纳入 Git 工作树。请从[项目 Releases 页面](https://github.com/JDui/bili-gallery/releases)或其他正式发布交付物取得对应版本的 tar 包和 <code>.sha256</code> 校验文件；页面上的版本和资产名称以实际发布内容为准。将镜像包和对应部署包解压到 NAS，保留其中的目录关系；部署包已包含默认 Compose 和浏览器沙箱配置。在部署目录执行：
+v10.14 的 AMD64 镜像包不纳入 Git 工作树。请从[RC-WebGallery Releases 页面](https://github.com/JDui/RC-WebGallery/releases)或其他正式发布交付物取得对应版本的 tar 包和 <code>.sha256</code> 校验文件；页面上的版本和资产名称以实际发布内容为准。将镜像包和对应部署包解压到 NAS，保留其中的目录关系；部署包已包含默认 Compose 和浏览器沙箱配置。在部署目录执行：
 
 ~~~bash
 sha256sum -c zzs-bili-gallery_v10.14_amd64.tar.sha256
@@ -91,8 +93,8 @@ docker image inspect zzs-bili-gallery:10.14-amd64 --format '{{.Id}}'
 
 ~~~yaml
 volumes:
-  - /your/nas/path/bili-gallery/config:/storage/config
-  - /your/nas/path/bili-gallery/data:/storage/data
+  - /your/nas/path/rc-webgallery/config:/storage/config
+  - /your/nas/path/rc-webgallery/data:/storage/data
 ~~~
 
 <code>/storage/config</code> 至少保存 <code>app.db</code>，<code>/storage/data</code> 保存图片、Live Photo、缩略图和其他运行时媒体。升级镜像时不要删除这两个宿主机目录。
@@ -177,7 +179,7 @@ bash docker_app/scripts/review_capture.sh zzs-bili-gallery:10.14-amd64
 
 ~~~bash
 docker_app/.venv/bin/python docker_app/scripts/seed_review_data.py \
-  --storage-root /tmp/bili-gallery-review
+  --storage-root /tmp/rc-webgallery-review
 ~~~
 
 当前应用版本由 <code>docker_app/app/version.py</code> 中的 <code>APP_VERSION = "10.14"</code> 定义；对应 NAS 镜像标签为 <code>zzs-bili-gallery:10.14-amd64</code>，镜像包文件名为 <code>zzs-bili-gallery_v10.14_amd64.tar</code>。
@@ -225,7 +227,7 @@ docker compose -f docker_app/docker-compose.nas-amd64.yml up -d --force-recreate
 
 小红书不继承站点代理、系统环境代理或 B 站刷新周期。基础周期至少 23 分钟，每次任务完成后重新抽取提前或延后 1–22 分钟的偏移。首次拉取条数始终可修改；变更后下次同步按新上限重新扫描，跳过旧锚点并复用已下载文件。首次读取达到条数上限时记为部分扫描，不据此判断旧点赞已取消；正常锚点早停也不会取消旧点赞。仅可信自然末页会更新取消点赞状态，保留本地归档和收藏。还可使用“忽略锚点完整扫描”进行核对。
 
-媒体以网页实际可访问版本保存，记录 SHA-256、尺寸和视频时长，不承诺作者原件或固定无水印版本。未知资源先保留解析待办；可用“重试媒体”重新解析过期地址，已下载成功的文件不重复下载。“检查本地归档”离线比对下载缓存与图库文件的 SHA-256，将缺失或损坏项保留为待重试，不访问小红书。图文、视频封面与明确存在的 Live Photo 分别归档；普通视频不计为 Live Photo。本人点赞笔记不经过普通站点的关键词过滤；手动排除仍生效。
+当前版本保存从小红书笔记详情或播放器解析出的可访问媒体流，并记录 SHA-256、尺寸和视频时长。视频流候选目前尚未可靠地区分无水印原始资源与网页播放流，因此不能保证无水印；相关候选优先级与过滤逻辑正在排查，需以真实笔记样本验证。未知资源先保留解析待办；可用“重试媒体”重新解析过期地址，已下载成功的文件不重复下载。“检查本地归档”离线比对下载缓存与图库文件的 SHA-256，将缺失或损坏项保留为待重试，不访问小红书。图文、视频封面与明确存在的 Live Photo 分别归档；普通视频不计为 Live Photo。本人点赞笔记不经过普通站点的关键词过滤；手动排除仍生效。
 
 任务统一进入任务中心，支持暂停、继续、取消、重试并遵循前台优先级。主应用重启会将未结束的小红书任务标记为可重试，清理孤立 `.part` 文件；已提交笔记、待办与读取锚点保留。注销登录态需要确认，只清除私有浏览器 Profile 并停用对应来源，既有图库文件不删除。
 
