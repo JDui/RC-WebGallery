@@ -1,4 +1,6 @@
-# Docker 化 B 站动态相簿 v10.14
+# RC-WebGallery｜Docker 部署说明 v10.14
+
+RC-WebGallery 是面向个人收藏与自托管场景的多来源媒体归档图库。当前来源包括 B 站动态与 Live Photo、小红书本人点赞笔记，以及 RSS、Sitemap 或 HTML 列表页形式的通用站点；不同来源共用任务中心、索引、筛选和图库界面。
 
 ## 启动
 
@@ -16,7 +18,7 @@ AMD64 NAS 可以直接使用 [docker-compose.nas-amd64.yml](docker-compose.nas-a
 2. 在默认 Compose 中保留你原有的两个配置、数据挂载路径；升级时使用随包的新版本 Compose。
 3. 在部署包根目录执行 `docker compose -f docker_app/docker-compose.nas-amd64.yml up -d`。
 
-小红书浏览器会随主服务自动启动，直接在网页中扫码使用。只有一个应用容器和 `7860` 网页端口。
+小红书浏览器会随主服务自动启动，直接在网页中扫码使用。主应用通过 `7860` 网页端口提供界面；当前 v10.14 发布包的镜像 tar 与镜像标签仍沿用历史名称 `zzs-bili-gallery`，请按对应 Release 资产的实际名称加载，不要据此判断仓库项目名。
 
 默认挂载说明：
 
@@ -33,7 +35,9 @@ AMD64 NAS 可以直接使用 [docker-compose.nas-amd64.yml](docker-compose.nas-a
 
 ## 功能
 
-- 九图动态与 Live Photo 拉取
+- B 站九图动态与 Live Photo 拉取
+- 小红书本人点赞笔记的图文、视频与 Live Photo 归档
+- RSS、Sitemap 与 HTML 列表页形式的通用站点订阅
 - 二维码扫码登录与 Cookie 检查
 - 推广过滤与待审核列表
 - 相似图片重复内容检测与贴文集中处理
