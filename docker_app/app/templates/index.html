@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-media-small-4' %}
+    {% set ui_revision = app_version ~ '-portrait-layout-6' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -12,10 +12,10 @@
         window.history.replaceState(null, "", page.href);
       }
     </script>
-    <meta name="theme-color" content="#eaf0fb">
+    <meta name="theme-color" content="{{ theme_color }}">
     <link rel="stylesheet" href="/static/ui-tokens.css?v={{ ui_revision }}">
-    <link rel="stylesheet" href="/static/app.css?v={{ ui_revision }}">
-    <link rel="stylesheet" href="/static/liquid-glass.css?v={{ ui_revision }}">
+    <link rel="stylesheet" href="/theme/app.css?v={{ ui_revision }}&th={{ theme_rev }}">
+    <link rel="stylesheet" href="/theme/liquid-glass.css?v={{ ui_revision }}&th={{ theme_rev }}">
     <link rel="stylesheet" href="/static/progressive-images.css?v={{ ui_revision }}">
     <script defer src="/static/progressive-images.js?v={{ ui_revision }}"></script>
     <script defer src="/static/app.js?v={{ ui_revision }}"></script>
@@ -47,10 +47,6 @@
     </svg>
     <div class="shell" x-ref="shell" :class="{ 'sidebar-collapsed': sidebarCollapsed && !compactViewport, 'compact-layout': compactViewport, 'sidebar-drawer-open': sidebarDrawerOpen }">
         <div class="sidebar-backdrop" x-show="compactViewport && sidebarDrawerOpen" x-transition.opacity @click="closeSidebarDrawer()" x-cloak></div>
-        <button class="icon-button mobile-nav-trigger mobile-only" x-show="compactViewport && !sidebarDrawerOpen" @click="toggleSidebar()" aria-label="打开侧边导航" aria-controls="gallery-sidebar" :aria-expanded="sidebarDrawerOpen" x-cloak>
-            <span></span>
-            <span></span>
-        </button>
         <aside id="gallery-sidebar" class="sidebar" x-ref="sidebar" aria-label="相簿导航" :inert="compactViewport && !sidebarDrawerOpen" :class="{ collapsed: sidebarCollapsed && !compactViewport, open: sidebarDrawerOpen, compact: compactViewport }">
             <div class="sidebar-head">
                 <button class="icon-button mobile-only" @click="toggleSidebar()" aria-label="切换边栏">
@@ -159,6 +155,10 @@
         <main class="workspace" x-ref="workspace">
             <header class="topbar" x-ref="topbar" :class="{ compact: headerCompact }">
                 <div class="topbar-left">
+                    <button class="icon-button mobile-nav-trigger mobile-only" x-show="compactViewport" @click="toggleSidebar()" aria-label="切换侧边导航" aria-controls="gallery-sidebar" :aria-expanded="sidebarDrawerOpen" x-cloak>
+                        <span></span>
+                        <span></span>
+                    </button>
                     <div class="topbar-copy">
                         <div class="topbar-title-row">
                             <h2 x-text="currentSectionTitle()"></h2>
@@ -228,7 +228,7 @@
                                 <option value="random">随机</option>
                             </select>
                         </label>
-                        <button class="secondary-button" @click="toggleTimeFilter()" x-text="timeFilterOpen ? '收起筛选' : '筛选'"></button>
+                        <button class="secondary-button time-filter-toggle" :class="{ 'is-on': timeFilterActive() }" @click="toggleTimeFilter()" :data-tooltip="timeFilterActive() ? '已限定时间范围，点击调整或清空' : '按时间范围筛选图库'" x-text="timeFilterOpen ? '收起筛选' : (timeFilterActive() ? `筛选 · ${timeFilterSummary()}` : '筛选')"></button>
                         <div class="mode-switch" x-show="!compactViewport" x-cloak>
                             <button class="chip-button" :class="{ active: galleryViewMode === 'folder' }" :aria-pressed="galleryViewMode === 'folder'" @click="setGalleryViewMode('folder')">动态视图</button>
                             <button class="chip-button" :class="{ active: galleryViewMode === 'pair' }" :aria-pressed="galleryViewMode === 'pair'" @click="setGalleryViewMode('pair')">图片视图</button>
@@ -458,7 +458,11 @@
                         <div class="empty-state" x-show="gallery.items.length === 0" x-cloak>
                             <strong x-text="searchActive() ? '没有匹配的搜索结果' : '当前范围没有内容'"></strong>
                             <button type="button" class="help-button" aria-label="当前范围说明" :data-tooltip="searchActive() ? &#x27;请尝试其他关键词，或清除筛选条件。&#x27; : &#x27;可调整筛选范围，或前往设置完成登录和拉取。&#x27;">?</button>
-                            <button class="secondary-button" x-show="searchActive()" @click="clearSearch()" data-tooltip="清空搜索条件" aria-label="清空搜索条件">清空</button>
+                            <p class="field-copy" x-show="timeFilterActive()" x-text="`已限定「${timeFilterSummary()}」，可能是时间范围过滤掉了全部结果。`"></p>
+                            <div class="button-row">
+                                <button class="secondary-button" x-show="searchActive()" @click="clearSearch()" data-tooltip="清空搜索条件" aria-label="清空搜索条件">清空</button>
+                                <button class="secondary-button" x-show="timeFilterActive()" @click="clearTimeFilter()" data-tooltip="清空时间范围筛选" aria-label="清空时间范围筛选">清空时间范围</button>
+                            </div>
                         </div>
                         <div class="load-footer" data-gallery-load-sentinel x-show="gallery.items.length > 0 && !galleryLoadFinished() && !showRandomReloadButton()" x-cloak>
                             <template x-if="autoLoadEnabled()">
@@ -1027,7 +1031,7 @@
                     </article>
 
                     <article class="settings-card" x-show="settingsGroup === 'media'" data-settings-group="media">
-                        <h4 class="heading-with-help">订阅图标<button type="button" class="help-button" aria-label="订阅图标说明" data-tooltip="动态订阅头像与站点订阅图标分开重置，任务会在后台执行。无法获得图像的项目会回退为默认文字徽标。">?</button></h4>
+                        <h4 class="heading-with-help">订阅图标<button type="button" class="help-button" aria-label="订阅图标说明" data-tooltip="动态订阅头像、站点订阅图标与小红书图标分开重置，任务会在后台执行。无法获得图像的项目会回退为默认文字徽标。">?</button></h4>
                         <div class="settings-icon-reset-grid">
                             <div class="settings-icon-reset-row">
                                 <strong data-tooltip="重新获取所有 UP 主头像">UP 主头像</strong>
@@ -1049,6 +1053,76 @@
                                     <button class="primary-button confirm-anchor" @click="confirmResetSiteIcons()" :disabled="resetSiteIconsRunning">确认重置</button>
                                 </div>
                             </div>
+                            <div class="settings-icon-reset-row">
+                                <strong data-tooltip="重新获取小红书点赞源头像">小红书图标</strong>
+                                <div class="button-row" x-show="resetXhsIconsConfirmStep === 0">
+                                    <button class="secondary-button confirm-anchor" @click="askResetXhsIcons()" :disabled="resetXhsIconsRunning" data-tooltip="重新检查小红书登录状态并刷新图标" aria-label="重置小红书图标" x-text="resetXhsIconsRunning ? '重置中' : '重置'"></button>
+                                </div>
+                                <div class="button-row" x-show="resetXhsIconsConfirmStep === 1" x-cloak>
+                                    <button class="secondary-button" @click="cancelResetXhsIcons()">取消</button>
+                                    <button class="primary-button confirm-anchor" @click="confirmResetXhsIcons()" :disabled="resetXhsIconsRunning">确认重置</button>
+                                </div>
+                            </div>
+                        </div>
+                    </article>
+
+                    <article class="settings-card" x-show="settingsGroup === 'media'" data-settings-group="media">
+                        <h4 class="heading-with-help">界面配色<button type="button" class="help-button" aria-label="界面配色说明" data-tooltip="整套界面色板由主色色相、饱和度与明度三个参数自动派生，改动会即时反映在预览区；保存后写入服务端，所有页面与设备都会沿用，可随时恢复默认。">?</button></h4>
+                        <div class="settings-theme-body">
+                            <div class="settings-theme-preview" :style="`background:${themeSwatches.surface || 'transparent'};border-color:${themeSwatches.lineStrong || 'transparent'}`">
+                                <div class="settings-theme-preview-head">
+                                    <span class="settings-theme-badge" :style="`background:${themeSwatches.accentSoft || 'transparent'};color:${themeSwatches.accent || 'inherit'}`">订阅</span>
+                                    <strong :style="`color:${themeSwatches.text || 'inherit'}`">RC-WebGallery</strong>
+                                </div>
+                                <p :style="`color:${themeSwatches.muted || 'inherit'}`">主色会同步套用按钮、标签、链接与描边，底色与文字保持足够对比。</p>
+                                <div class="settings-theme-chips">
+                                    <span class="settings-theme-chip" :style="`background:${themeSwatches.accent || 'transparent'};color:${themeSwatches.onAccent || '#fff'}`">主要按钮</span>
+                                    <span class="settings-theme-chip ghost" :style="`border-color:${themeSwatches.lineStrong || 'transparent'};color:${themeSwatches.accent || 'inherit'}`">次要按钮</span>
+                                    <span class="settings-theme-chip" :style="`background:${themeSwatches.accent2 || 'transparent'};color:${themeSwatches.onAccent || '#fff'}`">强调标签</span>
+                                    <span class="settings-theme-chip" :style="`background:${themeSwatches.danger || 'transparent'};color:${themeSwatches.onAccent || '#fff'}`">警示</span>
+                                </div>
+                                <div class="settings-theme-swatches">
+                                    <template x-for="entry in themeSwatchList()" :key="entry.label">
+                                        <span class="settings-theme-swatch">
+                                            <i :style="`background:${entry.color};border-color:${themeSwatches.line || 'transparent'}`"></i>
+                                            <em x-text="entry.label"></em>
+                                        </span>
+                                    </template>
+                                </div>
+                            </div>
+                            <div class="settings-theme-controls">
+                                <div class="settings-theme-field">
+                                    <span class="settings-theme-field-label">主色取色器<button type="button" class="help-button" aria-label="主色取色器说明" data-tooltip="挑选一个色相即可，整套色板会按它重新派生；这里的颜色只是取样，不会原样使用。">?</button></span>
+                                    <div class="settings-theme-field-row">
+                                        <input type="color" :value="themePickerHex()" @input="setThemeHueFromHex($event.target.value)" aria-label="主色取色器">
+                                        <input type="range" :min="themeBound('hue', 0)" :max="themeBound('hue', 1)" step="1" :value="themeDraft.hue" @input="setThemeNumber('hue', $event.target.value)" aria-label="主色色相">
+                                        <output class="settings-theme-field-value" x-text="themeParamText('hue')"></output>
+                                    </div>
+                                </div>
+                                <div class="settings-theme-field">
+                                    <span class="settings-theme-field-label">饱和度<button type="button" class="help-button" aria-label="饱和度说明" data-tooltip="0% 近似黑白，100% 为原始浓度，可超过 100% 加强。降低饱和度时会自动补偿明度，白字对比度不会跟着掉。">?</button></span>
+                                    <div class="settings-theme-field-row">
+                                        <input type="range" :min="themeBound('saturation', 0)" :max="themeBound('saturation', 1)" step="0.01" :value="themeDraft.saturation" @input="setThemeNumber('saturation', $event.target.value)" aria-label="整体饱和度">
+                                        <output class="settings-theme-field-value" x-text="themeParamText('saturation')"></output>
+                                    </div>
+                                </div>
+                                <div class="settings-theme-field">
+                                    <span class="settings-theme-field-label">明度<button type="button" class="help-button" aria-label="明度说明" data-tooltip="在派生结果之上整体调亮或调暗主色系，超过 100% 会让主色更透亮。">?</button></span>
+                                    <div class="settings-theme-field-row">
+                                        <input type="range" :min="themeBound('value', 0)" :max="themeBound('value', 1)" step="0.01" :value="themeDraft.value" @input="setThemeNumber('value', $event.target.value)" aria-label="整体明度">
+                                        <output class="settings-theme-field-value" x-text="themeParamText('value')"></output>
+                                    </div>
+                                </div>
+                                <p class="settings-theme-hint" x-text="themeHintText()"></p>
+                                <div class="button-row" x-show="themeResetConfirmStep === 0">
+                                    <button type="button" class="primary-button" @click="saveTheme()" :disabled="themeSaving || !themeDraftChanged()" data-tooltip="写入服务端并刷新全站样式">保存配色</button>
+                                    <button type="button" class="secondary-button confirm-anchor" @click="askResetTheme()" :disabled="themeSaving" data-tooltip="恢复为默认粉白配色">恢复默认</button>
+                                </div>
+                                <div class="button-row" x-show="themeResetConfirmStep === 1" x-cloak>
+                                    <button type="button" class="secondary-button" @click="cancelResetTheme()">取消</button>
+                                    <button type="button" class="primary-button confirm-anchor" @click="confirmResetTheme()" :disabled="themeSaving">确认恢复默认</button>
+                                </div>
+                            </div>
                         </div>
                     </article>
 
@@ -1068,6 +1142,23 @@
                             <img :src="qr.image_data_url" alt="登录二维码" @load="fadeLoadedImage($event)">
                             <p x-text="qr.message || '请使用哔哩哔哩客户端扫码登录'"></p>
                         </div>
+                    </article>
+
+                    <article class="settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance" data-testid="livephoto-maintenance" x-init="$watch('settingsGroup', (group) => { if (group === 'maintenance') refreshTasks().catch(() => {}); })">
+                        <h4 class="heading-with-help">Live Photo 配对与历史修复<button type="button" class="help-button" aria-label="Live Photo 配对与历史修复说明" data-tooltip="新抓取的 B 站与小红书实况自动写入 Immich 兼容配对标识。已有文件保持原样，仍可正常预览。检查只读取本地媒体；检查完成后会先出现“修复配对”，为可确定配对的图片和视频补写标识；再出现“修复异常”，自动尝试找回缺失原图并确认配对。缺失或配对不明确的文件保留原样，并列入任务报告。">?</button></h4>
+                        <div class="button-row">
+                            <button type="button" class="secondary-button" data-testid="livephoto-check" @click="submitLivephotoCheck()" :disabled="livephotoSubmitting">检查实况配对</button>
+                        </div>
+                        <p class="field-copy" x-show="livephotoTaskActive()" x-cloak>实况配对任务正在排队或执行，完成后将自动按序出现修复按钮，可在任务队列中查看进度。</p>
+                        <template x-if="!livephotoTaskActive() && livephotoLatestResult()">
+                            <div>
+                                <p class="field-copy" x-text="livephotoResultText()"></p>
+                                <div class="button-row">
+                                    <button type="button" class="secondary-button" data-testid="livephoto-repair" x-show="livephotoRepairVisible()" @click="submitLivephotoFollowup('repair')" :disabled="livephotoSubmitting">修复配对</button>
+                                    <button type="button" class="secondary-button" data-testid="livephoto-repair-errors" x-show="livephotoExceptionVisible()" @click="submitLivephotoFollowup('repair-errors')" :disabled="livephotoSubmitting">修复异常</button>
+                                </div>
+                            </div>
+                        </template>
                     </article>
 
                     <article class="settings-card danger-settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
@@ -1094,7 +1185,7 @@
                     </article>
 
                     <article class="settings-card storage-stats-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
-                        <h4>数据统计</h4>
+                        <h4 class="heading-with-help">数据统计<button type="button" class="help-button" aria-label="数据统计说明" data-tooltip="展示原图、缩略图与垃圾桶残留文件占用。开启“定期清理垃圾文件”后，每次拉取完成（动态、站点、小红书）都会自动清理垃圾桶残留文件与孤立记录；关闭时仅清理孤立记录，可在此手动清理。">?</button></h4>
                         <div class="storage-stat-list">
                             <div class="storage-stat-row">
                                 <span>原图文件</span>
@@ -1114,7 +1205,6 @@
                         </div>
 
                         <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.auto_storage_cleanup"> 定期清理垃圾文件</label>
-                        <p class="field-copy">开启后，每次拉取完成（动态、站点、小红书）都会自动清理垃圾桶残留文件与孤立记录；关闭时仅清理孤立记录，可在此手动清理。</p>
 
                         <div class="button-row">
                             <button class="secondary-button" :data-tooltip="`最近统计：${storageStatsUpdatedText()}`" @click="refreshStorageStats(true)" :disabled="storageStatsLoading" x-text="storageStatsLoading ? '统计中' : '重新统计'"></button>
@@ -1316,11 +1406,30 @@
                                 <button type="button" class="secondary-button" @click="xhsLogin('revoke')" :disabled="xhsBusy || !xhsAutomaticAvailable">注销登录态</button>
                             </div>
                             <div class="field-copy" x-show="xhsLoginSession" x-cloak>
-                                <template x-if="xhsLoginSession?.viewer_url">
-                                    <iframe class="xhs-login-frame" :src="xhsLoginSession.viewer_url" title="小红书扫码登录窗口" referrerpolicy="no-referrer"></iframe>
-                                </template>
-                                <a :href="xhsLoginSession?.viewer_url || '/api/xhs/browser/'" target="_blank" rel="noopener noreferrer">在新窗口中打开</a>
+                                <div class="xhs-qr-panel">
+                                    <img class="xhs-qr-image" x-show="xhsQr?.image_data_url" :src="xhsQr?.image_data_url" alt="小红书登录二维码" @load="fadeLoadedImage($event)">
+                                    <div class="xhs-qr-placeholder" x-show="!xhsQr?.image_data_url" x-cloak>
+                                        <span x-text="xhsQrText(xhsQr?.phase)"></span>
+                                    </div>
+                                    <p role="status" x-text="xhsQr?.message || xhsQrText(xhsQr?.phase)"></p>
+                                    <p x-show="xhsQr?.phase === 'captcha' || xhsQr?.phase === 'missing' || xhsQr?.phase === 'error'" x-cloak>无法直接扫码时，可打开完整登录窗口人工操作。</p>
+                                </div>
+                                <div class="panel-card-actions">
+                                    <button type="button" class="secondary-button" @click="openXhsLoginWindow()" :disabled="xhsBusy">打开完整登录窗口</button>
+                                    <button type="button" class="secondary-button" @click="xhsLoginInlineOpen = true" :disabled="xhsBusy">在当前页面打开</button>
+                                </div>
                             </div>
+                            <template x-if="xhsLoginInlineOpen && xhsLoginSession?.viewer_url">
+                                <div class="xhs-login-backdrop" @click.self="xhsLoginInlineOpen = false" @keydown.escape.stop="xhsLoginInlineOpen = false">
+                                    <section class="xhs-login-dialog" role="dialog" aria-modal="true" aria-label="小红书 Chromium 登录">
+                                        <div class="panel-card-actions"><strong>小红书 Chromium 登录</strong>
+                                            <button type="button" class="secondary-button" @click="xhsLoginInlineOpen = false">收起登录窗口</button>
+                                        </div>
+                                        <iframe class="xhs-login-frame" :src="xhsLoginSession.viewer_url" title="小红书扫码登录窗口" referrerpolicy="no-referrer"></iframe>
+                                        <button type="button" class="primary-button" @click="xhsLogin('finish')" :disabled="xhsBusy">完成扫码</button>
+                                    </section>
+                                </div>
+                            </template>
                             <div class="subscription-policy-grid site-policy-grid">
                                 <label>名称<input class="ui-field" x-model="xhsNewSource.name" maxlength="100"></label>
                                 <label>账号标识<input class="ui-field" x-model="xhsNewSource.owner_key" maxlength="128" placeholder="登录后自动填入，或填写清单 owner_key"></label>
@@ -1341,7 +1450,7 @@
                                     <label>首次拉取条数<input class="ui-field" type="number" min="1" max="10000" x-model="xhsDrafts[source.id].initial_fetch_limit" placeholder="留空为不限"></label>
                                     <label>读取锚点帖子数<input class="ui-field" type="number" min="1" max="20" x-model="xhsDrafts[source.id].anchor_count"></label>
                                     <label>小红书刷新周期（分钟）<input class="ui-field" type="number" min="23" max="525600" x-model="xhsDrafts[source.id].refresh_interval_minutes"></label>
-                                    <label>完整核对周期（天）<input class="ui-field" type="number" min="1" max="365" x-model="xhsDrafts[source.id].full_scan_interval_days"></label>
+                                    <label>完整核对周期（天）<input class="ui-field" type="number" min="1" max="3650" x-model="xhsDrafts[source.id].full_scan_interval_days"></label>
                                     <label class="toggle-row switch-row"><input type="checkbox" x-model="xhsDrafts[source.id].ordering_stable"><span>排序稳定，允许锚点早停</span></label>
                                     <label class="toggle-row switch-row"><input type="checkbox" x-model="xhsDrafts[source.id].refresh_enabled"><span>自动刷新（登录验证后生效）</span></label>
                                     <label class="toggle-row switch-row"><input type="checkbox" x-model="xhsDrafts[source.id].enabled"><span>启用来源</span></label>
@@ -1360,8 +1469,7 @@
                                     <button type="button" class="secondary-button" @click="syncXhsSource(source)" :disabled="xhsBusy || !source.can_sync || xhsSourceDirty(source)">立即同步</button>
                                     <button type="button" class="secondary-button" @click="syncXhsSource(source, {force_full: true})" :disabled="xhsBusy || !source.can_sync || xhsSourceDirty(source)">忽略锚点完整扫描</button>
                                     <button type="button" class="secondary-button" @click="syncXhsSource(source, {media_only: true})" :disabled="xhsBusy || !source.can_sync">重试媒体</button>
-                                    <button type="button" class="secondary-button" @click="checkXhsFiles(source)" :disabled="xhsBusy">检查本地归档</button>
-                                    <label class="secondary-button xhs-import-control">导入 JSON 清单<input type="file" accept="application/json,.json" :disabled="xhsBusy || !source.enabled || xhsSourceDirty(source)" @change="importXhsManifest(source, $event)"></label>
+                                    <button type="button" class="secondary-button" @click="xhsRelogin()" :disabled="xhsBusy || !xhsAutomaticAvailable">重新登入</button>
                                     <button type="button" class="secondary-button" @click="loadXhsNotes(source)">查看最近 50 条笔记</button>
                                     <button type="button" class="secondary-button danger-button" x-show="!xhsResetSteps[source.id]" @click="confirmXhsReset(source)" :disabled="xhsBusy">完全重置抓取</button>
                                 </div>
@@ -1375,7 +1483,7 @@
                                         <div class="site-preview-row">
                                             <button type="button" class="xhs-note-title" @click="openXhsNote(source, note)" x-text="note.title"></button>
                                             <small x-text="`发布：${note.pub_date ? formatDateYMD(note.pub_date) : '未知'} · 首见：${formatDateTime(note.first_seen_at)}`"></small>
-                                            <small x-text="(note.note_type === 'video' ? '视频 · ' : '') + (note.download_status === 'ready' ? '已归档' : note.download_status === 'blocked' ? '已手动排除' : note.download_status === 'failed' ? '下载失败' : '等待下载') + (note.error_category ? ' · ' + note.error_category : '')"></small>
+                                            <small x-text="(note.note_type === 'video' ? '视频 · ' : note.note_type === 'livephoto' ? '实况 · ' : '') + (note.download_status === 'ready' ? '已归档' : note.download_status === 'partial' ? '静态图已归档，实况待重试' : note.download_status === 'blocked' ? '已手动排除' : note.download_status === 'failed' ? '下载失败' : '等待下载') + (note.error_category ? ' · ' + note.error_category : '')"></small>
                                         </div>
                                     </template>
                                     <p class="field-copy" x-show="xhsNotes[source.id]?.length === 0">暂无已发现笔记</p>

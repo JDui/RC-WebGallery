@@ -19,11 +19,18 @@ import requests
 
 from app.config import load_config
 from app.db import Database
+from app.theme import DEFAULT_THEME as UI_THEME_DEFAULTS
+from app.theme import THEME_BOUNDS as UI_THEME_BOUNDS
+from app.theme import css_renderer as css_theme_renderer
+from app.theme import normalize as normalize_ui_theme
+from app.theme import page_tint as ui_page_tint
+from app.theme import revision as ui_theme_revision
 from app.services.bilibili import BilibiliAuthService
 from app.services.cleanup import CleanupService
 from app.services.duplicates import DuplicateService
 from app.services.gallery import GalleryService
 from app.services.legacy_import import LegacyImporter
+from app.services.livephoto import LivePhotoError
 from app.services.media_indexer import MediaIndexer
 from app.services.puller import PullManager
 from app.services.scheduler import SchedulerService
@@ -83,6 +90,7 @@ AVATAR_CACHE_MAX_BYTES = 5 * 1024 * 1024
 _icon_reset_lock = threading.Lock()
 _subscription_icon_reset_lock = threading.Lock()
 _site_icon_reset_lock = threading.Lock()
+_xhs_icon_reset_lock = threading.Lock()
 
 
 class CacheControlStaticFiles(StaticFiles):
@@ -151,10 +159,43 @@ app.mount(
     name="storage",
 )
 
+# 可换肤的样式表白名单：基准色板留在磁盘上（蓝紫），浏览器请求 /theme/<name> 时才派生。
+THEMEABLE_STYLESHEETS = {
+    name: (config.app_root / "static" / name)
+    for name in ("app.css", "liquid-glass.css", "intranet.css")
+}
+
+
+def resolve_ui_theme(settings: dict[str, Any] | None = None) -> dict[str, float]:
+    """当前生效的配色参数。非法输入一律退回默认值，保证样式表永远渲染得出来。"""
+    if settings is None:
+        settings = db.get_settings()
+    try:
+        return normalize_ui_theme(settings.get("ui_theme"))
+    except ValueError:
+        return dict(UI_THEME_DEFAULTS)
+
+
+@app.get("/theme/{name}")
+def themed_stylesheet(name: str) -> Response:
+    path = THEMEABLE_STYLESHEETS.get(name)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="样式表不存在")
+    payload, _ = css_theme_renderer.render(path, resolve_ui_theme())
+    # URL 上的 th= 已带配色指纹，参数一改 URL 就变，所以可以放心长缓存。
+    return Response(
+        content=payload,
+        media_type="text/css; charset=utf-8",
+        headers={"Cache-Control": "public, max-age=31536000, immutable", "Vary": "Accept-Encoding"},
+    )
+
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request) -> HTMLResponse:
     settings = db.get_settings()
+    theme = resolve_ui_theme(settings)
+    theme_rev = ui_theme_revision(theme)
+    theme_color = ui_page_tint(theme)
     origin = redirect_origin(config.config_dir, settings)
     target = urlparse(origin or "")
     current_port = request.url.port or (443 if request.url.scheme == "https" else 80)
@@ -167,6 +208,8 @@ def index(request: Request) -> HTMLResponse:
             name="intranet_preflight.html",
             context={"intranet_origin": origin, "app_version": APP_VERSION,
                      "app_title": settings.get("app_title") or APP_NAME,
+                     "theme_rev": theme_rev,
+                     "theme_color": theme_color,
                      "fallback_url": f"{fallback.path}?{fallback.query}"},
             headers={"Cache-Control": "no-store"},
         )
@@ -177,6 +220,8 @@ def index(request: Request) -> HTMLResponse:
             "app_title": settings.get("app_title") or APP_TITLE,
             "app_name": APP_NAME,
             "app_version": APP_VERSION,
+            "theme_rev": theme_rev,
+            "theme_color": theme_color,
             "intranet_access": "local" if is_local_host(request.url.hostname or "") else "external",
         },
         headers={"Cache-Control": "no-store"},
@@ -1174,14 +1219,11 @@ def trash_items() -> dict[str, Any]:
 
 
 @app.post("/api/gallery/folders/{folder_name}/trash")
-def trash_folder(folder_name: str, request: Request, background_tasks: BackgroundTasks, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+def trash_folder(folder_name: str, background_tasks: BackgroundTasks, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     reason = str(payload.get("reason") or "不喜欢")
     try:
         target = xhs_manager.unlike_target(folder_name)
-        if target:
-            origin = request.headers.get('origin')
-            if request.headers.get('sec-fetch-site') == 'cross-site' or (origin and urlparse(origin).netloc != request.headers.get('host')):
-                raise HTTPException(403, '不允许跨站删除小红书贴文')
+        # 单人自部署场景不做跨站拦截：反代后容器收到的 Host 与浏览器 Origin 常不一致，会误判成跨站。
         result = pull_manager.move_to_trash(folder_name, reason=reason)
         if target:
             task_id = db.create_task_run('xhs-unlike', 'running', '本地已删除，正在取消原帖点赞',
@@ -1225,6 +1267,11 @@ def get_settings() -> dict[str, Any]:
 @app.put("/api/settings")
 def update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     payload = {key: value for key, value in payload.items() if key not in {"auth", "intranet_config_error"}}
+    if "ui_theme" in payload:
+        try:
+            payload["ui_theme"] = normalize_ui_theme(payload["ui_theme"])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     intranet_payload = {key: payload.pop(key) for key in INTRANET_DEFAULTS if key in payload}
     try:
         intranet = (save_intranet_config(config.config_dir, intranet_payload, {**db.get_settings(), **payload})
@@ -1235,6 +1282,35 @@ def update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     thumbnailer.apply_settings(settings)
     scheduler.reload()
     return {**settings, **intranet}
+
+
+@app.get("/api/settings/theme")
+def get_ui_theme() -> dict[str, Any]:
+    current = resolve_ui_theme()
+    return {
+        "ok": True,
+        "theme": current,
+        "revision": ui_theme_revision(current),
+        "defaults": dict(UI_THEME_DEFAULTS),
+        "bounds": {key: list(span) for key, span in UI_THEME_BOUNDS.items()},
+    }
+
+
+@app.post("/api/settings/theme")
+def update_ui_theme(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        current = normalize_ui_theme(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.save_settings({"ui_theme": current})
+    return {"ok": True, "theme": current, "revision": ui_theme_revision(current)}
+
+
+@app.post("/api/settings/theme/reset")
+def reset_ui_theme() -> dict[str, Any]:
+    db.save_settings({"ui_theme": dict(UI_THEME_DEFAULTS)})
+    return {"ok": True, "theme": dict(UI_THEME_DEFAULTS),
+            "revision": ui_theme_revision(dict(UI_THEME_DEFAULTS))}
 
 
 @app.get("/api/settings/storage-stats")
@@ -1276,6 +1352,23 @@ def rebuild_gallery_index() -> dict[str, Any]:
     try:
         return pull_manager.start_gallery_index_rebuild()
     except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post('/api/settings/livephoto/{action}')
+def maintain_livephoto(action: str) -> dict[str, Any]:
+    if action not in {'check', 'repair'}:
+        raise HTTPException(status_code=400, detail='Live Photo 操作无效')
+    return pull_manager.start_livephoto_maintenance(repair=action == 'repair')
+
+
+@app.post('/api/settings/livephoto/{source_task_id}/followup/{action}')
+def livephoto_followup(source_task_id: int, action: str) -> dict[str, Any]:
+    if action not in {'repair', 'repair-errors'}:
+        raise HTTPException(status_code=400, detail='Live Photo 修复操作无效')
+    try:
+        return pull_manager.start_livephoto_followup(source_task_id, action)
+    except LivePhotoError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
@@ -1337,6 +1430,39 @@ def _execute_reset_site_icons() -> dict[str, Any]:
     if summary["failed"]:
         message += " 部分项目请求失败，详情已记录。"
     return {"message": message, "result": {"sites": summary, "errors": errors}}
+
+
+def _execute_reset_xhs_icons() -> dict[str, Any]:
+    summary = {"total": 0, "updated": 0, "fallback": 0, "failed": 0}
+    errors = []
+    sources = [source for source in db.list_site_sources() if source.get("source_type") == "xhs_likes"]
+    summary["total"] = len(sources)
+    owner_key: str | None = None
+    try:
+        worker_status = xhs_manager.refresh_auth()
+        owner_key = worker_status.get("owner_key")
+    except Exception as exc:
+        summary["failed"] = summary["total"]
+        errors.append({"kind": "xhs", "message": str(exc)})
+    else:
+        for source in sources:
+            task_priority.background_checkpoint()
+            refreshed = db.get_site_source(int(source["id"])) or {}
+            if refreshed.get("icon_url"):
+                summary["updated"] += 1
+            else:
+                summary["fallback"] += 1
+    db.refresh_sidebar_count_cache(["sites"])
+    message = f"小红书订阅图标重置完成：{summary['updated']}/{summary['total']}。"
+    if summary["failed"]:
+        message += " 无法连接小红书 worker 检查登录状态，请确认已登录小红书账号后重试。"
+    elif owner_key and summary["updated"] < summary["total"]:
+        message += " 未更新的项目属于其他小红书账号，需在对应账号登录后刷新。"
+    elif not owner_key:
+        message += " 当前 worker 未检测到已登录的小红书账号，请先完成登录后重试。"
+    elif summary["fallback"]:
+        message += " 无法获取头像的项目已回退默认样式。"
+    return {"message": message, "result": {"xhs": summary, "errors": errors, "owner_key": owner_key}}
 
 
 def _execute_reset_all_icons(cookie: str | None) -> dict[str, Any]:
@@ -1414,6 +1540,26 @@ def reset_site_icons() -> dict[str, Any]:
     )
     thread.start()
     return {"ok": True, "queued": False, "message": "站点订阅图标重置已提交"}
+
+
+def _run_reset_xhs_icons_task(task_id: int) -> None:
+    try:
+        details = _execute_reset_xhs_icons()
+        db.finish_task_run(task_id, "success", details["message"], details)
+    except Exception as exc:
+        db.finish_task_run(task_id, "failed", str(exc), {"error": str(exc)})
+    finally:
+        _xhs_icon_reset_lock.release()
+
+
+@app.post("/api/settings/reset-icons/xhs")
+def reset_xhs_icons() -> dict[str, Any]:
+    if not _xhs_icon_reset_lock.acquire(blocking=False):
+        return {"ok": True, "queued": True, "message": "小红书订阅图标重置任务正在运行"}
+    task_id = db.create_task_run("xhs-icons", "running", "开始重置小红书订阅图标")
+    thread = threading.Thread(target=_run_reset_xhs_icons_task, args=(task_id,), daemon=True)
+    thread.start()
+    return {"ok": True, "queued": False, "message": "小红书订阅图标重置已提交"}
 
 
 @app.post("/api/auth/qr/start")

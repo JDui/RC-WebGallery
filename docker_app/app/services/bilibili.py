@@ -16,7 +16,7 @@ import requests
 
 from app.db import Database
 from app.services.legacy_bridge import API_DETAIL, API_FEED, build_headers, detail_params, feed_params
-from app.services.utils import dumps_json, loads_json, now_iso
+from app.services.utils import dumps_json, human_interval, loads_json, now_iso
 
 API_QR_GENERATE = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
 API_QR_POLL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll"
@@ -27,6 +27,13 @@ AVATAR_FEED_FEATURES = (
     "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,"
     "decorationCard,commentsNewVersion,onlyfansAssetsV2,ugcDelete,onlyfansQaCard"
 )
+# 允许被响应 Set-Cookie 回写覆盖的登录类 cookie。
+# buvid3/buvid4/b_nut 是"设备指纹"，匿名预热请求（不带 Cookie 访问首页/空间页）
+# 会返回全新的指纹；一旦合并进登录态，B 站按指纹漂移判定会话异常并吊销 SESSDATA。
+COOKIE_REFRESH_ALLOWLIST = {
+    "SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5",
+    "sid", "bili_ticket", "bili_ticket_expires", "fetime", "fmtime", "login_time",
+}
 USER_AGENTS = [
     (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -141,6 +148,15 @@ class BilibiliAuthService:
         if payload.get("code") != 0:
             return {"ok": False, "message": payload.get("message") or "Cookie 无效"}
         user_data = payload.get("data") or {}
+        # 匿名访问 nav 同样返回 code 0，必须靠 isLogin 区分"登录态已被服务端吊销"。
+        if not user_data.get("isLogin"):
+            return {
+                "ok": False,
+                "message": "登录态已失效（B 站服务端未认可当前 Cookie），请重新扫码登录",
+                "uid": str(user_data.get("mid") or ""),
+                "uname": user_data.get("uname") or "",
+                "user": None,
+            }
         self.db.update_auth_state(user_json=dumps_json(user_data))
         return {
             "ok": True,
@@ -650,11 +666,22 @@ class BilibiliAuthService:
         self._prime_web_session(session, host_mid)
 
     def _maybe_refresh_cookie_state(self, cookie: str, cookie_source: Any) -> None:
+        if not cookie:
+            return
         current = self._parse_cookie_header(cookie)
-        merged = {**current, **self._extract_cookie_values(cookie_source)}
-        if merged and merged != current:
-            cookie_value = "; ".join(f"{name}={value}" for name, value in merged.items())
-            self.db.update_auth_state(cookie=cookie_value, cookie_json=dumps_json(merged))
+        issued = self._extract_cookie_values(cookie_source)
+        updates = {
+            name: value
+            for name, value in issued.items()
+            if name in COOKIE_REFRESH_ALLOWLIST and value and current.get(name) != value
+        }
+        if not updates:
+            return
+        merged = {**current, **updates}
+        cookie_value = "; ".join(f"{name}={value}" for name, value in merged.items())
+        self.db.update_auth_state(cookie=cookie_value, cookie_json=dumps_json(merged))
 
     def _sleep_jitter(self, base: float, spread: float) -> None:
-        time.sleep(random.uniform(max(0.04, base * 0.7), base + spread))
+        delay = random.uniform(max(0.04, base * 0.7), base + spread)
+        # 拟人化下限：对 B 站的每次操作间隔不低于 250~880ms 随机时长。
+        time.sleep(max(delay, human_interval()))

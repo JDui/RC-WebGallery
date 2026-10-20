@@ -39,6 +39,13 @@ RUN set -eux; \
     rm -f novnc_*.deb; \
     rm -rf /var/lib/apt/lists/*
 
+# A single classic script avoids a large ES module request graph through NAS
+# remote-access proxies. Node/esbuild are build-time tools only.
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS novnc-client
+COPY --from=novnc-assets /novnc/usr/share/novnc /novnc
+RUN npx --yes esbuild@0.25.0 /novnc/core/rfb.js --bundle --format=iife \
+    --global-name=NoVNC --target=es2020 --minify --outfile=/novnc/rfb.bundle.js
+
 FROM python:3.12-slim-bookworm
 ARG DEBIAN_MIRROR
 
@@ -62,7 +69,7 @@ RUN sed -i "s|http://deb.debian.org|$DEBIAN_MIRROR|g" /etc/apt/sources.list.d/de
        libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libdbus-1-3 \
        libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
        libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 \
-       fonts-liberation fonts-wqy-microhei \
+       fonts-liberation fonts-wqy-microhei libimage-exiftool-perl \
     && find /usr/lib -maxdepth 2 -type d -name dri -exec rm -rf {} + \
     && find /usr/lib -maxdepth 2 \( -type f -o -type l \) \
              \( -name 'libLLVM-*.so*' -o -name 'libz3.so*' \
@@ -81,6 +88,7 @@ COPY --from=browser-download /opt/ms-playwright /opt/ms-playwright
 # browser.py serves only core/ and vendor/ from /usr/share/novnc.
 COPY --from=novnc-assets /novnc/usr/share/novnc/core /usr/share/novnc/core
 COPY --from=novnc-assets /novnc/usr/share/novnc/vendor /usr/share/novnc/vendor
+COPY --from=novnc-client /novnc/rfb.bundle.js /usr/share/novnc/rfb.bundle.js
 COPY --from=novnc-assets /novnc/usr/share/doc/novnc /usr/share/doc/novnc
 RUN useradd --create-home --uid 1000 pwuser
 

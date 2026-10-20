@@ -1050,6 +1050,13 @@ html.is-interacting .detail-card {
     opacity: 0.94;
 }
 
+/* 时间范围筛选生效时按钮高亮并显示范围，避免"隐形过滤"导致搜索看似无结果。 */
+.time-filter-toggle.is-on {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-soft);
+}
+
 .search-landing {
     min-height: min(54vh, 560px);
     display: grid;
@@ -2900,7 +2907,8 @@ html.is-interacting .detail-card {
 }
 
 .source-preview-backdrop {
-    z-index: 70;
+    /* 必须高于 .xhs-video-backdrop(150)：播放页点「原贴」时预览要盖在视频之上 */
+    z-index: 160;
     align-items: center;
     padding: 30px;
     background: rgba(22, 31, 46, 0.28);
@@ -4182,14 +4190,14 @@ html.is-interacting .detail-card {
         align-items: stretch;
     }
 
-    .section-heading .button-row {
+    .section-heading > .button-row {
         width: 100%;
         justify-content: flex-start;
         overflow-x: auto;
         scrollbar-width: none;
     }
 
-    .section-heading .button-row::-webkit-scrollbar {
+    .section-heading > .button-row::-webkit-scrollbar {
         display: none;
     }
 
@@ -5052,6 +5060,192 @@ html.is-interacting .detail-card {
     }
 }
 
+/* 界面配色：设置页的实时预览与滑杆。这里的颜色一律走 var() 或由 JS 注入，
+   不写死色值，避免被 /theme/ 的主题派生二次改写。 */
+.settings-theme-body {
+    display: grid;
+    /* 卡片宽度由 .settings-grid 的 auto-fit 决定，会随窗口在 320~600px 间浮动。
+       这里不能写固定列宽，否则窄卡片下预览列会被挤成一两百像素、按钮轨道撑破卡片。
+       与 .settings-grid 同款写法：够宽才并列，不够宽自动堆叠成单列。 */
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+    gap: 14px;
+    align-items: start;
+}
+
+.settings-theme-preview,
+.settings-theme-controls {
+    min-width: 0;
+}
+
+.settings-theme-preview {
+    display: grid;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
+}
+
+.settings-theme-preview-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.settings-theme-preview-head strong {
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.settings-theme-badge {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.settings-theme-preview > p {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
+.settings-theme-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.settings-theme-chip {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    padding: 6px 12px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.settings-theme-chip.ghost {
+    background: transparent;
+}
+
+.settings-theme-swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+}
+
+.settings-theme-swatch {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.settings-theme-swatch i {
+    display: inline-block;
+    inline-size: 16px;
+    block-size: 16px;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+}
+
+.settings-theme-swatch em {
+    font-style: normal;
+    white-space: nowrap;
+}
+
+.settings-theme-controls {
+    display: grid;
+    gap: 12px;
+    align-content: start;
+}
+
+.settings-theme-field {
+    display: grid;
+    gap: 6px;
+}
+
+.settings-theme-field-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.settings-theme-field-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    min-width: 0;
+}
+
+.settings-theme-field input[type="color"] {
+    flex: 0 0 auto;
+    inline-size: 44px;
+    block-size: 30px;
+    margin: 0;
+    padding: 2px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    background: transparent;
+    cursor: pointer;
+}
+
+/* .settings-card input 会给所有输入框加 width:100%/margin-top/padding/白底描边，
+   这里逐项复位，否则滑杆会被塞进白色圆角盒子里并整体下移，与右侧读数错行。 */
+.settings-theme-field input[type="range"] {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.settings-theme-field-value {
+    flex: 0 0 auto;
+    min-width: 46px;
+    text-align: right;
+    font-size: 12px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.settings-theme-hint {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--muted);
+}
+
+/* .button-row 是 .settings-theme-controls 的网格项，默认 min-width:auto 会被
+   「恢复默认」的 .confirm-anchor 最小宽度顶穿轨道，这里放开下限让它按轨道换行。 */
+.settings-theme-controls > .button-row {
+    min-width: 0;
+    flex-wrap: wrap;
+}
+
 @keyframes review-card-remove {
     to {
         opacity: 0;
@@ -5209,6 +5403,30 @@ html.is-interacting .detail-card {
         grid-template-columns: 1fr;
     }
 }
+.xhs-login-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1600;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: rgba(23, 40, 66, .35);
+}
+.xhs-login-dialog {
+    box-sizing: border-box;
+    width: min(1320px, 100%);
+    height: min(980px, 94dvh);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px;
+    background: var(--surface-color, #f5f8fd);
+    border-radius: var(--radius-card, 12px);
+}
+.xhs-login-dialog .xhs-login-frame {
+    flex: 1;
+    min-height: 0;
+}
 .xhs-login-frame {
     display: block;
     width: 100%;
@@ -5217,6 +5435,43 @@ html.is-interacting .detail-card {
     border: 1px solid var(--border-color, #dbe4f4);
     border-radius: var(--radius-card, 12px);
     background: #edf3ff;
+}
+.xhs-qr-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    margin: 12px 0;
+    padding: 16px;
+    border: 1px solid var(--border-color, #dbe4f4);
+    border-radius: var(--radius-card, 12px);
+    background: var(--surface-color, #f5f8fd);
+}
+.xhs-qr-panel p {
+    margin: 0;
+    text-align: center;
+}
+.xhs-qr-image {
+    width: 240px;
+    height: 240px;
+    object-fit: contain;
+    background: #fff;
+    border: 1px solid var(--border-color, #dbe4f4);
+    border-radius: var(--radius-card, 12px);
+}
+.xhs-qr-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 240px;
+    height: 240px;
+    padding: 16px;
+    box-sizing: border-box;
+    text-align: center;
+    color: var(--muted-color, #5a6b85);
+    background: #fff;
+    border: 1px dashed var(--border-color, #dbe4f4);
+    border-radius: var(--radius-card, 12px);
 }
 
 .xhs-video-backdrop {

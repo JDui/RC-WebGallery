@@ -19,7 +19,13 @@ ERRORS = {'UNAUTHORIZED', 'WORKER_ERROR', 'WORKER_BUSY', 'PROFILE_BUSY', 'BROWSE
           'NEEDS_MANUAL_VERIFICATION', 'RATE_LIMITED', 'STRUCTURE_CHANGED', 'CURSOR_ERROR',
           'SESSION_EXPIRED', 'MEDIA_DOWNLOAD_FAILED', 'MEDIA_NEEDS_RESOLUTION', 'NOTE_NOT_OBSERVED', 'MEDIA_QUOTA_EXCEEDED'}
 ERRORS.update({'UNLIKE_UNCONFIRMED', 'NOTE_LINK_UNAVAILABLE', 'NOTE_DETAIL_LOGIN_REQUIRED',
-               'NOTE_DETAIL_UNAVAILABLE', 'VIDEO_STREAM_UNAVAILABLE'})
+               'NOTE_DETAIL_UNAVAILABLE', 'VIDEO_STREAM_UNAVAILABLE', 'LIVEPHOTO_STREAM_UNAVAILABLE', 'CANCELLED'})
+# Every category the worker's media endpoint can return must survive the RPC
+# boundary. Otherwise the client silently rewrites it to WORKER_ERROR and hides
+# whether the source, the transport, or a size/time limit was responsible.
+ERRORS.update({'MEDIA_HOST_REJECTED', 'MEDIA_ADDRESS_REJECTED', 'MEDIA_REDIRECT_LIMIT', 'MEDIA_UNAVAILABLE',
+               'MEDIA_TYPE_REJECTED', 'MEDIA_TIME_LIMIT', 'MEDIA_INCOMPLETE', 'MEDIA_DIMENSIONS_REJECTED',
+               'MEDIA_MAGIC_REJECTED', 'MEDIA_DECODE_REJECTED', 'MEDIA_CANCELLED'})
 ERRORS.update(BROWSER_ERRORS)
 
 
@@ -63,7 +69,7 @@ class XhsWorkerClient:
             with direct_session() as session:
                 with session.request(method, self.base_url + path, json=payload, stream=stream,
                                      headers={'Authorization': 'Bearer ' + token, 'X-Request-Nonce': nonce},
-                                     timeout=(5, 360 if stream else 90), allow_redirects=False) as response:
+                                     timeout=(5, 600 if stream else 90), allow_redirects=False) as response:
                     proof = hmac.new(token.encode(), nonce.encode(), hashlib.sha256).hexdigest()
                     if not hmac.compare_digest(response.headers.get('X-Worker-Proof', ''), proof):
                         raise WorkerError('UNAUTHORIZED')

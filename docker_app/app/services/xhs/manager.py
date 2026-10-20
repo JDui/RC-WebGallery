@@ -12,16 +12,25 @@ from uuid import UUID, uuid4
 from PIL import Image
 
 from app.services.utils import TIMEZONE, dumps_json, loads_json, now_iso, parse_date
+from app.services.livephoto import LivePhotoError
 from app.services.xhs.models import XhsAsset, XhsNote, XhsValidationError, fields
 from app.services.xhs.sync import XhsConflict, XhsSyncService
 from app.services.xhs.worker_client import WorkerError, XhsWorkerClient
 
 
 class XhsManager:
+    # 这些失败状态可能只是一次性风控/页面抖动（explore 侧栏未及时渲染、验证码、限流），
+    # profile 里的 cookie 往往仍然有效：允许节流式静默复检自动恢复，而不是一律逼用户重新扫码。
+    AUTH_RECHECK_STATES = {'LOGIN_REQUIRED', 'NEEDS_REAUTH', 'NEEDS_REBIND', 'RATE_LIMITED',
+                           'NEEDS_MANUAL_VERIFICATION', 'STRUCTURE_CHANGED', 'CURSOR_ERROR',
+                           'LOGIN_START_FAILED', 'WORKER_ERROR', 'ERROR'}
+
     def __init__(self, db, storage, indexer, worker=None):
         self.db, self.storage, self.indexer = db, storage, indexer
         self.worker = worker or XhsWorkerClient()
         self.queue = None
+        self._auth_recheck_last_at = 0.0
+        self._auth_recheck_block_until = 0.0
 
     def ready(self, source_id):
         try:
@@ -37,11 +46,36 @@ class XhsManager:
             worker = self.worker.status()
         except WorkerError as exc:
             worker = {'state': exc.category, 'owner_key': None, 'network_mode': 'direct'}
+        worker = self._maybe_auto_recheck(worker)
         result['worker'] = worker
         result['automatic_sync_available'] = self.worker.configured
         for source in result['items']:
             source['can_sync'] = self.ready(source['id'])
         return result
+
+    def _maybe_auto_recheck(self, worker):
+        if not self.worker.configured:
+            return worker
+        if worker.get('state') not in self.AUTH_RECHECK_STATES:
+            return worker
+        now = time.time()
+        if now < self._auth_recheck_block_until or now - self._auth_recheck_last_at < 60:
+            return worker
+        with self.db.connect() as conn:
+            had_login = conn.execute(
+                "select 1 from xhs_source_accounts where auth_mode='browser' and verification_passed=1 "
+                "and auth_status not in ('MANUAL_ONLY','LOGIN_IN_PROGRESS') limit 1").fetchone()
+        if not had_login:
+            return worker
+        self._auth_recheck_last_at = now
+        try:
+            recheck = self.worker.status(check=True)
+        except WorkerError as exc:
+            # 复检确认失败：退避 10 分钟，避免状态轮询变成对小红书的频繁无头访问。
+            self._auth_recheck_block_until = now + 600
+            return {'state': exc.category, 'owner_key': worker.get('owner_key'), 'network_mode': 'direct'}
+        self._save_auth(recheck)
+        return recheck
 
     def refresh_auth(self):
         result = self.worker.status(check=True)
@@ -80,14 +114,14 @@ class XhsManager:
                     config_version = config_version + 1
                     where owner_key = ?''', (owner,))
             return result
-        methods = {'start': '/auth/start', 'finish': '/auth/finish', 'check': '/auth/check'}
+        methods = {'start': '/auth/start', 'finish': '/auth/finish', 'check': '/auth/check', 'qr': '/auth/qr'}
         if action not in methods:
             raise XhsValidationError('登录操作无效')
         result = self.worker.request('POST', methods[action])
         if action == 'start':
             with self.db.connect() as conn:
                 conn.execute("update xhs_source_accounts set auth_status='LOGIN_IN_PROGRESS' where auth_mode='browser'")
-        if action != 'start':
+        if action not in {'start', 'qr'}:
             self._save_auth(result)
         return result
 
@@ -107,6 +141,14 @@ class XhsManager:
         return {'ok': True, 'message': '本人点赞源已验证，可手动同步；自动刷新仍由独立开关控制'}
 
     def reserve_job(self, source_id, *, job_id=None, force_full=False, media_only=False):
+        if not self.ready(source_id):
+            # 排程同步遇到疑似"失效"时先做一次节流复检：误判态（风控抖动写坏的 auth_status）
+            # 可以在这里静默恢复，而不是直接拒绝任务逼用户重新扫码。
+            try:
+                worker = self.worker.status()
+            except WorkerError as exc:
+                worker = {'state': exc.category}
+            self._maybe_auto_recheck(worker)
         if not self.ready(source_id):
             raise XhsConflict('请先完成此来源的本人账号登录与验证')
         try:
@@ -275,9 +317,12 @@ class XhsManager:
             with self.worker.session(source['owner_key'], allowed) as session_id, self._cancel_monitor(session_id, cancelled):
                 if not job['media_only']:
                     with self.db.connect() as conn:
-                        full = conn.execute('''select finished_at from xhs_sync_runs where source_id=?
-                            and complete_snapshot=1 and checkpoint_committed=1 order by rowid desc limit 1''', (source['source_id'],)).fetchone()
-                    periodic_full = not full or (datetime.now(TIMEZONE) - datetime.fromisoformat(full[0])).days >= source['full_scan_interval_days']
+                        # A limited first scan establishes an incremental baseline;
+                        # ordinary anchor hits must not postpone periodic full scans.
+                        baseline = conn.execute('''select finished_at from xhs_sync_runs where source_id=?
+                            and (complete_snapshot=1 or stop_reason='first_sync_limit')
+                            and checkpoint_committed=1 order by rowid desc limit 1''', (source['source_id'],)).fetchone()
+                    periodic_full = not baseline or (datetime.now(TIMEZONE) - datetime.fromisoformat(baseline[0])).days >= source['full_scan_interval_days']
                     stats['effective_force_full'] = bool(job['force_full']) or not source['ordering_stable'] or periodic_full
                     stats['discovery'] = XhsSyncService(self.db).scan_pages(
                         source['source_id'], source['owner_key'], self.worker.pages(session_id, cooperate),
@@ -357,27 +402,50 @@ class XhsManager:
             try:
                 resolved = self.worker.request('POST', f'/sessions/{session_id}/resolve', {'note_id': post['note_id']})
                 raw_assets = resolved.get('assets')
-                if not isinstance(raw_assets, list) or not raw_assets or len(raw_assets) > 100:
+                # 一张图最多「静态图 + 实况」两条，上限按配对后的条数放宽。
+                if not isinstance(raw_assets, list) or not raw_assets or len(raw_assets) > 200:
                     raise WorkerError('MEDIA_NEEDS_RESOLUTION')
                 assets = [XhsAsset.parse(asset) for asset in raw_assets]
-                if resolved.get('media_complete') is not True:
+                missing_motion = resolved.get('missing_livephoto_ordinals', [])
+                if (not isinstance(missing_motion, list)
+                        or any(type(ordinal) is not int or not 0 <= ordinal < 100 for ordinal in missing_motion)
+                        or len(set(missing_motion)) != len(missing_motion)
+                        or not set(missing_motion) <= {asset.ordinal for asset in assets if asset.kind == 'livephoto'}
+                        or resolved.get('media_complete') is not (not missing_motion)):
                     raise WorkerError('MEDIA_NEEDS_RESOLUTION')
+                missing_motion = list(missing_motion)
                 note = XhsNote.parse(resolved.get('note'))
                 if note.note_id != post['note_id'] or tuple(sorted(assets, key=lambda asset: (asset.ordinal, asset.kind))) != note.assets:
                     raise WorkerError('MEDIA_NEEDS_RESOLUTION')
+                previous_assets = {item['url']: item for item in self.db.list_site_assets(post['id'])}
+                # Detail snapshots can omit every live marker. Keep motion
+                # already observed for these image ordinals pending (or reuse
+                # its cached file), rather than deleting it as obsolete.
+                if note.type != 'video':
+                    image_ordinals = {asset.ordinal for asset in assets if asset.kind == 'image'}
+                    motion_ordinals = {asset.ordinal for asset in assets if asset.kind == 'livephoto'}
+                    for item in previous_assets.values():
+                        if item['media_type'] != 'livephoto':
+                            continue
+                        ordinal = int(item['url'].split(':')[-2])
+                        if ordinal in image_ordinals and ordinal not in motion_ordinals:
+                            assets.append(XhsAsset(ordinal, 'livephoto'))
+                            missing_motion.append(ordinal)
+                            motion_ordinals.add(ordinal)
                 resolved_title = note.title
                 if resolved_title == note.note_id and post.get('title') and post['title'] != note.note_id:
                     resolved_title = post['title']
-                post['title'], post['note_type'] = resolved_title, note.type
+                post['title'] = resolved_title
+                post['note_type'] = 'livephoto' if note.type != 'video' and any(asset.kind == 'livephoto' for asset in assets) else note.type
                 if note.published_at:
                     post['pub_date'] = datetime.fromisoformat(note.published_at).astimezone(TIMEZONE).date().isoformat()
                 with self.db.connect() as conn:
                     conn.execute('update site_posts set title=?,pub_date=?,updated_at=? where id=?',
                                  (post['title'], post['pub_date'], now_iso(), post['id']))
                     conn.execute('update xhs_like_state set note_type=?,author_id=? where site_post_id=?',
-                                 (note.type, note.author_id, post['id']))
-                previous_assets = {item['url']: item for item in self.db.list_site_assets(post['id'])}
+                                 (post['note_type'], note.author_id, post['id']))
                 expected_keys = set()
+                live_errors = []
                 for asset in assets:
                     if cooperate:
                         cooperate()
@@ -388,7 +456,36 @@ class XhsManager:
                     old_path = self.storage.resolve_storage_path(row.get('rel_path'))
                     if post['media_revision'] >= 1 and row['status'] == 'ready' and old_path and old_path.is_file() and old_path.stat().st_size:
                         continue
-                    downloaded = self._download_asset(session_id, post, row, asset, source, quota, cooperate)
+                    try:
+                        if asset.kind == 'livephoto' and asset.ordinal in missing_motion:
+                            raise WorkerError('LIVEPHOTO_STREAM_UNAVAILABLE', {'stage': 'resolve', 'ordinal': asset.ordinal})
+                        downloaded = self._download_asset(session_id, post, row, asset, source, quota, cooperate)
+                    except Exception as exc:
+                        # A video's cover image is optional: keep going so the video
+                        # itself can still be archived. _archive() generates a cover
+                        # from a video frame when no image asset was stored. 实况同理：
+                        # 取不到实况就保留静态图，别让整篇笔记连带失败。
+                        category = exc.category if isinstance(exc, WorkerError) else 'MEDIA_DOWNLOAD_FAILED'
+                        if category in {'CANCELLED', 'MEDIA_CANCELLED', 'MEDIA_QUOTA_EXCEEDED',
+                                        'NEEDS_REAUTH', 'RATE_LIMITED', 'NEEDS_MANUAL_VERIFICATION'}:
+                            raise
+                        optional = asset.kind == 'livephoto' or (
+                            post['note_type'] == 'video' and asset.kind == 'image')
+                        if optional:
+                            scope = 'livephoto' if asset.kind == 'livephoto' else 'cover'
+                            diagnostic = exc.diagnostic if isinstance(exc, WorkerError) else {
+                                'stage': scope, 'error': type(exc).__name__}
+                            diagnostics = stats.setdefault('resolution_diagnostics', [])
+                            if len(diagnostics) < 20:
+                                diagnostics.append({'note_id': post['note_id'], 'category': category,
+                                                    'scope': scope, **diagnostic})
+                            key = 'livephoto_errors' if scope == 'livephoto' else 'cover_errors'
+                            stats[key] = stats.get(key, 0) + 1
+                            if scope == 'livephoto':
+                                self.db.set_site_asset_result(row['id'], 'failed', error=category)
+                                live_errors.append(category)
+                            continue
+                        raise
                     quota -= downloaded
                     stats['downloaded'] += 1
                 with self.db.connect() as conn:
@@ -397,24 +494,36 @@ class XhsManager:
                             conn.execute('delete from site_assets where id=?', (old['id'],))
                 self.db.update_site_post_counts(post['id'])
                 folder = self._archive(source, post)
-                self._note_result(post['id'], 'ready')
+                self._note_result(post['id'], 'partial' if live_errors else 'ready',
+                                  live_errors[0] if live_errors else None)
+                if live_errors:
+                    stats['errors'] += 1
+                stored_assets = [item for item in self.db.list_site_assets(post['id']) if item['status'] == 'ready']
                 stats['added_items'].append({'folder_name': folder, 'top_dynamic_id': dynamic_id, 'source_dynamic_id': dynamic_id,
-                                             'title': post['title'], 'new_post': True, 'saved_files': len(assets)})
+                                             'title': post['title'], 'new_post': True, 'saved_files': len(stored_assets),
+                                             'image_count': sum(1 for item in stored_assets if item['media_type'] == 'image'),
+                                             'livephoto_count': sum(1 for item in stored_assets if item['media_type'] == 'livephoto')})
             except Exception as exc:
                 stats['errors'] += 1
-                category = exc.category if isinstance(exc, WorkerError) else 'MEDIA_DOWNLOAD_FAILED'
+                if isinstance(exc, WorkerError):
+                    category, diagnostic = exc.category, exc.diagnostic
+                elif isinstance(exc, LivePhotoError):
+                    category, diagnostic = 'MEDIA_DOWNLOAD_FAILED', {'stage': 'livephoto-pairing', 'error': str(exc)}
+                else:
+                    category, diagnostic = 'MEDIA_DOWNLOAD_FAILED', {'stage': 'note', 'error': type(exc).__name__}
                 self._note_result(post['id'], 'failed', category)
-                if isinstance(exc, WorkerError) and exc.diagnostic:
+                if diagnostic:
                     diagnostics = stats.setdefault('resolution_diagnostics', [])
                     if len(diagnostics) < 20:
-                        diagnostics.append({'note_id': post['note_id'], 'category': category, **exc.diagnostic})
-                if category in {'NEEDS_REAUTH', 'RATE_LIMITED', 'NEEDS_MANUAL_VERIFICATION', 'MEDIA_QUOTA_EXCEEDED'}:
+                        diagnostics.append({'note_id': post['note_id'], 'category': category, **diagnostic})
+                if category in {'NEEDS_REAUTH', 'RATE_LIMITED', 'NEEDS_MANUAL_VERIFICATION', 'MEDIA_QUOTA_EXCEEDED',
+                                'CANCELLED', 'MEDIA_CANCELLED'}:
                     raise
 
     def _note_result(self, post_id, status, error=None):
         with self.db.connect() as conn:
             conn.execute('''update xhs_note_downloads set status=?, error_category=?, updated_at=?,
-                media_revision=case when ?='ready' then 1 else media_revision end where post_id=?''',
+                media_revision=case when ? in ('ready','partial') then 2 else media_revision end where post_id=?''',
                          (status, error, now_iso(), status, post_id))
 
     def _download_asset(self, session_id, post, row, asset, source, quota, cooperate):
@@ -427,7 +536,8 @@ class XhsManager:
                 extensions = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp',
                               'image/gif': '.gif', 'image/avif': '.avif', 'video/mp4': '.mp4'}
                 if mime not in extensions or (asset.kind == 'image') != mime.startswith('image/'):
-                    raise WorkerError('MEDIA_DOWNLOAD_FAILED')
+                    raise WorkerError('MEDIA_DOWNLOAD_FAILED',
+                                      {'stage': 'mime', 'mime': mime[:64], 'kind': asset.kind})
                 target = folder / f'{asset.ordinal:03d}-{asset.kind}{extensions[mime]}'
                 digest, count = hashlib.sha256(), 0
                 with part.open('wb') as output:
@@ -440,7 +550,9 @@ class XhsManager:
                         digest.update(chunk)
                         output.write(chunk)
                 if not count or digest.hexdigest() != response.headers.get('X-Asset-Sha256'):
-                    raise WorkerError('MEDIA_DOWNLOAD_FAILED')
+                    raise WorkerError('MEDIA_DOWNLOAD_FAILED', {
+                        'stage': 'verify', 'bytes': count, 'kind': asset.kind,
+                        'sha_match': digest.hexdigest() == response.headers.get('X-Asset-Sha256')})
                 width, height = 0, 0
                 if asset.kind == 'image':
                     with Image.open(part) as image:
@@ -458,10 +570,17 @@ class XhsManager:
                                   height or int(response.headers.get('X-Asset-Height', 0)), 'visible_web_media',
                                   float(response.headers.get('X-Asset-Duration', 0))))
                 return count
-        except Exception:
+        except Exception as exc:
             part.unlink(missing_ok=True)
+            if isinstance(exc, WorkerError):
+                self.db.set_site_asset_result(row['id'], 'failed', error=exc.category)
+                raise
+            diagnostic = {'stage': 'asset', 'error': type(exc).__name__}
+            errno = getattr(exc, 'errno', None)
+            if errno is not None:
+                diagnostic['errno'] = errno
             self.db.set_site_asset_result(row['id'], 'failed', error='MEDIA_DOWNLOAD_FAILED')
-            raise
+            raise WorkerError('MEDIA_DOWNLOAD_FAILED', diagnostic) from exc
 
     def _archive(self, source, post):
         folder_name = f"xhs_{source['source_id']}_{post['note_id']}"
@@ -469,6 +588,7 @@ class XhsManager:
         image_folder.mkdir(parents=True, exist_ok=True)
         video_folder.mkdir(parents=True, exist_ok=True)
         expected_paths = set()
+        changed_paths = []
         stored = self.db.list_site_assets(post['id'])
         image_ordinals = {int(asset['url'].split(':')[-2]) for asset in stored
                           if asset['media_type'] == 'image' and asset['status'] == 'ready' and asset['rel_path']}
@@ -485,6 +605,7 @@ class XhsManager:
                 if shutil.disk_usage(target.parent).free < path.stat().st_size + 128 * 1024 * 1024:
                     raise WorkerError('MEDIA_QUOTA_EXCEEDED')
                 shutil.copy2(path, target)
+                changed_paths.append(target)
             if asset['media_type'] == 'video' and ordinal - 1 not in image_ordinals:
                 cover = image_folder / f'{ordinal:03d}__video-cover.jpg'
                 expected_paths.add(cover)
@@ -501,6 +622,7 @@ class XhsManager:
                                   metadata={'source': 'xhs', 'site_post_id': post['id'], 'site_post_url': post['url'],
                                             'standalone_video': post['note_type'] == 'video',
                                             'media_variant': 'visible_web_media'})
+        self.indexer.livephotos.normalize_download(folder_name, changed_paths)
         return folder_name
 
     def unlike_target(self, folder_name):
@@ -578,7 +700,10 @@ class XhsManager:
                         if cooperate:
                             cooperate()
                         digest.update(chunk)
-                valid = digest.hexdigest() == asset['sha256']
+                expected = asset['sha256']
+                if path == archived:
+                    expected = self.indexer.livephotos.archive_checksum(folder_name, ordinal, archived) or expected
+                valid = digest.hexdigest() == expected
             if not valid:
                 failed += 1
                 self.db.set_site_asset_result(asset['id'], 'failed', error='MEDIA_CHECKSUM_MISMATCH')

@@ -1,6 +1,67 @@
 from __future__ import annotations
 
+import re
 import sqlite3
+
+
+FULL_SCAN_INTERVAL_MAX = 3650
+# add column 时写死的 “between 1 and 365” 会永久留在 sqlite_master 里，
+# SQLite 不支持修改已存在列的 CHECK，只能重建表。
+_FULL_SCAN_CAP = re.compile(r'full_scan_interval_days[^,)]*between\s+1\s+and\s+365\b', re.I)
+_FULL_SCAN_DECL = re.compile(
+    r'(full_scan_interval_days\s+integer\s+not\s+null\s+(?:default\s+\d+\s+)?'
+    r'check\(full_scan_interval_days\s+between\s+1\s+and\s+)365\b', re.I)
+
+
+def _widen_full_scan_interval(conn: sqlite3.Connection) -> None:
+    """把老库 xhs_source_accounts 上 full_scan_interval_days 的上限从 365 放宽到 3650。
+
+    仅放宽 Python 校验是不够的：老库的 CHECK 仍会拒绝更大的值（IntegrityError）。
+    新库由 add column 直接建出正确约束，这里只处理历史库，可重复执行。
+    """
+    row = conn.execute("select sql from sqlite_master where type='table' and name='xhs_source_accounts'").fetchone()
+    ddl = row[0] if row else None
+    if not ddl or not _FULL_SCAN_CAP.search(ddl):
+        return
+    if conn.execute("select count(*) from sqlite_master where type in ('trigger','view') "
+                    "and sql like '%xhs_source_accounts%'").fetchone()[0]:
+        raise sqlite3.OperationalError('xhs_source_accounts 上存在触发器或视图，请手工迁移 full_scan_interval_days 约束')
+    staged = 'xhs_source_accounts__widened'
+    new_ddl = _FULL_SCAN_DECL.sub(lambda match: match.group(1) + str(FULL_SCAN_INTERVAL_MAX), ddl, count=1)
+    if new_ddl == ddl:
+        raise sqlite3.OperationalError('无法改写 full_scan_interval_days 约束，请手工迁移')
+    head = new_ddl.lower().index('xhs_source_accounts')
+    if head > 40:  # 首个出现位置必须就是建表语句里的表名，否则宁可报错也不动表
+        raise sqlite3.OperationalError('无法定位 xhs_source_accounts 建表语句，请手工迁移 full_scan_interval_days 约束')
+    new_ddl = new_ddl[:head] + staged + new_ddl[head + len('xhs_source_accounts'):]
+
+    conn.commit()  # foreign_keys 在事务内是 no-op，必须先结束 add column 留下的隐式事务
+    conn.execute('pragma foreign_keys = off')
+    if conn.execute('pragma foreign_keys').fetchone()[0]:
+        raise sqlite3.OperationalError('无法关闭外键约束，放弃重建 xhs_source_accounts')
+    try:
+        conn.execute('pragma legacy_alter_table = on')  # 保证 rename 不去改写子表的 REFERENCES
+    except sqlite3.OperationalError:
+        pass  # 更老的 SQLite 没有这个开关，rename 不会改写子表定义
+    try:
+        conn.execute('begin immediate')
+        try:
+            conn.execute(new_ddl)
+            conn.execute(f'insert into {staged} select * from xhs_source_accounts')
+            conn.execute('drop table xhs_source_accounts')
+            conn.execute(f'alter table {staged} rename to xhs_source_accounts')
+            conn.execute('commit')
+        except BaseException:
+            conn.execute('rollback')
+            raise
+    finally:
+        try:
+            conn.execute('pragma legacy_alter_table = off')
+        except sqlite3.OperationalError:
+            pass
+        conn.execute('pragma foreign_keys = on')
+    if conn.execute('pragma foreign_key_check').fetchall():
+        raise sqlite3.IntegrityError('放宽 full_scan_interval_days 约束后外键校验失败')
 
 
 def migrate(conn: sqlite3.Connection) -> None:
@@ -57,7 +118,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     for name, declaration in {
         'verification_passed': 'integer not null default 0',
         'ordering_stable': 'integer not null default 0',
-        'full_scan_interval_days': 'integer not null default 7 check(full_scan_interval_days between 1 and 365)',
+        'full_scan_interval_days': f'integer not null default 7 check(full_scan_interval_days between 1 and {FULL_SCAN_INTERVAL_MAX})',
         'media_quota_mb': 'integer not null default 2048 check(media_quota_mb between 64 and 102400)',
     }.items():
         if name not in columns:
@@ -93,3 +154,22 @@ def migrate(conn: sqlite3.Connection) -> None:
             where status='blocked' and error_category='FILTERED' and post_id in
             (select id from site_posts where is_blocked=0)""")
         conn.execute("insert into xhs_schema_migrations values (5, datetime('now'))")
+    anchor_columns = {row[1] for row in conn.execute('pragma table_info(xhs_anchor_candidates)')}
+    for name, declaration in {
+        'title_prefix': "text not null default ''",
+        'author_id': "text not null default ''",
+        'note_type': "text not null default ''",
+        'asset_count': "integer not null default 0",
+    }.items():
+        if name not in anchor_columns:
+            conn.execute(f'alter table xhs_anchor_candidates add column {name} {declaration}')
+    _widen_full_scan_interval(conn)
+    conn.execute("insert or ignore into xhs_schema_migrations values (6, datetime('now'))")
+    # Re-resolve older image notes once: previous parsers could mark a Live Photo
+    # note ready after saving only its stills. Keep all successfully cached files.
+    if not conn.execute('select 1 from xhs_schema_migrations where version=7').fetchone():
+        conn.execute("""update xhs_note_downloads set status='pending',error_category=null
+            where status='ready' and media_revision<2 and post_id in
+            (select l.site_post_id from xhs_like_state l join xhs_source_accounts a on a.source_id=l.source_id
+             where a.auth_mode='browser' and l.note_type!='video')""")
+        conn.execute("insert into xhs_schema_migrations values (7, datetime('now'))")

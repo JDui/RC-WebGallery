@@ -4,10 +4,10 @@
     {% set ui_revision = app_version ~ '-network-polish-2' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#eaf0fb">
+    <meta name="theme-color" content="{{ theme_color }}">
     <title>正在连接内网 · {{ app_title }}</title>
     <link rel="stylesheet" href="/static/ui-tokens.css?v={{ ui_revision }}">
-    <link rel="stylesheet" href="/static/intranet.css?v={{ ui_revision }}">
+    <link rel="stylesheet" href="/theme/intranet.css?v={{ ui_revision }}&th={{ theme_rev }}">
 </head>
 <body data-intranet-origin="{{ intranet_origin }}">
     <main class="connection-card" aria-labelledby="connection-title">

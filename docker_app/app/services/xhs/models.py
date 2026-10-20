@@ -110,8 +110,9 @@ class XhsNote:
         if not isinstance(kind, str) or kind not in {"image", "video", "livephoto"}:
             raise XhsValidationError("不支持的笔记类型")
         raw_assets = value.get("assets", [])
-        if not isinstance(raw_assets, list) or len(raw_assets) > 100:
-            raise XhsValidationError("每条笔记最多 100 个媒体项")
+        # 一张图最多产出「静态图 + 实况」两条资产，上限按配对后的条数放宽。
+        if not isinstance(raw_assets, list) or len(raw_assets) > 200:
+            raise XhsValidationError("每条笔记最多 200 个媒体项")
         assets = tuple(sorted((XhsAsset.parse(item) for item in raw_assets), key=lambda a: (a.ordinal, a.kind)))
         if len({(item.ordinal, item.kind) for item in assets}) != len(assets):
             raise XhsValidationError("媒体序号与类型不可重复")
@@ -164,9 +165,12 @@ class XhsManifest:
         reason = text(value["stop_reason"], 64)
         if type(complete) is not bool or reason not in {
             "anchor_hit", "end_of_feed", "manual_import", "page_limit", "time_limit", "first_sync_limit",
+            "anchor_miss_limit", "anchor_title_hit",
             "cancelled", "cursor_error", "structure_changed", "needs_reauth", "needs_manual_verification", "rate_limited", "network_error",
         } or complete != (reason == "end_of_feed"):
             raise XhsValidationError("完整快照只能使用 end_of_feed 停止原因")
+        if reason in {"anchor_miss_limit", "anchor_title_hit"} and value.get("anchor_hit_note_id") is not None:
+            raise XhsValidationError("锚点扑空或标题止损停止不得声明命中笔记")
         raw_notes = value["notes"]
         if not isinstance(raw_notes, list) or len(raw_notes) > MAX_NOTES:
             raise XhsValidationError("清单最多包含 10000 条笔记")

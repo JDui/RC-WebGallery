@@ -69,7 +69,8 @@ def create_app(runtime=None, token: str | None = None):
 
     @app.post('/auth/{action}')
     async def auth(action: str):
-        methods = {'start': 'login_start', 'finish': 'login_finish', 'check': 'check', 'revoke': 'revoke'}
+        methods = {'start': 'login_start', 'finish': 'login_finish', 'check': 'check', 'revoke': 'revoke',
+                   'qr': 'login_qr'}
         if action not in methods:
             raise HTTPException(404)
         return await perform(getattr(app.state.runtime, methods[action]))
@@ -115,6 +116,8 @@ def create_app(runtime=None, token: str | None = None):
                 'X-Asset-Duration': str(meta.get('duration', 0)),
             }, background=BackgroundTask(path.unlink, missing_ok=True))
         except MediaRejected as exc:
+            return JSONResponse({'error_category': str(exc), 'diagnostic': exc.diagnostic}, status_code=409)
+        except BrowserFault as exc:
             return JSONResponse({'error_category': str(exc), 'diagnostic': exc.diagnostic}, status_code=409)
         except Exception:
             return JSONResponse({'error_category': 'MEDIA_DOWNLOAD_FAILED'}, status_code=409)

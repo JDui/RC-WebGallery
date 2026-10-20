@@ -9,6 +9,8 @@ docker_app/**/__pycache__/
 docker_app/dist/
 docker_app/review/
 docker_app/tests/
+test/
+tests/
 downloaded/
 LivePhoto/downloaded/
 storage/

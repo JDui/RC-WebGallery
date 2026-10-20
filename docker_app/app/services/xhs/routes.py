@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import sqlite3
 from typing import Callable
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -18,17 +17,7 @@ from app.services.xhs.browser_errors import browser_error_text
 async def read_body(request: Request, maximum: int = MAX_MANIFEST_BYTES) -> bytes:
     if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
         raise HTTPException(415, "请使用 application/json 上传清单")
-    # Browser writes must be same-origin, including deployments behind a reverse proxy.
-    origin = request.headers.get("origin")
-    if request.headers.get("sec-fetch-site") == "cross-site":
-        raise HTTPException(403, "不允许跨站修改小红书来源")
-    if origin:
-        try:
-            parsed = urlsplit(origin)
-            if parsed.scheme not in {"http", "https"} or parsed.netloc != request.headers.get("host"):
-                raise ValueError
-        except ValueError:
-            raise HTTPException(403, "不允许跨站修改小红书来源") from None
+    # 单人自部署场景不做跨站拦截：反代后容器收到的 Host 与浏览器 Origin 常不一致，会误判成跨站。
     raw = bytearray()
     async for chunk in request.stream():
         if len(raw) + len(chunk) > maximum:

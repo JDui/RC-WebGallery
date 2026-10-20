@@ -62,8 +62,15 @@ def origin_video_url(value):
     return 'https://sns-video-bd.xhscdn.com/' + value
 
 
-def extract_video_urls(video):
-    """Return video URL candidates in best-effort unwatermarked-first order."""
+def extract_video_candidates(video):
+    """Return ``(kind, url)`` candidates in best-effort unwatermarked-first order.
+
+    ``kind`` is ``origin`` for original upload keys, ``screencast`` for the
+    unwatermarked screencast streams and ``stream`` for regular playable
+    renditions. The runtime probes origin-like entries briefly and reserves the
+    remaining budget for playable streams, so a slow original cannot starve the
+    fallback.
+    """
     if not isinstance(video, dict):
         return []
     variants = [video]
@@ -75,11 +82,12 @@ def extract_video_urls(video):
             media_v2 = None
     if isinstance(media_v2, dict):
         variants.append(media_v2)
-    urls = []
-    def add_url(value):
+    candidates, seen = [], set()
+    def add_url(kind, value):
         url = media_url(value)
-        if url and url not in urls and len(urls) < 32:
-            urls.append(url)
+        if url and url not in seen and len(candidates) < 32:
+            seen.add(url)
+            candidates.append((kind, url))
     # The original upload key is the strongest known candidate for a clean source.
     for variant in variants:
         consumers = [variant.get('consumer')]
@@ -92,10 +100,10 @@ def extract_video_urls(video):
             key = consumer.get('origin_video_key') or consumer.get('originVideoKey')
             origin = origin_video_url(key)
             if origin:
-                add_url(origin)
+                add_url('origin', origin)
         origin = origin_video_url(variant.get('origin_video_key') or variant.get('originVideoKey'))
         if origin:
-            add_url(origin)
+            add_url('origin', origin)
     # Some responses expose an unwatermarked screencast URL only inside mediaV2.opaque1.
     for variant in variants:
         nested_video = variant.get('video') if isinstance(variant.get('video'), dict) else {}
@@ -105,16 +113,16 @@ def extract_video_urls(video):
                 value = opaque1.get(key)
                 if isinstance(value, dict):
                     for url_key in ('masterUrl', 'master_url', 'url', 'streamUrl', 'stream_url'):
-                        add_url(value.get(url_key))
+                        add_url('screencast', value.get(url_key))
                 elif isinstance(value, list):
                     for entry in value:
                         if isinstance(entry, dict):
                             for url_key in ('masterUrl', 'master_url', 'url', 'streamUrl', 'stream_url'):
-                                add_url(entry.get(url_key))
+                                add_url('screencast', entry.get(url_key))
                         else:
-                            add_url(entry)
+                            add_url('screencast', entry)
                 else:
-                    add_url(value)
+                    add_url('screencast', value)
     stream_candidates = []
     ordinal = 0
     for variant in variants:
@@ -157,17 +165,90 @@ def extract_video_urls(video):
                     backups = []
                 for candidate in [entry.get('master_url'), entry.get('masterUrl'), *backups]:
                     url = media_url(candidate)
-                    if url and url not in urls:
+                    if url and url not in seen:
                         stream_candidates.append((watermark_rank, -height, -bitrate, codec_rank, ordinal, url))
                         ordinal += 1
     for _, _, _, _, _, url in sorted(stream_candidates):
-        add_url(url)
-    return urls[:16]
+        add_url('stream', url)
+    return candidates[:16]
+
+
+def extract_video_urls(video):
+    """Return video URL candidates in best-effort unwatermarked-first order."""
+    return [url for _, url in extract_video_candidates(video)]
 
 
 def extract_video_url(video):
     candidates = extract_video_urls(video)
     return candidates[0] if candidates else None
+
+
+# 小红书网页端把实况视频挂在图片条目自身的 ``stream`` 上（与视频笔记同构的
+# h264/h265/av1 分组，静态图完全没有这个键）；少数版本改放在下面这些子对象里。
+LIVE_IMAGE_KEYS = ('live_photo', 'livePhoto', 'video')
+LIVE_URL_KEYS = ('video_url', 'videoUrl', 'url')
+
+
+def extract_live_candidates(image):
+    """Return ``(kind, url)`` candidates for one live-photo image entry.
+
+    实况视频的两种已知形态都在这里归一：直接挂在 ``image_list[i].stream``
+    的图片条目，以及把视频对象塞进 ``live_photo``/``livePhoto``/``video``
+    的版本。两种形态共用 :func:`extract_video_candidates` 的无水印排序与
+    ``backup_urls`` 回退，避免实况只有一个裸地址、过期即整条失败。
+    """
+    if not isinstance(image, dict):
+        return []
+    containers = [image]
+    for key in LIVE_IMAGE_KEYS:
+        value = image.get(key)
+        if isinstance(value, dict):
+            containers.append(value)
+    candidates, seen = [], set()
+
+    def add(kind, value):
+        url = media_url(value)
+        if url and url not in seen and len(candidates) < 16:
+            seen.add(url)
+            candidates.append((kind, url))
+
+    # 子对象上直接给出的可播放地址最贴近所见内容，排在流列表之前。
+    for container in containers[1:]:
+        for key in LIVE_URL_KEYS:
+            add('stream', container.get(key))
+    for container in containers:
+        for kind, url in extract_video_candidates(container):
+            if url not in seen and len(candidates) < 16:
+                seen.add(url)
+                candidates.append((kind, url))
+    return candidates
+
+
+def live_photo_seen(image):
+    """True when an image entry advertises motion media, even without a usable URL."""
+    if not isinstance(image, dict):
+        return False
+    if any(bool(image.get(key)) for key in ('live_photo', 'livePhoto')):
+        return True
+    containers = [image]
+    for key in LIVE_IMAGE_KEYS:
+        value = image.get(key)
+        if isinstance(value, dict):
+            containers.append(value)
+        elif isinstance(value, bool) and value:
+            return True
+    for container in containers:
+        media = container.get('media')
+        streams = container.get('stream')
+        if isinstance(streams, dict) and any(isinstance(item, list) and item for item in streams.values()):
+            return True
+        if isinstance(media, dict):
+            nested = media.get('stream')
+            if isinstance(nested, dict) and any(isinstance(item, list) and item for item in nested.values()):
+                return True
+    return False
+
+
 def video_diagnostic(video):
     fields = []
     def visit(value, path, depth):
@@ -215,6 +296,8 @@ def normalize_note(raw: dict, *, detail: bool = False) -> tuple[dict, list[tuple
     assets = []
     candidates = []
     images = card.get('image_list') or card.get('imageList') or []
+    # 视频笔记的封面流属于正片，不计为 Live Photo。
+    live_photo_allowed = card.get('type') != 'video' and not card.get('video')
     if detail and not images and (card.get('type') == 'video' or card.get('video')) and isinstance(card.get('cover'), dict):
         images = [card['cover']]
     for ordinal, image in enumerate(images[:100]):
@@ -228,12 +311,15 @@ def normalize_note(raw: dict, *, detail: bool = False) -> tuple[dict, list[tuple
         if url:
             assets.append({'ordinal': ordinal, 'kind': 'image'})
             candidates.append((ordinal, 'image', url))
-        live = image.get('live_photo') or image.get('livePhoto') or image.get('video') or {}
-        if isinstance(live, dict):
-            motion_url = media_url(live.get('video_url') or live.get('videoUrl') or live.get('url'))
-            if motion_url:
-                assets.append({'ordinal': ordinal, 'kind': 'livephoto'})
-                candidates.append((ordinal, 'livephoto', motion_url))
+        if not live_photo_allowed:
+            continue
+        live_candidates = extract_live_candidates(image)
+        # Keep advertised motion even when its URL is missing. Otherwise the
+        # static image alone would incorrectly make this note look complete.
+        if live_candidates or live_photo_seen(image):
+            assets.append({'ordinal': ordinal, 'kind': 'livephoto'})
+            if live_candidates:
+                candidates.append((ordinal, 'livephoto', live_candidates[0][1]))
     video = card.get('video') or {}
     video_url = extract_video_url(video)
     if video_url:
@@ -248,6 +334,7 @@ def normalize_note(raw: dict, *, detail: bool = False) -> tuple[dict, list[tuple
         title_value = ''
     title = re.sub(r'\s+', ' ', re.sub(r'[\x00-\x1f]', ' ', str(title_value))).strip()[:1000] or note_id
     note = {'note_id': note_id, 'url': f'https://www.xiaohongshu.com/explore/{note_id}', 'title': title,
-            'author_id': author, 'type': 'video' if card.get('type') == 'video' or bool(video) else 'image',
+            'author_id': author, 'type': 'video' if card.get('type') == 'video' or bool(video) else (
+                'livephoto' if any(asset['kind'] == 'livephoto' for asset in assets) else 'image'),
             'published_at': published, 'observed_at': now_iso(), 'assets': assets}
     return note, candidates

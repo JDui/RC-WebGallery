@@ -9,6 +9,7 @@ from typing import Any, Iterator
 
 from app.services.utils import dumps_json, loads_json, now_iso, safe_slug
 from app.services.xhs.schema import migrate as migrate_xhs
+from app.theme import DEFAULT_THEME as DEFAULT_UI_THEME
 
 
 DEFAULT_SETTINGS = {
@@ -61,6 +62,8 @@ DEFAULT_SETTINGS = {
     "small_thumb_quality": 48,
     "video_default_loop": True,
     "video_default_volume": 0,
+    # 界面配色：色相 / 饱和度 / 明度三个参数，整套色板由 app/theme.py 派生。
+    "ui_theme": dict(DEFAULT_UI_THEME),
     "storage_stats_cache": {
         "image_bytes": 0,
         "thumbnail_bytes": 0,
@@ -168,6 +171,24 @@ class Database:
                     created_at text not null,
                     updated_at text not null,
                     unique(folder_name, media_type, filename)
+                );
+
+                -- Durable identity, independent of rebuilt assets/pair_index caches.
+                create table if not exists livephoto_pairs (
+                    folder_name text not null,
+                    pair_index integer not null,
+                    content_id text not null unique,
+                    image_path text,
+                    video_path text,
+                    image_checksum text,
+                    video_checksum text,
+                    status text not null default 'pending',
+                    auto_pair integer not null default 0,
+                    version integer not null default 0,
+                    error text,
+                    transaction_json text,
+                    updated_at text not null,
+                    primary key(folder_name, pair_index)
                 );
 
                 create table if not exists task_runs (
@@ -462,6 +483,8 @@ class Database:
             self._migrate_image_threshold_defaults(conn)
             self._backfill_folder_subscriptions(conn)
             migrate_xhs(conn)
+            self._ensure_column(conn, 'livephoto_pairs', 'auto_pair', 'integer not null default 0')
+            self._ensure_column(conn, 'livephoto_pairs', 'confirmed_pair', 'integer not null default 0')
 
     def _ensure_default_settings(self, conn: sqlite3.Connection) -> None:
         existing_rows = conn.execute("select key, value from settings").fetchall()

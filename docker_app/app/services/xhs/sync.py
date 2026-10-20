@@ -19,6 +19,32 @@ class XhsConflict(RuntimeError):
     pass
 
 
+# 锚点扑空止损：增量扫描最多翻到 2 倍基数仍未命中锚点即止损；
+# 基数复用“首次拉取条数”，该值为“不限”时回退到此条数。
+ANCHOR_MISS_BASE_FALLBACK = 1000
+# 锚点标题指纹：提交锚点时顺带存归一化标题的前这么多字；扑空轮超过基数后，
+# 若本轮已读到“同作者且标题吻合”的笔记（疑似作者删旧发新）则视同触底提前结束。
+# 作者缺失时要求更长的标题以降低模板标题撞车的误停概率。
+ANCHOR_TITLE_PREFIX_CHARS = 64
+ANCHOR_TITLE_MIN = 4
+ANCHOR_TITLE_MIN_WITHOUT_AUTHOR = 8
+
+
+def _anchor_title_matches(profiles, note: XhsNote) -> bool:
+    title = note.title
+    if not title or title == note.note_id or len(title) < ANCHOR_TITLE_MIN:
+        return False
+    for profile in profiles:
+        prefix = profile["title_prefix"]
+        if not prefix or not title.startswith(prefix):
+            continue
+        if profile["author_id"] and profile["author_id"] == note.author_id:
+            return True
+        if not profile["author_id"] and len(title) >= ANCHOR_TITLE_MIN_WITHOUT_AUTHOR:
+            return True
+    return False
+
+
 @dataclass(frozen=True)
 class ScanPage:
     """Only a future verified worker transport may construct these pages."""
@@ -106,7 +132,7 @@ class XhsSyncService:
             enabled = payload.get("enabled", bool(current["enabled"]))
             refresh_enabled = payload.get("refresh_enabled", bool(current["refresh_enabled"]))
             refresh_interval = integer(payload.get("refresh_interval_minutes", current["refresh_interval_minutes"]), 23, 525600)
-            full_interval = integer(payload.get('full_scan_interval_days', current['full_scan_interval_days']), 1, 365)
+            full_interval = integer(payload.get('full_scan_interval_days', current['full_scan_interval_days']), 1, 3650)
             ordering = payload.get('ordering_stable', bool(current['ordering_stable']))
             if type(ordering) is not bool:
                 raise XhsValidationError('锚点早停状态必须为布尔值')
@@ -203,12 +229,29 @@ class XhsSyncService:
                 raise XhsConflict("来源已停用")
             if source["owner_key"] != owner_key:
                 raise XhsConflict("NEEDS_REBIND：账号与来源不一致")
+            # Older limited scans marked initialization complete without saving
+            # a checkpoint. Repeat initialization once to establish usable anchors.
+            initial_scan = not source["initial_fetch_completed"] or not source["last_checkpoint_scan_id"]
+            anchors, profiles = set(), []
             with self.db.connect() as conn:
-                anchors = set(self._anchors(conn, source)) if not ignore_anchors and source["initial_fetch_completed"] else set()
+                if not ignore_anchors and not initial_scan:
+                    rows = conn.execute(
+                        """select note_id, title_prefix, author_id from xhs_anchor_candidates
+                           where source_id = ? and scan_id = ? order by rank""",
+                        (source["source_id"], source["last_checkpoint_scan_id"]),
+                    ).fetchall()
+                    anchors = {row["note_id"] for row in rows}
+                    profiles = [row for row in rows if row["title_prefix"]]
             notes: dict[str, XhsNote] = {}
             started, clock = now_iso(), time.monotonic()
-            hit, complete, reliable, reason, asset_count = None, False, True, "cursor_error", 0
-            initial_limit = source["initial_fetch_limit"] if not source["initial_fetch_completed"] else None
+            hit, title_hit, complete, reliable, reason, asset_count = None, False, False, True, "cursor_error", 0
+            initial_limit = source["initial_fetch_limit"] if initial_scan else None
+            stop_limit = None
+            check_base = None
+            if not ignore_anchors and not initial_scan:
+                base = source["initial_fetch_limit"] if source["initial_fetch_limit"] is not None else ANCHOR_MISS_BASE_FALLBACK
+                check_base = min(base, MAX_NOTES)
+                stop_limit = min(2 * base, MAX_NOTES)
             iterator = iter(pages)
             try:
                 for page_index in range(max_pages):
@@ -250,6 +293,8 @@ class XhsSyncService:
                         notes[note.note_id] = note
                         if note.note_id in anchors:
                             hit = hit or note.note_id
+                        elif profiles and hit is None and _anchor_title_matches(profiles, note):
+                            title_hit = True
                     if limit_hit:
                         reason = "first_sync_limit" if initial_limit is not None else "page_limit"
                         break
@@ -265,6 +310,12 @@ class XhsSyncService:
                         break
                     if hit and reliable and len(notes) >= source["anchor_count"]:
                         reason = "anchor_hit"
+                        break
+                    if profiles and reliable and hit is None and title_hit and check_base is not None and len(notes) >= check_base:
+                        reason = "anchor_title_hit"
+                        break
+                    if stop_limit is not None and hit is None and len(notes) >= stop_limit:
+                        reason = "anchor_miss_limit"
                         break
                     if page_index == max_pages - 1:
                         reason = "page_limit"
@@ -289,9 +340,13 @@ class XhsSyncService:
             manifest = XhsManifest(owner_key, str(uuid4()), started, finished, complete, reason,
                                    tuple(notes.values()), hit, source["anchor_count"])
             fingerprint = hashlib.sha256(json.dumps(asdict(manifest), sort_keys=True).encode()).hexdigest()
-            checkpoint = reliable and reason in {"end_of_feed", "anchor_hit"}
+            # Reliable limited initialization also saves the leading anchors.
+            # It remains a partial scan and must never reconcile removed likes.
+            checkpoint = reliable and reason in {
+                "end_of_feed", "anchor_hit", "first_sync_limit", "anchor_miss_limit", "anchor_title_hit",
+            }
             return self._commit(source, manifest, manifest.notes, reason, complete, checkpoint, fingerprint,
-                                first_fetch_done=checkpoint or reason == "first_sync_limit", emit_task_history=emit_task_history)
+                                first_fetch_done=checkpoint, emit_task_history=emit_task_history)
 
     def _commit(self, source: dict, manifest: XhsManifest, notes: tuple[XhsNote, ...], reason: str,
                 complete: bool, checkpoint: bool, fingerprint: str, *, first_fetch_done: bool, emit_task_history: bool = True) -> dict:
@@ -363,13 +418,19 @@ class XhsSyncService:
                         where post_id=? and status='ready' and not exists
                         (select 1 from site_assets where post_id=? and media_type='video' and status='ready')""",
                                  (post_id, post_id))
+                if any(asset.kind == 'livephoto' for asset in note.assets):
+                    conn.execute("""update xhs_note_downloads set status='pending',error_category=null
+                        where post_id=? and status='ready' and exists
+                        (select 1 from site_assets where post_id=? and media_type='livephoto' and status!='ready')""",
+                                 (post_id, post_id))
                 conn.execute("update site_posts set asset_count = (select count(*) from site_assets where post_id = ?) where id = ?", (post_id, post_id))
             if complete:
                 conn.execute(
                     """update xhs_like_state set is_currently_liked = 0 where source_id = ?
                        and (last_full_snapshot_id is null or last_full_snapshot_id != ?)""", (source_id, manifest.scan_id),
                 )
-            result = "SUCCESS_FULL" if complete else "SUCCESS_INCREMENTAL" if checkpoint else "IMPORTED" if reason == "manual_import" else "PARTIAL"
+            result = ("SUCCESS_FULL" if complete else "PARTIAL" if reason == "first_sync_limit"
+                      else "SUCCESS_INCREMENTAL" if checkpoint else "IMPORTED" if reason == "manual_import" else "PARTIAL")
             conn.execute(
                 """insert into xhs_sync_runs(scan_id, source_id, manifest_hash, started_at, finished_at, result,
                        complete_snapshot, seen_count, new_count, stop_reason, anchor_hit_note_id,
@@ -377,13 +438,19 @@ class XhsSyncService:
                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (manifest.scan_id, source_id, fingerprint, manifest.started_at, manifest.completed_at, result, int(complete),
                  len(notes), new_count, reason, manifest.anchor_hit_note_id if checkpoint else None, source["anchor_count"],
-                 source["initial_fetch_limit"] if not source["initial_fetch_completed"] else None,
+                 source["initial_fetch_limit"] if not source["initial_fetch_completed"] or not source["last_checkpoint_scan_id"] else None,
                  int(checkpoint), source["checkpoint_version"] + int(checkpoint),
                  reason if reason in {"network_error", "cursor_error", "structure_changed", "cancelled", "time_limit", 'needs_reauth', 'needs_manual_verification', 'rate_limited'} else None),
             )
             if checkpoint:
                 for rank, note in enumerate(notes[:source["anchor_count"]]):
-                    conn.execute("insert into xhs_anchor_candidates values (?, ?, ?, ?)", (source_id, manifest.scan_id, rank, note.note_id))
+                    conn.execute(
+                        """insert into xhs_anchor_candidates(source_id, scan_id, rank, note_id,
+                               title_prefix, author_id, note_type, asset_count)
+                           values (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (source_id, manifest.scan_id, rank, note.note_id,
+                         note.title[:ANCHOR_TITLE_PREFIX_CHARS], note.author_id, note.type, len(note.assets)),
+                    )
                 conn.execute(
                     """update xhs_source_accounts set last_checkpoint_scan_id = ?, last_checkpoint_at = ?,
                        checkpoint_version = checkpoint_version + 1 where source_id = ? and checkpoint_version = ?""",

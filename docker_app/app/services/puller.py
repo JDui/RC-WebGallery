@@ -30,9 +30,11 @@ from app.services.legacy_bridge import (
     safe_filename,
 )
 from app.services.media_indexer import MediaIndexer
+from app.services.livephoto import LivePhotoError
+from app.services.livephoto_recovery import LivePhotoRecovery
 from app.services.storage import StorageService
 from app.services.task_priority import BACKGROUND, TaskPriorityCoordinator
-from app.services.utils import build_folder_name, compact_text, dumps_json, extract_chinese_prefix, loads_json
+from app.services.utils import build_folder_name, compact_text, dumps_json, extract_chinese_prefix, human_interval, loads_json
 from app.services.utils import now_iso
 
 API_NAV = "https://api.bilibili.com/x/web-interface/nav"
@@ -339,6 +341,157 @@ class PullManager:
         queued = self._queue_or_start("index", "重建页面索引", self._run_gallery_index_rebuild)
         return {"ok": True, "message": "已加入任务队列" if queued else "已开始重建页面索引", "queued": queued}
 
+    def start_livephoto_maintenance(self, repair: bool = False) -> dict[str, Any]:
+        mode = 'livephoto-repair' if repair else 'livephoto-check'
+        label = '修复历史 Live Photo 配对' if repair else '检查 Live Photo 配对'
+        queued = self._queue_or_start(mode, label, self._run_livephoto_maintenance, repair)
+        return {'ok': True, 'queued': queued, 'message': f'{label}已提交，可在任务队列中查看进度'}
+
+    def _run_livephoto_maintenance(self, repair: bool = False) -> None:
+        mode = 'livephoto-repair' if repair else 'livephoto-check'
+        label = '修复历史 Live Photo 配对' if repair else '检查 Live Photo 配对'
+        stats: dict[str, Any] = {}
+        retry = {'kind': mode}
+        task_id = self.db.create_task_run(mode, 'running', label, {'retry_action': retry})
+        try:
+            self._set_progress(mode, '正在扫描实况配对', processed=0, total=0, target=label)
+            def progress(done, total, current, counters):
+                self._set_progress(mode, label, processed=done, total=total, current=current,
+                                   target=label, stats=dict(counters))
+            self.indexer.livephotos.maintain(repair, self._cooperate, progress, stats)
+            unresolved = stats['errors'] or (stats['needs_repair'] if not repair else 0)
+            message = (f"{label}完成：检查 {stats['checked']} 组，已配对 {stats['paired']} 组，"
+                       f"修复 {stats['repaired']} 组，待修复 {stats['needs_repair']} 组，异常 {stats['errors']} 组")
+            details = {**stats, 'retry_action': retry}
+            self.db.finish_task_run(task_id, 'partial' if unresolved else 'success', message, details)
+            self._status = {'running': False, 'message': message, 'mode': 'idle', 'stats': stats}
+        except Exception as exc:
+            message = 'Live Photo 任务已取消' if self._cancel_requested else str(exc)
+            self.db.finish_task_run(task_id, 'cancelled' if self._cancel_requested else 'failed',
+                                    message, {**stats, 'error': str(exc), 'retry_action': retry})
+            self._status = {'running': False, 'message': message, 'mode': 'idle', 'stats': stats}
+        finally:
+            self._release()
+            self._run_next_queued_task()
+
+    def _livephoto_task(self, task_id):
+        task = self.db.get_task_run(task_id)
+        if (not task or task['task_type'] not in {'livephoto-check', 'livephoto-repair', 'livephoto-repair-errors', 'livephoto-manual'}
+                or task['status'] not in {'success', 'partial'} or not task.get('finished_at')):
+            raise LivePhotoError('请等待实况检查或修复任务完成')
+        details = loads_json(task.get('details_json'), {})
+        if details.get('completed') is False:
+            raise LivePhotoError('检查尚未完整结束，请重新检查')
+        return task, details
+
+    @staticmethod
+    def _livephoto_exception_targets(details):
+        return details.get('exception_targets', [issue for issue in details.get('issues', [])
+                                                  if issue.get('code') != 'metadata_error'])
+
+    def livephoto_exception_options(self, task_id):
+        _, details = self._livephoto_task(task_id)
+        return {'items': LivePhotoRecovery(self.indexer.livephotos).options(self._livephoto_exception_targets(details))}
+
+    def start_livephoto_followup(self, task_id, action, choices=None):
+        _, details = self._livephoto_task(task_id)
+        if action not in {'repair', 'repair-errors', 'manual'}:
+            raise LivePhotoError('实况修复操作无效')
+        if action == 'manual':
+            LivePhotoRecovery(self.indexer.livephotos).validate_choices(choices, self._livephoto_exception_targets(details))
+        mode = {'repair': 'livephoto-repair', 'repair-errors': 'livephoto-repair-errors', 'manual': 'livephoto-manual'}[action]
+        label = {'repair': '修复配对', 'repair-errors': '修复异常', 'manual': '确认异常配对'}[action]
+        queued = self._queue_or_start(mode, label, self._run_livephoto_followup, task_id, action, choices)
+        return {'ok': True, 'queued': queued, 'message': f'{label}已提交，将按队列顺序执行'}
+
+    def _restore_livephoto_original(self, folder_name, video):
+        """Fetch only a still whose source explicitly names this motion file."""
+        folder = self.db.get_folder(folder_name) or {}
+        if folder_name.startswith('xhs_') and self.xhs_manager:
+            import re
+            match = re.fullmatch(r'xhs_(\d+)_([A-Za-z0-9_-]+)', folder_name)
+            prefix = re.match(r'^(\d+)__', video.name)
+            if match and prefix:
+                return self.xhs_manager.restore_livephoto_original(int(match[1]), match[2], int(prefix[1]) - 1, self._cooperate)
+            return None
+        source_id = str(folder.get('source_dynamic_id') or '')
+        if not source_id.isdigit():
+            return None
+        settings = self.db.get_settings()
+        host = int(settings['host_mid'])
+        cookie = self.auth.get_cookie_state().cookie or ''
+        detail = self.auth.fetch_dynamic_detail(str(folder.get('top_dynamic_id') or source_id), host, cookie)
+        wanted = __import__('re').sub(r'^\d+__', '', video.name)
+        for candidate in self._collect_candidates(detail, True):
+            if candidate.source_dynamic_id != source_id:
+                continue
+            matches = [asset for asset in candidate.live_assets
+                       if os.path.basename(urlparse(live_url({'live_url': asset.get('live_url', '')})).path) == wanted]
+            if len(matches) != 1 or not live_cover_url(matches[0]):
+                return None
+            url = live_cover_url(matches[0])
+            suffix = Path(urlparse(url).path).suffix.lower()
+            if suffix not in {'.jpg', '.jpeg', '.png', '.webp', '.avif'}:
+                suffix = '.jpg'
+            target = video.parent / '.source_covers' / f'{video.stem}{suffix}'
+            target.parent.mkdir(parents=True, exist_ok=True)
+            self._download_if_missing(url, target, self._build_request_headers(str(host), cookie, purpose='asset'))
+            return target if target.is_file() else None
+        return None
+
+    def _run_livephoto_followup(self, source_task_id, action, choices=None):
+        mode = {'repair': 'livephoto-repair', 'repair-errors': 'livephoto-repair-errors', 'manual': 'livephoto-manual'}[action]
+        label = {'repair': '修复配对', 'repair-errors': '修复异常', 'manual': '确认异常配对'}[action]
+        stats = {'source_task_id': source_task_id, 'completed': False,
+                 'retry_action': {'kind': mode, 'source_task_id': source_task_id, 'choices': choices}}
+        task_id = self.db.create_task_run(mode, 'running', label, stats)
+        try:
+            _, previous = self._livephoto_task(source_task_id)
+            targets = self._livephoto_exception_targets(previous)
+            all_targets = previous.get('repairable_targets', []) + targets
+            scope = previous.get('scope_folders')
+            if scope is None and 'repairable_targets' in previous:
+                scope = sorted({t['folder_name'] for t in all_targets})
+            stats['scope_folders'] = scope
+            recovery = LivePhotoRecovery(self.indexer.livephotos, self._restore_livephoto_original)
+            changed, errors, repaired = set(), [], 0
+            def progress(done, total, current, counters):
+                self._set_progress(mode, label, processed=done, total=total, current=current,
+                                   target=label, stats={**stats, **counters})
+            if action == 'repair':
+                result = self.indexer.livephotos.maintain(True, self._cooperate, progress, {},
+                    targets=previous.get('repairable_targets'), folders=scope)
+                repaired = result['repaired']
+            elif action == 'repair-errors':
+                changed, repaired, errors = recovery.automatic(targets, self._cooperate,
+                    lambda name, index: self._set_progress(mode, '正在找回原图并确认配对', current=f'{name} / {index}', target=label))
+            else:
+                changed, errors = recovery.manual(choices, targets, self._cooperate)
+                repaired = len(choices) - len(errors)
+            for name in changed:
+                self._cooperate()
+                folder = self.db.get_folder(name)
+                if folder:
+                    self.indexer.index_folder(name, folder['pub_ts'], folder['title'], folder['text_prefix'],
+                        folder['top_dynamic_id'], folder['source_dynamic_id'],
+                        subscription_uid=folder.get('subscription_uid') or '', subscription_name=folder.get('subscription_name'),
+                        review_status=folder.get('review_status', 'approved'), generate_derivatives=False,
+                        metadata=loads_json(folder.get('metadata_json'), {}))
+            self.indexer.livephotos.maintain(False, self._cooperate, progress, stats, folders=scope)
+            stats.update(repaired=repaired, recovery_errors=errors,
+                         exception_attempted=action in {'repair-errors', 'manual'} or previous.get('exception_attempted', False))
+            message = f"{label}完成：修复 {repaired} 组，待修复配对 {stats['repairable']} 组，剩余异常 {stats['unpaired']} 组"
+            self.db.finish_task_run(task_id, 'partial' if stats['needs_repair'] or stats['errors'] else 'success', message, stats)
+            self._status = {'running': False, 'message': message, 'mode': 'idle', 'stats': stats}
+        except Exception as exc:
+            stats['error'] = str(exc)[:500]
+            message = '实况修复已取消' if self._cancel_requested else str(exc)[:500]
+            self.db.finish_task_run(task_id, 'cancelled' if self._cancel_requested else 'failed', message, stats)
+            self._status = {'running': False, 'message': message, 'mode': 'idle', 'stats': stats}
+        finally:
+            self._release()
+            self._run_next_queued_task()
+
     def start_thumbnail_rebuild(self, level: str) -> dict[str, Any]:
         if level not in {"small", "thumb"}:
             raise RuntimeError("缩略图等级无效")
@@ -549,6 +702,11 @@ class PullManager:
             return self.start_validation()
         if kind == "index":
             return self.start_gallery_index_rebuild()
+        if kind in {'livephoto-repair', 'livephoto-repair-errors', 'livephoto-manual'} and retry_action.get('source_task_id'):
+            action = {'livephoto-repair': 'repair', 'livephoto-repair-errors': 'repair-errors', 'livephoto-manual': 'manual'}[kind]
+            return self.start_livephoto_followup(int(retry_action['source_task_id']), action, retry_action.get('choices'))
+        if kind in {'livephoto-check', 'livephoto-repair'}:
+            return self.start_livephoto_maintenance(kind == 'livephoto-repair')
         if kind == "thumbnail-rebuild":
             return self.start_thumbnail_rebuild(str(retry_action.get("level") or ""))
         if kind == "site-sync":
@@ -1558,7 +1716,9 @@ class PullManager:
         floor = 0.04
         actual_base = max(base, floor)
         duration = random.uniform(max(floor, actual_base * 0.7), actual_base + spread)
-        time.sleep(duration)
+        # 拟人化下限：两次操作之间至少隔 250~880ms 的随机时长，
+        # 消除"亚秒级恒定节奏"这类机器特征（风控友好）。
+        time.sleep(max(duration, human_interval()))
 
     def _run_startup_sync(self) -> None:
         task_id = self.db.create_task_run("startup", "running", "启动后整理图库")
@@ -2331,6 +2491,9 @@ class PullManager:
             subscription_uid=candidate.subscription_uid or str(settings["host_mid"]),
             subscription_name=candidate.subscription_name or self._subscription_name(candidate.subscription_uid or str(settings["host_mid"])),
         )
+        # Pair only freshly downloaded files (or a previously failed pairing).
+        # Reindexing/importing old archives never triggers metadata changes.
+        self.indexer.livephotos.normalize_download(folder_name, created_paths)
         return saved_files
 
     def _folder_needs_sync(self, folder_name: str, candidate: MatchCandidate, options: dict[str, bool]) -> bool:
@@ -2553,6 +2716,10 @@ class PullManager:
                 thread = threading.Thread(target=self._run_validation, daemon=True)
             elif next_task.kind == "index":
                 thread = threading.Thread(target=self._run_gallery_index_rebuild, daemon=True)
+            elif next_task.kind in {'livephoto-check', 'livephoto-repair', 'livephoto-repair-errors', 'livephoto-manual'}:
+                args = next_task.payload.get('args', [False])
+                target = self._run_livephoto_followup if len(args) == 3 else self._run_livephoto_maintenance
+                thread = threading.Thread(target=target, args=tuple(args), daemon=True)
             elif next_task.kind == "thumbnail-rebuild":
                 level = str(next_task.payload.get("args", [""])[0])
                 thread = threading.Thread(target=self._run_thumbnail_rebuild, args=(level,), daemon=True)

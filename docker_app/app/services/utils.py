@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import random
 import re
+import time
 from datetime import date, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -11,6 +13,24 @@ from urllib.parse import unquote, urlparse
 from zoneinfo import ZoneInfo
 
 TIMEZONE = ZoneInfo("Asia/Shanghai")
+
+# 拟人化操作节奏：连续两个动作之间默认取 250~880ms 的均匀随机间隔，
+# 替代固定步长（固定 0.5s 滚动、固定 0.2s 下载间隔等机器特征）。
+HUMAN_ACTION_MIN_MS = 250
+HUMAN_ACTION_MAX_MS = 880
+
+
+def human_interval(min_ms: float = HUMAN_ACTION_MIN_MS, max_ms: float = HUMAN_ACTION_MAX_MS) -> float:
+    """返回一个拟人化操作间隔（秒）。"""
+    low, high = sorted((float(min_ms), float(max_ms)))
+    return random.uniform(low, high) / 1000.0
+
+
+def human_sleep(min_ms: float = HUMAN_ACTION_MIN_MS, max_ms: float = HUMAN_ACTION_MAX_MS) -> float:
+    """按拟人化间隔阻塞停顿，返回实际睡眠秒数。"""
+    delay = human_interval(min_ms, max_ms)
+    time.sleep(delay)
+    return delay
 
 
 def now_iso() -> str:

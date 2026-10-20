@@ -1,4 +1,187 @@
+// 界面配色的前端镜像：算法与 app/theme.py 保持一致，只负责设置页的实时预览，
+// 真正生效的色板仍由服务端 /theme/*.css 派生。预览有偏差也不会影响最终样式。
+const UI_THEME_DEFAULTS = { hue: 337, saturation: 0.5, value: 1 };
+const UI_THEME_BOUNDS = { hue: [0, 359.9], saturation: [0, 1.5], value: [0.55, 1.45] };
+// 基准色板取自 liquid-glass.css 的 :root（它在 app.css 之后加载，同名变量以它为准）。
+const UI_THEME_BASE_COLORS = {
+  text: "#172842",
+  muted: "#65758e",
+  accent: "#426ee3",
+  accent2: "#199caa",
+  accentWarm: "#b77e38",
+  danger: "#c74260",
+  line: "#465f88",
+  surface: "#f5f8fd",
+  page: "#eaf0f8",
+};
+const UI_THEME_ENGINE = {
+  HUE_MIN: 170,
+  HUE_MAX: 292,
+  ANCHOR_HUE: 219,
+  HUE_RATIO: 0.4,
+  MIN_CHANNEL_DELTA: 2,
+  MIN_SATURATION: 0.006,
+  LUMA_ITERATIONS: 22,
+  clamp(value, low, high) {
+    return Math.max(low, Math.min(high, value));
+  },
+  hexToRgb(hex) {
+    let digits = String(hex || "").trim().replace("#", "");
+    if (digits.length === 3) {
+      digits = digits.split("").map((char) => char + char).join("");
+    }
+    if (!/^[0-9a-fA-F]{6}$/.test(digits)) {
+      return null;
+    }
+    return [
+      parseInt(digits.slice(0, 2), 16),
+      parseInt(digits.slice(2, 4), 16),
+      parseInt(digits.slice(4, 6), 16),
+    ];
+  },
+  rgbToHex(rgb) {
+    return (
+      "#" +
+      rgb
+        .map((channel) =>
+          Math.round(this.clamp(channel, 0, 255))
+            .toString(16)
+            .padStart(2, "0"),
+        )
+        .join("")
+    );
+  },
+  rgba(hex, alpha) {
+    const rgb = this.hexToRgb(hex) || [0, 0, 0];
+    return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})`;
+  },
+  channelToLinear(channel) {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+  },
+  relativeLuma(rgb) {
+    return (
+      0.2126 * this.channelToLinear(rgb[0]) +
+      0.7152 * this.channelToLinear(rgb[1]) +
+      0.0722 * this.channelToLinear(rgb[2])
+    );
+  },
+  rgbToHsv(rgb) {
+    const red = rgb[0] / 255;
+    const green = rgb[1] / 255;
+    const blue = rgb[2] / 255;
+    const max = Math.max(red, green, blue);
+    const min = Math.min(red, green, blue);
+    const delta = max - min;
+    let hue = 0;
+    if (delta !== 0) {
+      if (max === red) {
+        hue = ((green - blue) / delta) % 6;
+      } else if (max === green) {
+        hue = (blue - red) / delta + 2;
+      } else {
+        hue = (red - green) / delta + 4;
+      }
+      hue /= 6;
+      if (hue < 0) {
+        hue += 1;
+      }
+    }
+    return [hue * 360, max === 0 ? 0 : delta / max, max];
+  },
+  hsvToRgb(hue, saturation, value) {
+    const h = (((hue % 360) + 360) % 360) / 360;
+    const floor = Math.floor(h * 6);
+    const sector = floor % 6;
+    const f = h * 6 - floor;
+    const p = value * (1 - saturation);
+    const q = value * (1 - f * saturation);
+    const t = value * (1 - (1 - f) * saturation);
+    const table = [
+      [value, t, p],
+      [q, value, p],
+      [p, value, t],
+      [p, q, value],
+      [t, p, value],
+      [value, p, q],
+    ];
+    return table[sector].map((channel) => Math.round(this.clamp(channel, 0, 1) * 255));
+  },
+  valueForLuma(hue, saturation, target) {
+    if (this.relativeLuma(this.hsvToRgb(hue, saturation, 1)) <= target) {
+      return 1;
+    }
+    if (this.relativeLuma(this.hsvToRgb(hue, saturation, 0)) >= target) {
+      return 0;
+    }
+    let low = 0;
+    let high = 1;
+    for (let index = 0; index < this.LUMA_ITERATIONS; index += 1) {
+      const middle = (low + high) / 2;
+      if (this.relativeLuma(this.hsvToRgb(hue, saturation, middle)) < target) {
+        low = middle;
+      } else {
+        high = middle;
+      }
+    }
+    return (low + high) / 2;
+  },
+  transformRgb(rgb, theme) {
+    if (Math.max(...rgb) - Math.min(...rgb) < this.MIN_CHANNEL_DELTA) {
+      return rgb;
+    }
+    const [hue, saturation] = this.rgbToHsv(rgb);
+    if (saturation < this.MIN_SATURATION || hue < this.HUE_MIN || hue > this.HUE_MAX) {
+      return rgb;
+    }
+    const targetHue = (theme.hue + (hue - this.ANCHOR_HUE) * this.HUE_RATIO) % 360;
+    const targetSaturation = this.clamp(saturation * theme.saturation, 0, 1);
+    const targetValue = this.clamp(
+      this.valueForLuma(targetHue, targetSaturation, this.relativeLuma(rgb)) * theme.value,
+      0,
+      1,
+    );
+    return this.hsvToRgb(targetHue, targetSaturation, targetValue);
+  },
+  transformHex(hex, theme) {
+    const rgb = this.hexToRgb(hex);
+    if (!rgb) {
+      return hex;
+    }
+    return this.rgbToHex(this.transformRgb(rgb, theme));
+  },
+  contrast(foreground, background) {
+    const first = this.relativeLuma(this.hexToRgb(foreground) || [255, 255, 255]);
+    const second = this.relativeLuma(this.hexToRgb(background) || [0, 0, 0]);
+    const lighter = Math.max(first, second);
+    const darker = Math.min(first, second);
+    return (lighter + 0.05) / (darker + 0.05);
+  },
+  normalize(raw) {
+    const source = raw && typeof raw === "object" ? raw : {};
+    const theme = {};
+    for (const key of ["hue", "saturation", "value"]) {
+      const bound = UI_THEME_BOUNDS[key];
+      const rawValue = source[key];
+      if (rawValue === undefined || rawValue === null || rawValue === "") {
+        theme[key] = UI_THEME_DEFAULTS[key];
+        continue;
+      }
+      const value = Number(rawValue);
+      theme[key] = Number.isFinite(value)
+        ? Math.round(this.clamp(value, bound[0], bound[1]) * 1000) / 1000
+        : UI_THEME_DEFAULTS[key];
+    }
+    return theme;
+  },
+  revision(theme) {
+    return `h${theme.hue}s${theme.saturation}v${theme.value}`;
+  },
+};
+
 function galleryApp() {
+  // Keep native Window objects outside Alpine's reactive proxies.
+  let xhsLoginPopup = null;
   return {
     currentView: "gallery",
     category: "all",
@@ -28,6 +211,7 @@ function galleryApp() {
     settingsBaseline: "",
     settingsSaving: false,
     settingsError: "",
+    livephotoSubmitting: false,
     trashSearch: "",
     modalFocusStack: [],
     sourceKind: ["all", "up", "site", "xhs"].includes(localStorage.getItem("gallery_source_kind"))
@@ -64,6 +248,7 @@ function galleryApp() {
       : (localStorage.getItem("gallery_sort_order") || "desc"),
     timeSortMode: localStorage.getItem("gallery_time_sort_mode") || "desc",
     galleryRenderKey: 0,
+    galleryPayloadFingerprint: "",
     galleryRequestId: 0,
     galleryRenderToken: 0,
     galleryBatchTimer: null,
@@ -174,6 +359,16 @@ function galleryApp() {
     xhsAutomaticAvailable: false,
     xhsLoginSession: null,
     xhsLoginTimer: null,
+    xhsLoginInlineOpen: false,
+    xhsLoginPopupBlocked: false,
+    xhsLoginStarting: false,
+    xhsLoginRevision: 0,
+    xhsQr: null,
+    xhsQrTimer: null,
+    xhsQrBusy: false,
+    xhsQrErrors: 0,
+    xhsQrFinishing: false,
+    xhsQrAutoFinishTried: false,
     xhsChecks: {},
     siteLogs: [],
     siteRules: { mode: "blacklist", keywords: [], allow_keywords: [], block_keywords: [], use_regex: false },
@@ -289,6 +484,21 @@ function galleryApp() {
     resetSubscriptionIconsRunning: false,
     resetSiteIconsConfirmStep: 0,
     resetSiteIconsRunning: false,
+    resetXhsIconsConfirmStep: 0,
+    resetXhsIconsRunning: false,
+    themeDraft: { ...UI_THEME_DEFAULTS },
+    themeSaved: { ...UI_THEME_DEFAULTS },
+    themeSavedRevision: "",
+    themeDefaults: { ...UI_THEME_DEFAULTS },
+    themeBounds: {
+      hue: [...UI_THEME_BOUNDS.hue],
+      saturation: [...UI_THEME_BOUNDS.saturation],
+      value: [...UI_THEME_BOUNDS.value],
+    },
+    themeSwatches: {},
+    themeContrastRatio: 4.88,
+    themeSaving: false,
+    themeResetConfirmStep: 0,
     fullReloadConfirmStep: 0,
     clearTaskLogsConfirmStep: 0,
     clearFilterLogsConfirmStep: 0,
@@ -508,15 +718,14 @@ function galleryApp() {
         this.deferredGalleryRefreshTimer = null;
       }
       if (reset) {
-        this.galleryCardQuality = {};
+        // 不再预先清空 items 与 galleryCardQuality：数据未变时旧卡片原地保留、零重绘；
+        // 数据变化时由 applyGalleryPagePayload 一次性替换。先清空只会让所有卡片
+        // 销毁重建，入场动画、渐进图淡入与质量预热整体重放（切页闪烁的来源）。
         this.galleryRenderStart = 0;
         this.galleryRenderEnd = 0;
         this.galleryEstimatedPageHeight = 980;
-        this.gallerySkeletonCount = this.visibleGalleryBatchSize();
         this.gallery = {
           ...this.gallery,
-          items: [],
-          total: 0,
           page: 1,
           total_pages: 1,
           view_mode: this.galleryViewMode,
@@ -624,12 +833,8 @@ function galleryApp() {
 
     pruneGalleryWindowCaches() {
       const keys = new Set(this.galleryWindowItems().map((item) => this.galleryItemKey(item)).filter(Boolean));
-      this.galleryCardQuality = Object.fromEntries(
-        Object.entries(this.galleryCardQuality || {}).filter(([key]) => keys.has(key)),
-      );
-      this.galleryQualityUpdateQueue = Object.fromEntries(
-        Object.entries(this.galleryQualityUpdateQueue || {}).filter(([key]) => keys.has(key)),
-      );
+      // galleryCardQuality / galleryQualityUpdateQueue 不清理：它们是 key->quality 的小映射，
+      // 保留可让滚回窗口的卡片直接按已知质量绘制，不再回退模糊占位（滚动闪烁来源）。
       this.gallerySmallPreloadCache = Object.fromEntries(
         Object.entries(this.gallerySmallPreloadCache || {}).filter(([key]) => keys.has(String(key).split("::", 1)[0])),
       );
@@ -902,13 +1107,18 @@ function galleryApp() {
     },
 
     handleEscape() {
+      if (this.sourcePreview.open) {
+        this.closeSourcePreview();
+        return;
+      }
       if (this.videoNote.open) {
         this.closeVideoNote();
         return;
       }
-      if (this.resetSubscriptionIconsConfirmStep || this.resetSiteIconsConfirmStep) {
+      if (this.resetSubscriptionIconsConfirmStep || this.resetSiteIconsConfirmStep || this.resetXhsIconsConfirmStep) {
         this.resetSubscriptionIconsConfirmStep = 0;
         this.resetSiteIconsConfirmStep = 0;
+        this.resetXhsIconsConfirmStep = 0;
         return;
       }
       if (this.duplicateCleanupConfirmSignature) {
@@ -917,10 +1127,6 @@ function galleryApp() {
       }
       if (this.duplicateIgnoreConfirmSignature) {
         this.duplicateIgnoreConfirmSignature = null;
-        return;
-      }
-      if (this.sourcePreview.open) {
-        this.closeSourcePreview();
         return;
       }
       if (this.taskInspector.open) {
@@ -1036,7 +1242,12 @@ function galleryApp() {
 
     searchResultText() {
       if (this.galleryLoading || this.searchResultSignature !== this.searchSignature()) return "正在搜索…";
-      return `找到 ${this.searchResultCount ?? 0} ${this.galleryViewMode === "pair" ? "组图片" : "条动态"}`;
+      const count = this.searchResultCount ?? 0;
+      const unit = this.galleryViewMode === "pair" ? "组图片" : "条动态";
+      if (!count && this.timeFilterActive()) {
+        return `找到 0 ${unit} · 已限定「${this.timeFilterSummary()}」，试试清空时间范围`;
+      }
+      return `找到 ${count} ${unit}`;
     },
 
     displayDate(value, dateOnly = false) {
@@ -1082,7 +1293,7 @@ function galleryApp() {
     },
 
     syncModalAccessibility() {
-      const name = this.videoNote.open ? 'video-note' : this.sourcePreview.open ? "source" : this.taskInspector.open ? "task" : this.viewer.open ? "viewer" : this.detail.open ? "detail" : "";
+      const name = this.sourcePreview.open ? "source" : this.videoNote.open ? 'video-note' : this.taskInspector.open ? "task" : this.viewer.open ? "viewer" : this.detail.open ? "detail" : "";
       const active = name ? document.querySelector(`[data-modal-layer="${name}"]`) : null;
       const stack = this.modalFocusStack;
       let restore = null;
@@ -2117,7 +2328,6 @@ function galleryApp() {
         this.galleryRenderEnd = 0;
         this.galleryEstimatedPageHeight = 980;
         this.gallery = { ...this.gallery, page: 1, page_size: pageSize, total_pages: 1 };
-        this.galleryCardQuality = {};
       } else if (direction === "next") {
         this.gallerySkeletonCount = 0;
       }
@@ -2253,13 +2463,13 @@ function galleryApp() {
       this.galleryBatchQueue = [];
     },
 
-    prepareGalleryItems(items, page) {
+    prepareGalleryItems(items, page, appearingKeys = null) {
       const pageSize = this.galleryWindowPageSize();
       return (items || []).map((item, index) => ({
         ...item,
         __gallery_page: page,
         __gallery_index: Math.max(0, (Number(page) - 1) * pageSize + index),
-        __appearing: true,
+        __appearing: !(appearingKeys && appearingKeys.has(this.galleryItemKey(item))),
       }));
     },
 
@@ -2298,9 +2508,28 @@ function galleryApp() {
     },
 
     applyGalleryPagePayload(payload, page, direction, token = this.galleryRenderToken) {
+      const incomingItems = payload.items || [];
+      if (direction !== "next") {
+        const fingerprint = JSON.stringify(incomingItems);
+        const currentItems = this.gallery.items || [];
+        if (
+          fingerprint
+          && fingerprint === this.galleryPayloadFingerprint
+          && (currentItems.length === incomingItems.length || this.galleryBatchQueue.length)
+        ) {
+          // 与当前正在渲染（或分批渲染中）的内容完全一致——典型场景是本地缓存先绘制、
+          // 网络随后返回同样数据。保持 DOM 与图片质量进度原地不动，避免整批卡片
+          // 销毁重建导致入场动画、渐进图淡入与质量预热整体重放（切页闪烁）。
+          this.gallery = { ...this.gallery, ...payload, items: currentItems, page };
+          return;
+        }
+        this.galleryPayloadFingerprint = fingerprint;
+      }
       this.cancelGalleryBatchWork();
       const existingItems = direction === "next" ? (this.gallery.items || []) : [];
-      const preparedItems = this.prepareGalleryItems(payload.items || [], page);
+      const prevKeys = direction === "next" ? null
+        : new Set((this.gallery.items || []).map((item) => this.galleryItemKey(item)).filter(Boolean));
+      const preparedItems = this.prepareGalleryItems(incomingItems, page, prevKeys);
       this.gallery = {
         ...payload,
         page,
@@ -2637,6 +2866,7 @@ function galleryApp() {
       this.closeSidebarDrawer();
       this.scrollViewTop();
       this.loadSettings();
+      this.refreshTasks().catch(() => {});
     },
 
     openReview() {
@@ -3827,6 +4057,10 @@ function galleryApp() {
       return `${this.currentMonthLabel(startMonth)} 至 ${this.currentMonthLabel(endMonth)}`;
     },
 
+    timeFilterActive() {
+      return !!(this.timeFilterApplied.startMonth || this.timeFilterApplied.endMonth);
+    },
+
     timeSortLabel() {
       return {
         desc: "时间倒序",
@@ -4021,12 +4255,12 @@ function galleryApp() {
     },
 
     clearTimeFilter() {
-      const months = this.availableMonths();
-      if (!months.length) {
+      if (!this.timeFilterApplied.startMonth && !this.timeFilterApplied.endMonth) {
         return;
       }
+      const months = this.availableMonths();
       this.timeFilterApplied = { startMonth: null, endMonth: null };
-      this.timeFilterDraft = { startIndex: 0, endIndex: months.length - 1 };
+      this.timeFilterDraft = { startIndex: 0, endIndex: Math.max(months.length - 1, 0) };
       this.scrollViewTop();
       this.refreshGalleryImmediately(true);
     },
@@ -4035,7 +4269,7 @@ function galleryApp() {
       if (item?.original_url) {
         return item.original_url;
       }
-      const dynamicId = item.source_dynamic_id || item.top_dynamic_id;
+      const dynamicId = item?.source_dynamic_id || item?.top_dynamic_id;
       if (dynamicId && String(dynamicId).startsWith("site:")) {
         return "";
       }
@@ -5366,6 +5600,9 @@ function galleryApp() {
       if (Array.isArray(stats.resolution_diagnostics) && stats.resolution_diagnostics.length) {
         lines.push("", "解析诊断：", this.formatInspectorJson(stats.resolution_diagnostics));
       }
+      if (Array.isArray(stats.issues) && stats.issues.length) {
+        lines.push("", "实况配对问题（最多显示 50 项）：", this.formatInspectorJson(stats.issues));
+      }
       if (events.length) {
         lines.push("", "事件日志：");
         events.slice(-40).forEach((event, index) => {
@@ -5393,6 +5630,10 @@ function galleryApp() {
         "xhs-import": "导入小红书点赞清单",
         "xhs-sync": "同步小红书本人点赞与媒体",
         "xhs-verify": "检查小红书本地归档完整性",
+        "livephoto-check": "检查实况文件配对，不改动媒体",
+        "livephoto-repair": "为可确定配对的实况文件补写配对标识",
+        "livephoto-repair-errors": "自动找回实况原图并确认配对",
+        "livephoto-manual": "按人工确认结果写入实况配对标识",
         "site-validate": "全量校验站点订阅",
         "storage-cleanup": "清理垃圾文件",
         startup: "启动后整理图库",
@@ -5560,6 +5801,10 @@ function galleryApp() {
         "xhs-import": "小红书导入",
         "xhs-sync": "小红书同步",
         "xhs-verify": "小红书归档检查",
+        "livephoto-check": "实况配对检查",
+        "livephoto-repair": "修复实况配对",
+        "livephoto-repair-errors": "修复实况异常",
+        "livephoto-manual": "确认实况配对",
         "site-validate": "站点校验",
         "storage-cleanup": "存储清理",
         icons: "图标刷新",
@@ -5607,6 +5852,11 @@ function galleryApp() {
         ["拦截", counters.blocked ?? stats.review_candidates],
         ["跳过", counters.skipped ?? stats.skipped],
         ["失败", counters.errors ?? stats.errors],
+        ["检查组数", stats.checked],
+        ["已配对", stats.paired],
+        ["本次修复", stats.repaired],
+        ["需修复", stats.needs_repair],
+        ["缺失或歧义", stats.unpaired],
       ];
       return rows
         .filter(([, value]) => value !== undefined && value !== null)
@@ -6358,7 +6608,8 @@ function galleryApp() {
         return false;
       }
       return (item?.status === "failed" || (["partial", "cancelled"].includes(item?.status)
-        && ["xhs-sync", "xhs-verify"].includes(item?.task_type))) && !!item?.details?.retry_action?.kind;
+        && ["xhs-sync", "xhs-verify", "livephoto-check", "livephoto-repair", "livephoto-repair-errors",
+          "livephoto-manual"].includes(item?.task_type))) && !!item?.details?.retry_action?.kind;
     },
 
     async retryTask(item) {
@@ -6441,12 +6692,15 @@ function galleryApp() {
 
     async loadSettings() {
       if (this.settingsDirty()) return;
-      const [settings, health, storageStats] = await Promise.all([
+      const [settings, health, storageStats, themeSpec] = await Promise.all([
         this.api("/api/settings"),
         this.api("/api/health"),
         this.api("/api/settings/storage-stats"),
+        this.api("/api/settings/theme").catch(() => null),
       ]);
       this.settings = settings;
+      this.applyThemeSpec(themeSpec);
+      this.syncThemeState(settings);
       this.settingsError = settings.intranet_config_error || "";
       document.title = settings.app_title || document.title;
       this.galleryIndexStatus = health.gallery_index || {};
@@ -6655,6 +6909,89 @@ function galleryApp() {
       return this.rebuildIndexConfirmStep === 0 ? "重建页面索引" : "再次确认重建";
     },
 
+    livephotoTaskKindSet() {
+      return new Set(["livephoto-check", "livephoto-repair", "livephoto-repair-errors", "livephoto-manual"]);
+    },
+
+    livephotoTaskActive() {
+      const kinds = this.livephotoTaskKindSet();
+      if ((this.pullStatus?.queue || []).some((item) => kinds.has(item.kind))) return true;
+      if ((this.queuedTasks || []).some((item) => kinds.has(item.kind))) return true;
+      if ((this.taskRuns || []).some((item) => kinds.has(item.task_type) && item.status === "running")) return true;
+      return kinds.has(String(this.pullStatus?.mode || ""));
+    },
+
+    livephotoLatestResult() {
+      const kinds = this.livephotoTaskKindSet();
+      const task = (this.taskRuns || []).find((item) => kinds.has(item.task_type)
+        && ["success", "partial"].includes(item.status)
+        && item.details
+        && item.details.completed !== false);
+      if (!task) return null;
+      const details = task.details;
+      const exceptionTargets = Array.isArray(details.exception_targets)
+        ? details.exception_targets
+        : (details.issues || []).filter((issue) => issue?.code && issue.code !== "metadata_error");
+      return {
+        id: task.id,
+        label: this.taskModeLabel(task.task_type) || "实况配对检查",
+        finishedAt: task.finished_at || "",
+        checked: Number(details.checked) || 0,
+        paired: Number(details.paired) || 0,
+        repairable: Number(details.repairable) || (details.repairable_targets || []).length || 0,
+        exceptions: exceptionTargets.length || Number(details.unpaired) || 0,
+      };
+    },
+
+    livephotoRepairVisible() {
+      const result = this.livephotoLatestResult();
+      return !this.livephotoTaskActive() && !!result && result.repairable > 0;
+    },
+
+    livephotoExceptionVisible() {
+      const result = this.livephotoLatestResult();
+      return !this.livephotoTaskActive() && !!result && result.repairable === 0 && result.exceptions > 0;
+    },
+
+    livephotoResultText() {
+      const result = this.livephotoLatestResult();
+      if (!result) return "";
+      const time = this.formatDateTime(result.finishedAt);
+      const parts = [`检查 ${result.checked} 组`, `已配对 ${result.paired} 组`];
+      if (result.repairable) parts.push(`待修复配对 ${result.repairable} 组`);
+      if (result.exceptions) parts.push(`异常 ${result.exceptions} 组`);
+      return `${result.label}：${parts.join(" · ")}${time ? `（${time}）` : ""}`;
+    },
+
+    async submitLivephotoCheck() {
+      if (this.livephotoSubmitting) return;
+      this.livephotoSubmitting = true;
+      try {
+        const result = await this.api("/api/settings/livephoto/check", { method: "POST" });
+        await Promise.all([this.refreshStatus(), this.refreshTasks()]);
+        this.notify("info", "实况检查已提交", result.message);
+      } catch (error) {
+        this.notify("error", "实况任务提交失败", error.message);
+      } finally {
+        this.livephotoSubmitting = false;
+      }
+    },
+
+    async submitLivephotoFollowup(action) {
+      const source = this.livephotoLatestResult();
+      if (!source || this.livephotoSubmitting) return;
+      this.livephotoSubmitting = true;
+      try {
+        const result = await this.api(`/api/settings/livephoto/${source.id}/followup/${action}`, { method: "POST" });
+        await Promise.all([this.refreshStatus(), this.refreshTasks()]);
+        this.notify("info", action === "repair" ? "修复配对已提交" : "修复异常已提交", result.message);
+      } catch (error) {
+        this.notify("error", "实况修复任务提交失败", error.message);
+      } finally {
+        this.livephotoSubmitting = false;
+      }
+    },
+
     askRebuildGalleryIndex() {
       this.rebuildIndexConfirmStep = Math.min(this.rebuildIndexConfirmStep + 1, 2);
     },
@@ -6752,6 +7089,212 @@ function galleryApp() {
         this.notify("error", "站点图标重置提交失败", error.message || "请稍后重试。");
       } finally {
         this.resetSiteIconsRunning = false;
+      }
+    },
+
+    askResetXhsIcons() {
+      if (!this.resetXhsIconsRunning) {
+        this.resetXhsIconsConfirmStep = 1;
+      }
+    },
+
+    cancelResetXhsIcons() {
+      if (!this.resetXhsIconsRunning) {
+        this.resetXhsIconsConfirmStep = 0;
+      }
+    },
+
+    async confirmResetXhsIcons() {
+      if (this.resetXhsIconsConfirmStep < 1 || this.resetXhsIconsRunning) {
+        return;
+      }
+      this.resetXhsIconsRunning = true;
+      this.resetXhsIconsConfirmStep = 0;
+      this.notify("info", "正在提交小红书图标重置", "后台会重新检查小红书登录状态并刷新图标。");
+      try {
+        const result = await this.api("/api/settings/reset-icons/xhs", { method: "POST" });
+        this.iconLoadFailures = {};
+        await Promise.all([this.refreshStatus(), this.refreshTasks()]);
+        this.notify("success", "小红书图标任务已提交", result.message || "后台正在刷新小红书订阅图标。");
+      } catch (error) {
+        this.notify("error", "小红书图标重置提交失败", error.message || "请稍后重试。");
+      } finally {
+        this.resetXhsIconsRunning = false;
+      }
+    },
+
+    // 界面配色：滑杆只改本地草稿，服务端派生才是最终结果，因此预览用同一套算法在前端复刻。
+    applyThemeSpec(spec) {
+      if (!spec || typeof spec !== "object") {
+        return;
+      }
+      if (spec.defaults && typeof spec.defaults === "object") {
+        this.themeDefaults = UI_THEME_ENGINE.normalize(spec.defaults);
+      }
+      if (spec.bounds && typeof spec.bounds === "object") {
+        for (const key of ["hue", "saturation", "value"]) {
+          const bound = spec.bounds[key];
+          if (Array.isArray(bound) && bound.length === 2 && bound.every((item) => Number.isFinite(Number(item)))) {
+            this.themeBounds = { ...this.themeBounds, [key]: [Number(bound[0]), Number(bound[1])] };
+          }
+        }
+      }
+    },
+
+    syncThemeState(settings) {
+      const saved = UI_THEME_ENGINE.normalize(settings?.ui_theme);
+      const stamp = UI_THEME_ENGINE.revision(saved);
+      if (stamp === this.themeSavedRevision && Object.keys(this.themeSwatches || {}).length) {
+        // 已同步过：保留用户正在调整的草稿，别让别处的保存动作把它冲掉。
+        return;
+      }
+      this.themeSaved = saved;
+      this.themeSavedRevision = stamp;
+      this.themeDraft = { ...saved };
+      this.refreshThemeSwatches();
+    },
+
+    refreshThemeSwatches() {
+      const theme = UI_THEME_ENGINE.normalize(this.themeDraft);
+      this.themeDraft = theme;
+      const tint = (key) => UI_THEME_ENGINE.transformHex(UI_THEME_BASE_COLORS[key], theme);
+      const accent = tint("accent");
+      this.themeSwatches = {
+        text: tint("text"),
+        muted: tint("muted"),
+        accent,
+        accentSoft: UI_THEME_ENGINE.rgba(accent, 0.12),
+        accent2: tint("accent2"),
+        accentWarm: tint("accentWarm"),
+        danger: tint("danger"),
+        line: UI_THEME_ENGINE.rgba(tint("line"), 0.14),
+        lineStrong: UI_THEME_ENGINE.rgba(tint("line"), 0.24),
+        surface: tint("surface"),
+        page: tint("page"),
+        onAccent: "#ffffff",
+      };
+      this.themeContrastRatio = UI_THEME_ENGINE.contrast("#ffffff", accent);
+    },
+
+    themeSwatchList() {
+      const entries = [
+        ["主色", "accent"],
+        ["强调色", "accent2"],
+        ["暖色", "accentWarm"],
+        ["警示", "danger"],
+        ["正文", "text"],
+        ["次要文字", "muted"],
+        ["页面底色", "page"],
+        ["卡片底色", "surface"],
+      ];
+      return entries.map(([label, key]) => ({ label, color: this.themeSwatches[key] || "#000000" }));
+    },
+
+    themePickerHex() {
+      // 取色器只承担「选主色」这一件事：固定饱和度与明度，呈现该色相下的典型主色。
+      return UI_THEME_ENGINE.rgbToHex(UI_THEME_ENGINE.hsvToRgb(this.themeDraft.hue, 0.62, 0.72));
+    },
+
+    setThemeHueFromHex(hex) {
+      const rgb = UI_THEME_ENGINE.hexToRgb(hex);
+      if (!rgb) {
+        return;
+      }
+      const [hue] = UI_THEME_ENGINE.rgbToHsv(rgb);
+      this.themeDraft = { ...this.themeDraft, hue: Math.round(hue * 10) / 10 };
+      this.refreshThemeSwatches();
+    },
+
+    onThemeInput() {
+      this.refreshThemeSwatches();
+    },
+
+    setThemeNumber(key, raw) {
+      const value = Number(raw);
+      if (!Number.isFinite(value)) {
+        return;
+      }
+      this.themeDraft = { ...this.themeDraft, [key]: value };
+      this.refreshThemeSwatches();
+    },
+
+    themeParamText(key) {
+      const value = Number(this.themeDraft[key] || 0);
+      if (key === "hue") {
+        return `${Math.round(value)}°`;
+      }
+      return `${Math.round(value * 100)}%`;
+    },
+
+    themeDraftChanged() {
+      return UI_THEME_ENGINE.revision(this.themeDraft) !== this.themeSavedRevision;
+    },
+
+    themeHintText() {
+      if (this.themeDraftChanged()) {
+        return "有未保存的配色调整，点击「保存配色」后全站生效。";
+      }
+      const ratio = Number(this.themeContrastRatio || 0).toFixed(2);
+      return `白字压在主色上的对比度 ${ratio}:1，满足正文可读性要求。`;
+    },
+
+    themeBound(key, index) {
+      const bound = this.themeBounds[key] || UI_THEME_BOUNDS[key];
+      return bound[index];
+    },
+
+    async saveTheme() {
+      if (this.themeSaving || !this.themeDraftChanged()) {
+        return;
+      }
+      this.themeSaving = true;
+      try {
+        const result = await this.api("/api/settings/theme", {
+          method: "POST",
+          body: JSON.stringify(UI_THEME_ENGINE.normalize(this.themeDraft)),
+        });
+        const saved = UI_THEME_ENGINE.normalize(result?.theme);
+        this.themeSaved = saved;
+        this.themeSavedRevision = UI_THEME_ENGINE.revision(saved);
+        this.themeDraft = { ...saved };
+        this.notify("success", "配色已保存", "界面配色已写入，页面即将刷新以套用新色板。");
+        setTimeout(() => window.location.reload(), 400);
+      } catch (error) {
+        this.notify("error", "配色保存失败", error.message || "请稍后重试。");
+        this.themeSaving = false;
+      }
+    },
+
+    askResetTheme() {
+      if (!this.themeSaving) {
+        this.themeResetConfirmStep = 1;
+      }
+    },
+
+    cancelResetTheme() {
+      if (!this.themeSaving) {
+        this.themeResetConfirmStep = 0;
+      }
+    },
+
+    async confirmResetTheme() {
+      if (this.themeResetConfirmStep < 1 || this.themeSaving) {
+        return;
+      }
+      this.themeSaving = true;
+      this.themeResetConfirmStep = 0;
+      try {
+        const result = await this.api("/api/settings/theme/reset", { method: "POST" });
+        const saved = UI_THEME_ENGINE.normalize(result?.theme);
+        this.themeSaved = saved;
+        this.themeSavedRevision = UI_THEME_ENGINE.revision(saved);
+        this.themeDraft = { ...saved };
+        this.refreshThemeSwatches();
+        this.notify("success", "配色已恢复默认", "界面配色已重置为默认方案，页面即将刷新。");
+        setTimeout(() => window.location.reload(), 400);
+      } catch (error) {
+        this.notify("error", "配色重置失败", error.message || "请稍后重试。");
+        this.themeSaving = false;
       }
     },
 
@@ -7392,12 +7935,16 @@ function galleryApp() {
     },
 
     async loadXhsSources() {
+      const loginRevision = this.xhsLoginRevision;
       const payload = await this.api("/api/xhs/status");
+      if (loginRevision !== this.xhsLoginRevision) return;
       this.xhsWorker = payload.worker || { state: 'NOT_CONFIGURED', owner_key: null };
-      if (this.xhsWorker.state === 'LOGIN_IN_PROGRESS' && !this.xhsLoginSession) {
+      if (this.xhsWorker.state === 'LOGIN_IN_PROGRESS' && !this.xhsLoginSession && !this.xhsLoginStarting) {
         this.xhsLoginSession = { viewer_url: '/api/xhs/browser/' };
-      } else if (this.xhsWorker.state !== 'LOGIN_IN_PROGRESS') {
+        this.startXhsQrPolling();
+      } else if (this.xhsWorker.state !== 'LOGIN_IN_PROGRESS' && !this.xhsLoginStarting) {
         this.xhsLoginSession = null;
+        this.closeXhsLoginWindow();
       }
       this.xhsAutomaticAvailable = !!payload.automatic_sync_available;
       if (!this.xhsNewSource.owner_key && this.xhsWorker.owner_key) this.xhsNewSource.owner_key = this.xhsWorker.owner_key;
@@ -7437,9 +7984,94 @@ function galleryApp() {
         CANCELLED: '已取消', WORKER_ERROR: '浏览器服务暂不可用' }[state] || state;
     },
 
+    openXhsLoginWindow(url = this.xhsLoginSession?.viewer_url || '/api/xhs/browser/') {
+      try {
+        if (!xhsLoginPopup || xhsLoginPopup.closed) {
+          xhsLoginPopup = window.open(url, 'rc-xhs-login', 'popup=yes,width=1180,height=900,resizable=yes,scrollbars=yes');
+          if (xhsLoginPopup) xhsLoginPopup.opener = null;
+        } else {
+          xhsLoginPopup.location.replace(url);
+        }
+        this.xhsLoginPopupBlocked = !xhsLoginPopup || xhsLoginPopup.closed;
+        if (!this.xhsLoginPopupBlocked) {
+          this.xhsLoginInlineOpen = false;
+          xhsLoginPopup.focus();
+        }
+      } catch (error) {
+        this.xhsLoginPopupBlocked = true;
+      }
+      if (this.xhsLoginPopupBlocked && this.xhsLoginSession) this.xhsLoginInlineOpen = true;
+    },
+
+    closeXhsLoginWindow() {
+      this.stopXhsQrPolling();
+      this.xhsQr = null;
+      try { if (xhsLoginPopup && !xhsLoginPopup.closed) xhsLoginPopup.close(); } catch (_) {}
+      xhsLoginPopup = null;
+      this.xhsLoginInlineOpen = false;
+      this.xhsLoginPopupBlocked = false;
+    },
+
+    xhsQrText(phase) {
+      return { preparing: '正在准备登录二维码…', await_scan: '请使用小红书 App 扫码并在手机上确认登录。',
+        scanned: '已扫码，请在手机上确认登录。', refreshing: '二维码已刷新，请重新扫码。',
+        finalizing: '已检测到登录，正在确认账号信息…', logged_in: '登录成功，正在完成…',
+        captcha: '需要人工安全验证，请使用完整登录窗口完成验证。',
+        missing: '未能自动取得二维码，请使用完整登录窗口扫码。',
+        error: '二维码获取失败，请重新启动登录。' }[phase] || '正在准备登录二维码…';
+    },
+
+    startXhsQrPolling() {
+      this.stopXhsQrPolling();
+      this.xhsQrErrors = 0;
+      this.xhsQrAutoFinishTried = false;
+      this.pollXhsLoginQr();
+      this.xhsQrTimer = window.setInterval(() => { this.pollXhsLoginQr(); }, 2500);
+    },
+
+    stopXhsQrPolling() {
+      if (this.xhsQrTimer !== null && this.xhsQrTimer !== undefined) window.clearInterval(this.xhsQrTimer);
+      this.xhsQrTimer = null;
+    },
+
+    async pollXhsLoginQr() {
+      if (this.xhsQrBusy || this.xhsQrFinishing || !this.xhsLoginSession) return;
+      this.xhsQrBusy = true;
+      const revision = this.xhsLoginRevision;
+      try {
+        const result = await this.api('/api/xhs/login/qr', { method: 'POST', body: '{}' });
+        if (revision !== this.xhsLoginRevision) return;
+        this.xhsQrErrors = 0;
+        this.xhsQr = { image_data_url: result.image_data_url || null,
+          phase: result.phase || 'preparing', message: result.message || '' };
+        if (result.phase === 'logged_in' && !this.xhsQrAutoFinishTried && !this.xhsBusy) {
+          this.xhsQrAutoFinishTried = true;
+          this.xhsQrFinishing = true;
+          try { await this.xhsLogin('finish'); } finally { this.xhsQrFinishing = false; }
+        }
+      } catch (error) {
+        if (revision !== this.xhsLoginRevision) return;
+        this.xhsQrErrors += 1;
+        if (this.xhsQrErrors >= 8) {
+          this.stopXhsQrPolling();
+          this.xhsQr = { image_data_url: null, phase: 'error',
+            message: error.message || '二维码获取失败，请重新启动登录。' };
+        }
+      } finally {
+        this.xhsQrBusy = false;
+      }
+    },
+
     async xhsLogin(action) {
       if (this.xhsBusy) return;
       if (action === 'revoke' && !window.confirm('确认注销小红书浏览器登录态？对应订阅会停用，已归档媒体保留。')) return;
+      this.xhsLoginRevision += 1;
+      if (action === 'start') {
+        // 二维码内嵌展示是主路径；完整浏览器窗口保留为人工验证时的备用通道。
+        this.xhsLoginStarting = true;
+        this.stopXhsQrPolling();
+        this.xhsQr = null;
+      }
       this.xhsBusy = true;
       try {
         const result = await this.api(`/api/xhs/login/${action}`, { method: 'POST',
@@ -7447,18 +8079,33 @@ function galleryApp() {
         if (action === 'start') {
           window.clearTimeout(this.xhsLoginTimer);
           this.xhsLoginSession = result;
-          this.xhsLoginTimer = window.setTimeout(() => { this.xhsLoginSession = null; }, (result.expires_in || 600) * 1000);
-        } else {
+          this.startXhsQrPolling();
+          this.xhsLoginTimer = window.setTimeout(() => {
+            this.xhsLoginSession = null; this.closeXhsLoginWindow();
+          }, (result.expires_in || 600) * 1000);
+        } else if (action !== 'check' || result.state !== 'LOGIN_IN_PROGRESS') {
           window.clearTimeout(this.xhsLoginTimer);
           this.xhsLoginSession = null;
+          this.closeXhsLoginWindow();
         }
         await Promise.all([this.loadXhsSources(), this.loadSubscriptions()]);
         this.notify('success', '小红书账号状态已更新', this.xhsAuthText(result.state));
       } catch (error) {
+        if (action === 'start') {
+          window.clearTimeout(this.xhsLoginTimer);
+          this.xhsLoginSession = null;
+          this.closeXhsLoginWindow();
+        }
         this.notify('error', '账号操作未完成', error.message);
         await this.loadXhsSources().catch(() => {});
       }
-      finally { this.xhsBusy = false; }
+      finally { this.xhsBusy = false; this.xhsLoginStarting = false; }
+    },
+
+    async xhsRelogin() {
+      // Also expose the status and fallback controls in the subscription card.
+      this.xhsCreateExpanded = true;
+      await this.xhsLogin('start');
     },
 
     async verifyXhsSource(source) {
@@ -7581,7 +8228,15 @@ function galleryApp() {
           has_images: !isVideo,
         });
       } else {
-        this.notify('info', '笔记尚未归档', '请先点击“重试媒体”，完成后可在这里查看图片或播放视频。');
+        const url = note.url || `https://www.xiaohongshu.com/explore/${note.note_id}`;
+        this.sourcePreview = {
+          open: true,
+          url,
+          title: note.title || note.note_id,
+          subtitle: url,
+          reviewId: null,
+        };
+        this.syncBodyLock();
       }
     },
 
@@ -7614,6 +8269,8 @@ function galleryApp() {
     xhsStopText(reason) {
       return { manual_import: "手工导入，未核对完整点赞列表", first_sync_limit: "已达首次拉取条数，部分完成",
         anchor_hit: "命中上次任一锚点，增量完成", end_of_feed: "完整读取到列表末尾",
+        anchor_miss_limit: "未命中锚点，已达增量止损上限，锚点已按本轮前部刷新",
+        anchor_title_hit: "未命中锚点ID，读到同作者同标题笔记（疑似删旧重发），提前结束并刷新锚点",
         page_limit: "已达页数上限", time_limit: "已达时长上限", cursor_error: "分页不完整",
         cancelled: "已取消", network_error: "网络中断", structure_changed: "页面结构变化",
         needs_reauth: "需要重新登录", rate_limited: "请求受限" }[reason] || reason || "尚未读取";

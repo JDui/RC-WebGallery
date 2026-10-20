@@ -12,6 +12,7 @@ from app.db import Database
 from app.services.image_similarity import image_fingerprint
 from app.services.sidecar import SidecarRunner
 from app.services.storage import StorageService
+from app.services.livephoto import LivePhotoService
 from app.services.thumbnailer import ThumbnailService
 from app.services.task_priority import TaskPriorityCoordinator
 from app.services.utils import dumps_json, format_pub_time, loads_json, now_iso
@@ -39,6 +40,7 @@ class MediaIndexer:
         self.thumbnailer = thumbnailer
         self.priority = priority
         self.sidecar = SidecarRunner()
+        self.livephotos = LivePhotoService(db, storage)
 
     def index_folder(
         self,
@@ -393,10 +395,11 @@ class MediaIndexer:
             path for path in folder_path.iterdir()
             if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES and not path.name.startswith(".")
         )
+        confirmed = self.livephotos.confirmed_indices(folder_name)
         next_pair_index = 1
         for file_path in files:
             self._background_checkpoint()
-            explicit_pair_index = self._extract_pair_index(file_path.name)
+            explicit_pair_index = confirmed.get(self.storage.relative_to_storage(file_path)) or self._extract_pair_index(file_path.name)
             pair_index = explicit_pair_index or next_pair_index
             next_pair_index = max(next_pair_index, pair_index + 1)
             thumb_path = folder_path / ".thumbs" / f"{file_path.stem}.webp"
@@ -460,6 +463,7 @@ class MediaIndexer:
         )
         image_pairs = self._image_pair_lookup(image_assets or [])
         assets: list[dict] = []
+        confirmed = self.livephotos.confirmed_indices(folder_name)
         used_pairs: set[int] = set()
         next_pair_index = max([asset["pair_index"] for asset in image_assets], default=0) + 1
         for fallback_index, file_path in enumerate(video_files, start=1):
@@ -485,7 +489,7 @@ class MediaIndexer:
                     self.thumbnailer.ensure_small_image_thumbnail(cover_path, small_cover_webp)
                 if generate_reverse:
                     self.thumbnailer.ensure_reverse_video(file_path, reverse_path)
-            pair_index = self._extract_pair_index(file_path.name) or self._match_live_pair_index(
+            pair_index = confirmed.get(self.storage.relative_to_storage(file_path)) or self._extract_pair_index(file_path.name) or self._match_live_pair_index(
                 folder_path,
                 file_path,
                 image_pairs,
