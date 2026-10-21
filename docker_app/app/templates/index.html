@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-single-thumb-4' %}
+    {% set ui_revision = app_version ~ '-creators-random-1' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -217,7 +217,7 @@
                 <div class="section-heading gallery-heading" x-show="!searchActive() || searchQuery" x-cloak>
                     <div class="section-heading-spacer"></div>
                     <div class="button-row gallery-toolbar">
-                        <label class="range-chip density-chip" :data-tooltip="galleryDensityCaption()">
+                        <label class="range-chip density-chip" x-show="!compactViewport && !narrowViewport" :data-tooltip="galleryDensityCaption()">
                             <span class="range-label">密度</span>
                             <input type="range" min="1" max="8" step="1" aria-label="网格期望列数" :aria-valuetext="galleryDensityCaption()" :value="galleryColumnCount" @input="setGalleryColumnCount($event.target.value)">
                             <small class="range-caption" x-text="`${galleryColumnCount} → ${resolveGalleryColumns()} 列`"></small>
@@ -269,7 +269,7 @@
                             <button class="chip-button" :class="{ active: timeSortMode === 'desc' }" :aria-pressed="timeSortMode === 'desc'" @click="setTimeSortMode('desc')">时间倒序</button>
                             <button class="chip-button" :class="{ active: timeSortMode === 'asc' }" :aria-pressed="timeSortMode === 'asc'" @click="setTimeSortMode('asc')">时间正序</button>
                             <button class="chip-button" :class="{ active: timeSortMode === 'imported' }" :aria-pressed="timeSortMode === 'imported'" @click="setTimeSortMode('imported')">最近入库</button>
-                            <button class="chip-button" :class="{ active: timeSortMode === 'random' }" :aria-pressed="timeSortMode === 'random'" @click="setTimeSortMode('random')">随机时间</button>
+                            <button class="chip-button" :class="{ active: timeSortMode === 'random' }" :aria-pressed="timeSortMode === 'random'" @click="setTimeSortMode('random')">随机排序</button>
                         </div>
                         <div class="mode-switch" x-show="compactViewport" x-cloak>
                             <button class="chip-button" :class="{ active: galleryViewMode === 'folder' }" :aria-pressed="galleryViewMode === 'folder'" @click="setGalleryViewMode('folder')">动态视图</button>
@@ -352,7 +352,7 @@
                                                     <h4 :title="item.title || item.text_prefix" x-text="cardPrimaryText(item)"></h4>
                                                     <button class="card-open-button" type="button" @click.stop="openFolder(item.folder_name)" :aria-label="`打开动态：${item.title || item.text_prefix || item.folder_name}`"></button>
                                                     <div class="photo-stats">
-                                                        <span x-text="item.subscription_name || '默认订阅'"></span>
+                                                        <span x-text="creatorName(item)"></span>
                                                         <span x-show="item.image_count > 0 && !item.video_count" x-text="`${item.image_count} 张照片`"></span>
                                                         <span x-show="item.video_count > 0" x-text="`${item.video_count} 条视频`"></span>
                                                         <span x-show="item.livephoto_count > 0" x-text="`${item.livephoto_count} 条 Live Photo`"></span>
@@ -466,7 +466,7 @@
                                 <button class="secondary-button" x-show="timeFilterActive()" @click="clearTimeFilter()" data-tooltip="清空时间范围筛选" aria-label="清空时间范围筛选">清空时间范围</button>
                             </div>
                         </div>
-                        <div class="load-footer" data-gallery-load-sentinel x-show="gallery.items.length > 0 && !galleryLoadFinished() && !showRandomReloadButton()" x-cloak>
+                        <div class="load-footer" data-gallery-load-sentinel x-show="gallery.items.length > 0 && !galleryLoadFinished() && !galleryRandomExpired" x-cloak>
                             <template x-if="autoLoadEnabled()">
                                 <div class="auto-loader">
                                     <strong x-text="loadingMore ? '加载中…' : '自动加载'"></strong>
@@ -476,8 +476,9 @@
                                 <button class="secondary-button load-more-button" @click="loadMore()" x-text="loadingMore ? '正在加载...' : '加载更多'"></button>
                             </template>
                         </div>
-                        <div class="load-footer load-random" x-show="showRandomReloadButton()" x-cloak>
-                            <button class="secondary-button load-more-button" @click="rerollRandomGallery()" x-text="galleryLoading ? '正在重新随机抽取...' : '重新随机抽取'"></button>
+                        <div class="load-footer" x-show="galleryRandomExpired" x-cloak>
+                            <span>本轮随机浏览已过期</span>
+                            <button class="secondary-button load-more-button" @click="refreshGalleryImmediately(true)">重新开始浏览</button>
                         </div>
                         <div class="load-footer load-finished" x-show="galleryLoadFinished()" x-cloak>
                             <div class="auto-loader">
@@ -543,7 +544,7 @@
                                                 <h4 :title="item.title || item.text_prefix" x-text="cardPrimaryText(item)"></h4>
                                                     <button class="card-open-button" type="button" @click.stop="openFolder(item.folder_name)" :aria-label="`打开动态：${item.title || item.text_prefix || item.folder_name}`"></button>
                                                 <div class="photo-stats">
-                                                    <span x-text="item.subscription_name || '默认订阅'"></span>
+                                                    <span x-text="creatorName(item)"></span>
                                                     <span x-text="item.pub_time || '未知发布时间'"></span>
                                                     <span x-text="recentUpdateImageText(item)"></span>
                                                 </div>
@@ -631,7 +632,7 @@
                                         <h4 x-text="item.title || item.folder_name"></h4>
                                         <p x-text="item.text_prefix || '无正文摘要'"></p>
                                         <div class="photo-stats">
-                                            <span x-text="item.subscription_name || '默认订阅'"></span>
+                                            <span x-text="creatorName(item)"></span>
                                             <span x-text="`${item.duplicate_match_count} 张命中`"></span>
                                             <span class="duplicate-ratio" x-text="`重复内容占比 ${item.duplicate_ratio}%`"></span>
                                         </div>
@@ -1788,7 +1789,7 @@
                 </div>
                 <header class="detail-head">
                     <div class="detail-head-copy">
-                        <p class="viewer-kicker" :title="detail.folder?.pub_time" x-text="displayDate(detail.folder?.pub_time)"></p>
+                        <p class="viewer-kicker" :title="detail.folder?.pub_time"><span x-text="displayDate(detail.folder?.pub_time)"></span><span> - </span><a class="creator-link" x-show="creatorProfileUrl(detail.folder)" :href="creatorProfileUrl(detail.folder) || null" target="_blank" rel="noopener noreferrer" x-text="creatorName(detail.folder)"></a><span x-show="!creatorProfileUrl(detail.folder)" x-text="creatorName(detail.folder)"></span></p>
                         <span class="date-warning" x-show="futureDate(detail.folder?.pub_time)" data-tooltip="原始时间已保留，可查看原帖确认。" tabindex="0">来源日期待核实</span>
                         <button
                             type="button"
@@ -1894,7 +1895,9 @@
         <div class="xhs-video-backdrop" data-testid="xhs-video-backdrop" data-modal-layer="video-note" role="dialog" aria-modal="true" aria-label="视频播放器" tabindex="-1" x-show="videoNote.open" :class="{ 'video-feed-active': narrowViewport }" @click.self="closeVideoNote()" @touchstart.passive="startVideoFeedGesture($event)" @touchmove="moveVideoFeedGesture($event)" @touchend="endVideoFeedGesture($event)" @touchcancel="videoFeedGesture = null" x-cloak>
             <section class="xhs-video-shell" :style="`--feed-direction: ${videoFeedDirection}`">
                 <header class="xhs-video-head">
-                    <div><h3 x-text="videoNote.folder?.title || '视频笔记'"></h3></div>
+                    <div><h3 x-text="videoNote.folder?.title || '视频笔记'"></h3>
+                        <p class="viewer-kicker"><span x-text="displayDate(videoNote.folder?.pub_time)"></span><span> - </span><a class="creator-link" x-show="creatorProfileUrl(videoNote.folder)" :href="creatorProfileUrl(videoNote.folder) || null" target="_blank" rel="noopener noreferrer" x-text="creatorName(videoNote.folder)"></a><span x-show="!creatorProfileUrl(videoNote.folder)" x-text="creatorName(videoNote.folder)"></span></p>
+                    </div>
                     <div class="xhs-video-head-actions">
                         <button type="button" class="secondary-button video-note-favorite" data-testid="video-favorite" :class="{ active: videoNote.folder?.is_favorite }" :aria-pressed="!!videoNote.folder?.is_favorite" :aria-label="videoNote.folder?.is_favorite ? '取消收藏视频' : '收藏视频'" :disabled="!!(videoNote.loading || videoFeed.busy || !videoNote.folder || favoritePending[videoNote.folder?.folder_name])" @click="toggleFavorite(videoNote.folder, $event)">
                             <svg class="favorite-icon" aria-hidden="true"><use href="#icon-favorites"></use></svg>
@@ -1919,7 +1922,7 @@
                 </template>
                 <p class="field-copy" role="status" x-show="videoNote.error" x-text="videoNote.error"></p>
                 <div class="video-feed-caption" x-show="narrowViewport" x-cloak>
-                    <strong x-text="videoNote.folder?.subscription_name || '视频'"></strong>
+                    <p class="video-creator-meta"><span x-text="displayDate(videoNote.folder?.pub_time)"></span><span> - </span><a class="creator-link" x-show="creatorProfileUrl(videoNote.folder)" :href="creatorProfileUrl(videoNote.folder) || null" target="_blank" rel="noopener noreferrer" x-text="creatorName(videoNote.folder)"></a><span x-show="!creatorProfileUrl(videoNote.folder)" x-text="creatorName(videoNote.folder)"></span></p>
                     <h3 x-text="videoNote.folder?.title || '视频'"></h3>
                 </div>
                 <nav class="video-feed-navigation" aria-label="切换视频" x-show="!narrowViewport && videoFeed.active" x-cloak>

@@ -384,7 +384,7 @@ class XhsManager:
 
     def _download_pending(self, source, session_id, stats, cooperate, progress):
         with self.db.connect() as conn:
-            posts = [dict(row) for row in conn.execute('''select p.*,l.note_id,l.note_type,d.status as download_status,d.media_revision
+            posts = [dict(row) for row in conn.execute('''select p.*,l.note_id,l.note_type,l.author_id,l.author_name,d.status as download_status,d.media_revision
                 from xhs_note_downloads d join site_posts p on p.id=d.post_id join xhs_like_state l on l.site_post_id=p.id
                 where p.source_id=? and d.status != 'ready' order by p.id''', (source['source_id'],))]
         quota = source['media_quota_mb'] * 1024 * 1024
@@ -436,14 +436,16 @@ class XhsManager:
                 if resolved_title == note.note_id and post.get('title') and post['title'] != note.note_id:
                     resolved_title = post['title']
                 post['title'] = resolved_title
+                post['author_name'] = note.author_name or post.get('author_name') or ''
+                post['author_id'] = note.author_id or post.get('author_id') or ''
                 post['note_type'] = 'livephoto' if note.type != 'video' and any(asset.kind == 'livephoto' for asset in assets) else note.type
                 if note.published_at:
                     post['pub_date'] = datetime.fromisoformat(note.published_at).astimezone(TIMEZONE).date().isoformat()
                 with self.db.connect() as conn:
                     conn.execute('update site_posts set title=?,pub_date=?,updated_at=? where id=?',
                                  (post['title'], post['pub_date'], now_iso(), post['id']))
-                    conn.execute('update xhs_like_state set note_type=?,author_id=? where site_post_id=?',
-                                 (post['note_type'], note.author_id, post['id']))
+                    conn.execute('update xhs_like_state set note_type=?,author_id=?,author_name=? where site_post_id=?',
+                                 (post['note_type'], post['author_id'], post['author_name'], post['id']))
                 expected_keys = set()
                 live_errors = []
                 for asset in assets:
@@ -621,6 +623,7 @@ class XhsManager:
         self.indexer.index_folder(folder_name, pub_ts, post['title'], '', dynamic_id, dynamic_id,
                                   subscription_uid=f"site:{source['source_id']}", subscription_name=source['name'],
                                   metadata={'source': 'xhs', 'site_post_id': post['id'], 'site_post_url': post['url'],
+                                            'author_name': post.get('author_name') or '', 'author_id': post.get('author_id') or '',
                                             'standalone_video': post['note_type'] == 'video',
                                             'media_variant': 'visible_web_media'})
         self.indexer.livephotos.normalize_download(folder_name, changed_paths)

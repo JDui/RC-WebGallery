@@ -1700,6 +1700,8 @@ html.is-interacting .detail-card {
     box-shadow: var(--shadow-lift);
 }
 
+.photo-card.video:hover { border-color: transparent; }
+
 .photo-card:hover .photo-visual img,
 .photo-card:hover .photo-collage-tile img {
     transform: scale(1.035);
@@ -5560,3 +5562,10 @@ details.settings-card[open] > summary::after { content: "⌃"; }
 .detail-compact-title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; }
 .detail-compact-bar .viewer-icon-button { width: 30px; height: 30px; min-height: 30px; padding: 5px; }
 @media (max-width: 760px) { .detail-sticky-bar { top: -10px; } }
+
+.creator-link { color: inherit; text-decoration: none; cursor: pointer; }
+.creator-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.creator-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+
+.video-creator-meta { margin: 0; font-size: 12px; }
+.video-feed-caption .creator-link { pointer-events: auto; }

@@ -264,6 +264,8 @@ function galleryApp(initialSettings = {}) {
     galleryWindowMeasureRaf: null,
     galleryLoading: false,
     galleryFetching: false,
+    galleryRandomSeed: "",
+    galleryRandomExpired: false,
     galleryMinHeight: 0,
     galleryViewMode: localStorage.getItem("gallery_view_mode") || "folder",
     displayedGalleryViewMode: localStorage.getItem("gallery_view_mode") || "folder",
@@ -291,6 +293,7 @@ function galleryApp(initialSettings = {}) {
     gallerySmallPromotionTimer: null,
     galleryColumnCache: null,
     galleryColumnCacheWidth: 0,
+    galleryStageWidth: 0,
     detailColumnCache: null,
     detailColumnCacheWidth: 0,
     deferredGalleryRefreshTimer: null,
@@ -968,7 +971,9 @@ function galleryApp(initialSettings = {}) {
       }
       this.galleryColumnCache = null;
       this.detailColumnCache = null;
+      this.galleryStageWidth = this.$refs?.galleryStage?.clientWidth || window.innerWidth;
       this.$nextTick(() => {
+        this.galleryStageWidth = this.$refs?.galleryStage?.clientWidth || window.innerWidth;
         this.observeGalleryCards();
         this.observeGalleryLoadSentinel();
         this.scheduleFixedLayoutMetrics();
@@ -1074,6 +1079,7 @@ function galleryApp(initialSettings = {}) {
         const payload = await response.json().catch(() => ({}));
         if (payload.maintenance) window.location.reload();
         const error = new Error(payload.detail || payload.message || "请求失败");
+        error.randomFeedExpired = !!payload.random_feed_expired;
         this.notify("error", "请求失败", error.message);
         throw error;
       }
@@ -1564,9 +1570,11 @@ function galleryApp(initialSettings = {}) {
         this.layoutResizeObserver.disconnect();
         this.layoutResizeObserver = null;
       }
-      const targets = [this.$refs.shell, this.$refs.sidebar, this.$refs.workspace, this.$refs.topbar].filter(Boolean);
+      const targets = [this.$refs.shell, this.$refs.sidebar, this.$refs.workspace, this.$refs.topbar, this.$refs.galleryStage].filter(Boolean);
       if (typeof ResizeObserver === "function") {
         this.layoutResizeObserver = new ResizeObserver(() => {
+          const width = this.$refs.galleryStage?.clientWidth || 0;
+          if (width > 0 && width !== this.galleryStageWidth) this.galleryStageWidth = width;
           this.scheduleFixedLayoutMetrics();
           this.scheduleRecentUpdatesMeasure();
         });
@@ -1676,9 +1684,11 @@ function galleryApp(initialSettings = {}) {
     },
 
     resolveGalleryColumns() {
-      if (this.narrowViewport) return 2;
+      const width = this.galleryStageWidth || this.$refs?.galleryStage?.clientWidth || window.innerWidth || 1280;
+      if (this.compactViewport || this.narrowViewport) {
+        return Math.max(2, Math.min(4, Math.floor((width + 8) / 184)));
+      }
       const target = Math.max(1, Number(this.galleryColumnCount) || 1);
-      const width = this.$refs.galleryStage?.clientWidth || window.innerWidth || 1280;
       if (this.galleryColumnCache && Math.abs(width - this.galleryColumnCacheWidth) < 24) {
         return Math.min(target, this.galleryColumnCache);
       }
@@ -1935,7 +1945,27 @@ function galleryApp(initialSettings = {}) {
 
     galleryDensityCaption() {
       const count = this.resolveGalleryColumns();
+      if (this.compactViewport || this.narrowViewport) return `按内容宽度自动适配，每行 ${count} 张（2～4 张）`;
       return `期望 ${this.galleryColumnCount} 列，当前窗口 ${count} 列`;
+    },
+
+    creatorName(item) {
+      if (!item) return "未知作者";
+      if (item.creator_name) return String(item.creator_name);
+      if (String(item.folder_name || "").startsWith("xhs_")) {
+        return item.author_name || (item.author_id ? `作者 ${item.author_id}` : "未知作者");
+      }
+      return item.subscription_name || "默认订阅";
+    },
+
+    creatorProfileUrl(item) {
+      const raw = item?.creator_url || (item?.author_id
+        ? `https://www.xiaohongshu.com/user/profile/${encodeURIComponent(item.author_id)}`
+        : /^\d+$/.test(String(item?.subscription_uid || "")) ? `https://space.bilibili.com/${item.subscription_uid}` : "");
+      try {
+        const url = new URL(raw);
+        return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? url.href : "";
+      } catch (_) { return ""; }
     },
 
     detailContentText() {
@@ -2331,7 +2361,9 @@ function galleryApp(initialSettings = {}) {
         return;
       }
       this.galleryLoading = reset;
-      const pageSize = Math.max(Number(this.gallery.page_size || 0), this.preferredGalleryPageSize());
+      const pageSize = reset
+        ? Math.max(Number(this.gallery.page_size || 0), this.preferredGalleryPageSize())
+        : (Number(this.gallery.page_size) || this.preferredGalleryPageSize());
       const page = Math.max(1, Number(targetPage || (reset ? 1 : this.gallery.page) || 1));
       if (reset) {
         this.lockGalleryMinHeight();
@@ -2341,6 +2373,13 @@ function galleryApp(initialSettings = {}) {
       } else if (direction === "next") {
         this.gallerySkeletonCount = 0;
       }
+      if (this.randomModeActive() && (reset || !this.galleryRandomSeed)) {
+        this.galleryRandomSeed = this.newRandomSeed();
+        this.galleryRandomExpired = false;
+      } else if (!this.randomModeActive()) {
+        this.galleryRandomSeed = "";
+        this.galleryRandomExpired = false;
+      }
       const params = new URLSearchParams({
         category: this.category === "search" ? "all" : this.category,
         view_mode: this.galleryViewMode,
@@ -2348,6 +2387,7 @@ function galleryApp(initialSettings = {}) {
         page: String(page),
         page_size: String(pageSize),
       });
+      if (this.randomModeActive()) params.set("random_seed", this.galleryRandomSeed);
       if (this.timeFilterApplied.startMonth) {
         params.set("start_month", this.timeFilterApplied.startMonth);
       }
@@ -2395,6 +2435,7 @@ function galleryApp(initialSettings = {}) {
           }
         });
       } catch (error) {
+        if (error.randomFeedExpired && requestId === this.galleryRequestId) this.galleryRandomExpired = true;
         if (error.name !== "AbortError") throw error;
       } finally {
         if (requestId === this.galleryRequestId) {
@@ -2578,7 +2619,7 @@ function galleryApp(initialSettings = {}) {
       if (this.randomModeActive()) {
         return "";
       }
-      return `gallery-page:single-thumb-v4:${params.toString()}`;
+      return `gallery-page:creators-v1:${params.toString()}`;
     },
 
     readLocalGalleryCache(key) {
@@ -3042,7 +3083,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     hasMoreItems() {
-      return !this.randomModeActive() && this.lastLoadedGalleryPage() < this.galleryTotalPages();
+      return !this.galleryRandomExpired && this.lastLoadedGalleryPage() < this.galleryTotalPages();
     },
 
     galleryReadyForLoad() {
@@ -3061,20 +3102,21 @@ function galleryApp(initialSettings = {}) {
       );
     },
 
+    newRandomSeed() {
+      return typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    },
+
     randomModeActive() {
       return this.timeSortMode === "random";
     },
 
     autoLoadEnabled() {
-      return !!this.settings.auto_load_enabled && !this.randomModeActive();
+      return !!this.settings.auto_load_enabled;
     },
 
     showManualLoadMore() {
-      return this.galleryReadyForLoad() && this.hasMoreItems() && !this.autoLoadEnabled() && !this.randomModeActive();
-    },
-
-    showRandomReloadButton() {
-      return this.currentView === "gallery" && this.gallery.items.length > 0 && this.randomModeActive();
+      return this.galleryReadyForLoad() && this.hasMoreItems() && !this.autoLoadEnabled();
     },
 
     handleScroll() {
@@ -3088,20 +3130,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     galleryLoadFinished() {
-      if (this.randomModeActive()) {
-        return false;
-      }
-      return this.gallery.items.length > 0 && !this.hasMoreItems();
-    },
-
-    async rerollRandomGallery() {
-      if (!this.randomModeActive() || this.galleryLoading || this.loadingMore) {
-        return;
-      }
-      this.notify("info", "正在重新随机抽取", "前端会先更新，后台正在刷新当前筛选结果。");
-      this.scrollViewTop();
-      await new Promise((resolve) => this.runAfterInteraction(resolve, 180));
-      await this.refreshGallery(true);
+      return !this.galleryRandomExpired && this.gallery.items.length > 0 && !this.hasMoreItems();
     },
 
     isStandaloneVideoFolder(folder, folderName = "") {
@@ -3163,13 +3192,14 @@ function galleryApp(initialSettings = {}) {
         view_mode: 'folder', sort_order: this.sortOrder,
         page_size: String(this.gallery.page_size || this.preferredGalleryPageSize()),
       });
+      if (this.randomModeActive()) params.set('random_seed', this.galleryRandomSeed);
       if (this.timeFilterApplied.startMonth) params.set('start_month', this.timeFilterApplied.startMonth);
       if (this.timeFilterApplied.endMonth) params.set('end_month', this.timeFilterApplied.endMonth);
       if (this.selectedSubscriptionUids.length) params.set('subscription_uids', this.selectedSubscriptionUids.join(','));
       else if (this.sourceKind !== 'all') params.set('source_kind', this.sourceKind);
       if (this.category === 'search' && this.searchQuery) params.set('search_query', this.searchQuery);
       this.videoFeed = { active: true, items, index: items.findIndex(item => item.folder_name === folder.folder_name),
-        page: this.lastLoadedGalleryPage(), totalPages: this.randomModeActive() ? 1 : this.galleryTotalPages(), params: params.toString(), busy: false };
+        page: this.lastLoadedGalleryPage(), totalPages: this.galleryTotalPages(), params: params.toString(), busy: false };
       this.videoFeedMessage = '';
     },
 
@@ -4164,7 +4194,7 @@ function galleryApp(initialSettings = {}) {
         return "全部时间";
       }
       if (this.timeSortMode === "random") {
-        return "随机时间";
+        return "随机排序";
       }
       const startMonth = this.timeFilterApplied.startMonth;
       const endMonth = this.timeFilterApplied.endMonth;
@@ -4185,7 +4215,7 @@ function galleryApp(initialSettings = {}) {
       return {
         desc: "时间倒序",
         asc: "时间正序",
-        random: "随机时间",
+        random: "随机排序",
         imported: "最近入库",
       }[this.timeSortMode] || "时间倒序";
     },

@@ -13,7 +13,7 @@ function harness({reduced = false, viewport = false} = {}) {
     closest() { return viewport ? {} : null; }
     before(node) { node.parent = this; this.siblings.push(node); }
     remove() { if (this.parent) this.parent.siblings = this.parent.siblings.filter(x => x !== this); }
-    decode() { return this.failDecode ? Promise.reject(Error('bad decode')) : Promise.resolve(); }
+    decode() { return this.failDecode || this.loading === 'lazy' ? Promise.reject(Error('bad decode')) : Promise.resolve(); }
     animate(frames, options) {
       const animation = {frames, options, cancel() { this.cancelled = true; }};
       animations.push(animation); return animation;
@@ -54,6 +54,17 @@ test('old pixels survive fetching, overlap the decoded replacement, then retire'
   assert.equal(old.src,'');
   assert.equal(h.manager.dirty.size,0);
   assert.equal(h.image.style.willChange,undefined);
+});
+test('visible images decode without native lazy loading deferring the committed frame', async () => {
+  const h = harness({viewport:true});
+  h.image.loading = 'lazy';
+  h.controller.setSource('visible');
+  assert.equal(h.requests.length,0);
+  h.expose(true);
+  await h.loaded('visible');
+  assert.equal(h.image.src,'visible');
+  assert.equal(h.image.dataset.progressiveReady,'1');
+  h.controller.dispose();h.manager.flush();
 });
 test('rapid upgrades during overlap coalesce to the latest level', async () => {
   const h=harness(); await h.show('tiny');

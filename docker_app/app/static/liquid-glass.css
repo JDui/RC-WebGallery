@@ -836,6 +836,7 @@ input[type="range"] {
 }
 
 .photo-card.live:hover,
+.photo-card.video:hover,
 .detail-card.live:hover {
     border-color: transparent;
 }

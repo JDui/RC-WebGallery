@@ -195,7 +195,7 @@ class XhsSyncService:
         with self.db.connect() as conn:
             self.get_source(source_id, conn)
             return [dict(row) for row in conn.execute(
-                """select l.note_id, l.note_type, l.first_seen_at, l.last_seen_at, l.is_currently_liked,
+                """select l.note_id, l.note_type, l.author_name, l.author_id, l.first_seen_at, l.last_seen_at, l.is_currently_liked,
                        p.title, p.url, p.pub_date, p.asset_count, d.status as download_status, d.error_category,
                        (select f.folder_name from folders f where f.folder_name =
                            'xhs_' || l.source_id || '_' || l.note_id limit 1) as folder_name
@@ -398,13 +398,15 @@ class XhsSyncService:
                     values (?, 'pending', ?, ?) on conflict(post_id) do update set last_scan_id = excluded.last_scan_id''',
                              (post_id, manifest.scan_id, now))
                 conn.execute(
-                    """insert into xhs_like_state(source_id, note_id, site_post_id, author_id, note_type,
+                    """insert into xhs_like_state(source_id, note_id, site_post_id, author_id, author_name, note_type,
                            first_seen_at, last_seen_at, is_currently_liked, last_full_snapshot_id)
-                       values (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                       values (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                        on conflict(source_id, note_id) do update set last_seen_at = excluded.last_seen_at,
-                           author_id = excluded.author_id, note_type = excluded.note_type, is_currently_liked = 1,
+                           author_id = case when excluded.author_id != '' then excluded.author_id else xhs_like_state.author_id end,
+                           author_name = case when excluded.author_name != '' then excluded.author_name else xhs_like_state.author_name end,
+                           note_type = excluded.note_type, is_currently_liked = 1,
                            last_full_snapshot_id = coalesce(excluded.last_full_snapshot_id, xhs_like_state.last_full_snapshot_id)""",
-                    (source_id, note.note_id, post_id, note.author_id, note.type, now, now, manifest.scan_id if complete else None),
+                    (source_id, note.note_id, post_id, note.author_id, note.author_name, note.type, now, now, manifest.scan_id if complete else None),
                 )
                 for asset in note.assets:
                     stable_key = f"urn:xhs:{source_id}:{note.note_id}:{asset.ordinal}:{asset.kind}"

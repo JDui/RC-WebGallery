@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import random
 import threading
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -12,6 +11,7 @@ from app.services.utils import dumps_json, loads_json, now_iso, safe_slug
 from app.services.xhs.schema import migrate as migrate_xhs
 from app.theme import DEFAULT_THEME as DEFAULT_UI_THEME
 from app.services.database_layout import module_ddl, install_hot_indexes
+from app.services.random_browse import page_keys
 
 
 DEFAULT_SETTINGS = {
@@ -2647,9 +2647,20 @@ class Database:
         settings = self.get_settings()
         return folder_rows == 0 or int(settings.get("gallery_index_version") or 0) == GALLERY_INDEX_VERSION
 
-    def _query_browse_page(self, table, where_sql, params, page, page_size, column, direction, random_order):
+    def _query_browse_page(self, table, where_sql, params, page, page_size, column, direction, random_order, random_seed=None):
         # Each boundary is a small lookup entry for the next waterfall page.
         # Deep sequential browsing seeks into the B tree instead of walking OFFSET.
+        if random_order:
+            snapshot = page_keys(self, table, where_sql, params, random_seed, page, page_size)
+            key_column = "item_key" if table == "pair_index" else "folder_name"
+            keys = snapshot["keys"]
+            if not keys:
+                return {"total": snapshot["total"], "items": []}
+            with self.connect() as conn:
+                marks = ",".join("?" for _ in keys)
+                rows = {row[key_column]: dict(row) for row in conn.execute(
+                    f"select * from {table} where {key_column} in ({marks}) and ({where_sql})", [*keys, *params])}
+            return {"total": snapshot["total"], "items": [rows[key] for key in keys if key in rows]}
         revision = self.gallery_page_cache_signature()
         key = dumps_json([table, where_sql, params, page_size, column, direction])
         pair = table == 'pair_index'
@@ -2663,27 +2674,23 @@ class Database:
             else:
                 total = cached['total']
             boundary = conn.execute('select * from browse_boundaries where query_key=? and page=?', (key, page)).fetchone()
-            if random_order:
-                offsets = random.sample(range(total), min(page_size, total))
-                rows = [conn.execute(f'select * from {table} where {where_sql} order by {order} limit 1 offset ?', [*params, offset]).fetchone() for offset in offsets]
-            else:
-                predicate, values = '', []
-                offset = max(page - 1, 0) * page_size
-                if boundary:
-                    op = '>' if direction == 'asc' else '<'
-                    # The inclusive tuple bound seeks directly into the index;
-                    # the residual handles pairs ascending within each folder.
-                    if pair:
-                        predicate = f' and ({column},folder_name) {op}= (?,?) and (({column},folder_name) {op} (?,?) or pair_index>?)'
-                        values = [boundary['sort_value'], boundary['folder_name']] * 2 + [boundary['pair_index']]
-                    else:
-                        predicate = f' and ({column},folder_name) {op} (?,?)'
-                        values = [boundary['sort_value'], boundary['folder_name']]
-                    offset = 0
-                rows = conn.execute(f'select * from {table} where ({where_sql}){predicate} order by {order} limit ? offset ?', [*params, *values, page_size, offset]).fetchall()
-                if rows:
-                    last = rows[-1]
-                    conn.execute('insert or ignore into browse_boundaries values(?,?,?,?,?)', (key, page+1, last[column], last['folder_name'], last['pair_index'] if pair else 0))
+            predicate, values = '', []
+            offset = max(page - 1, 0) * page_size
+            if boundary:
+                op = '>' if direction == 'asc' else '<'
+                # The inclusive tuple bound seeks directly into the index;
+                # the residual handles pairs ascending within each folder.
+                if pair:
+                    predicate = f' and ({column},folder_name) {op}= (?,?) and (({column},folder_name) {op} (?,?) or pair_index>?)'
+                    values = [boundary['sort_value'], boundary['folder_name']] * 2 + [boundary['pair_index']]
+                else:
+                    predicate = f' and ({column},folder_name) {op} (?,?)'
+                    values = [boundary['sort_value'], boundary['folder_name']]
+                offset = 0
+            rows = conn.execute(f'select * from {table} where ({where_sql}){predicate} order by {order} limit ? offset ?', [*params, *values, page_size, offset]).fetchall()
+            if rows:
+                last = rows[-1]
+                conn.execute('insert or ignore into browse_boundaries values(?,?,?,?,?)', (key, page+1, last[column], last['folder_name'], last['pair_index'] if pair else 0))
             # Bound lookup storage even when filters/search combinations proliferate.
             conn.execute('delete from browse_boundaries where query_key in (select query_key from browse_queries order by rowid desc limit -1 offset 128)')
             conn.execute('delete from browse_queries where rowid in (select rowid from browse_queries order by rowid desc limit -1 offset 128)')
@@ -2702,6 +2709,7 @@ class Database:
         page: int = 1,
         page_size: int = 24,
         sort_order: str = "desc",
+        random_seed: str | None = None,
     ) -> dict[str, Any]:
         where_sql, params = self._gallery_index_where(
             category=category,
@@ -2720,7 +2728,7 @@ class Database:
         order_column = "pub_ts"
         if sort_order == "imported":
             order_column = "imported_at"
-        return self._query_browse_page("folder_index", where_sql, params, page, page_size, order_column, order_direction, random_order)
+        return self._query_browse_page("folder_index", where_sql, params, page, page_size, order_column, order_direction, random_order, random_seed)
 
     def query_pair_index(
         self,
@@ -2735,6 +2743,7 @@ class Database:
         page: int = 1,
         page_size: int = 24,
         sort_order: str = "desc",
+        random_seed: str | None = None,
     ) -> dict[str, Any]:
         where_sql, params = self._gallery_index_where(
             category=category,
@@ -2753,7 +2762,7 @@ class Database:
         order_column = "pub_ts"
         if sort_order == "imported":
             order_column = "imported_at"
-        return self._query_browse_page("pair_index", where_sql, params, page, page_size, order_column, order_direction, random_order)
+        return self._query_browse_page("pair_index", where_sql, params, page, page_size, order_column, order_direction, random_order, random_seed)
 
     def gallery_meta_from_index(self) -> dict[str, Any]:
         with self.connect() as conn:

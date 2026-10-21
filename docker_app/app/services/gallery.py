@@ -5,6 +5,8 @@ from math import ceil
 
 from app.db import Database
 from app.services.storage import StorageService
+from app.services.creators import attach_creators
+from app.services.random_browse import normalize_seed, page_keys
 from app.services.thumb_chain import INDEX_THUMB_LEVELS, SMALL_LEVELS, pick_thumb_url
 from app.services.utils import dumps_json, loads_json
 
@@ -28,7 +30,10 @@ class GalleryService:
         page_size: int = 24,
         view_mode: str = "folder",
         sort_order: str = "desc",
+        random_seed: str | None = None,
     ) -> dict:
+        if sort_order == "random":
+            random_seed = normalize_seed(random_seed, page)
         if category == "video":
             view_mode = "folder"
         source_kind = self._normalize_source_kind(source_kind)
@@ -55,6 +60,7 @@ class GalleryService:
                 if payload.get("items") is not None:
                     payload["cache_hit"] = True
                     payload["cache_updated_at"] = cached.get("updated_at")
+                    attach_creators(self.db, payload.get("items", []))
                     return payload
         if not self.db.gallery_index_ready():
             payload = self._fallback_gallery_items(
@@ -70,6 +76,7 @@ class GalleryService:
                 page_size=page_size,
                 view_mode=view_mode,
                 sort_order=sort_order,
+                random_seed=random_seed,
             )
             return self._cache_gallery_payload(cacheable, cache_key, cache_signature, payload)
         if view_mode == "pair":
@@ -85,6 +92,7 @@ class GalleryService:
                 page=page,
                 page_size=page_size,
                 sort_order=sort_order,
+                random_seed=random_seed,
             )
             items = [self._pair_card(item) for item in result["items"]]
         else:
@@ -100,6 +108,7 @@ class GalleryService:
                 page=page,
                 page_size=page_size,
                 sort_order=sort_order,
+                random_seed=random_seed,
             )
             items = [self._folder_card_from_index(item) for item in result["items"]]
         total = int(result["total"])
@@ -111,6 +120,7 @@ class GalleryService:
             "total_pages": ceil(total / page_size) if total else 1,
             "view_mode": view_mode,
             "sort_order": sort_order,
+            "random_seed": random_seed,
         }
         return self._cache_gallery_payload(cacheable, cache_key, cache_signature, payload)
 
@@ -155,6 +165,7 @@ class GalleryService:
         cache_signature: str,
         payload: dict,
     ) -> dict:
+        attach_creators(self.db, payload.get("items", []))
         payload = {
             **payload,
             "cache_hit": False,
@@ -254,6 +265,7 @@ class GalleryService:
             )
             if len(groups) >= normalized_limit:
                 break
+        attach_creators(self.db, [item for group in groups for item in group["items"]])
         return {
             "groups": groups,
             "total_groups": len(groups),
@@ -290,8 +302,10 @@ class GalleryService:
                     "display_ratio": self._display_ratio(preview_asset),
                 }
             )
+        folder_card = self._folder_card_from_folder(folder)
+        attach_creators(self.db, [folder_card])
         return {
-            "folder": self._folder_card_from_folder(folder),
+            "folder": folder_card,
             "pairs": pairs,
             "images": images,
             "livephotos": livephotos,
@@ -336,6 +350,7 @@ class GalleryService:
         image_assets = [asset for asset in assets if asset["media_type"] == "image"]
         preview_assets = image_assets or assets
         image_count = len(image_assets)
+        metadata = loads_json(folder.get("metadata_json"), {})
         livephoto_count = sum(1 for asset in assets if asset["media_type"] == "livephoto")
         return {
             "folder_name": folder["folder_name"],
@@ -349,6 +364,8 @@ class GalleryService:
             "original_url": self._original_url(folder),
             "subscription_uid": str(folder.get("subscription_uid") or ""),
             "subscription_name": folder.get("subscription_name") or "",
+            "author_name": metadata.get("author_name") or "",
+            "author_id": metadata.get("author_id") or "",
             "year_key": (folder.get("pub_time") or "")[:4],
             "month_key": (folder.get("pub_time") or "")[:7],
             "has_images": bool(folder["has_images"]),
@@ -441,6 +458,7 @@ class GalleryService:
         page_size: int,
         view_mode: str,
         sort_order: str,
+        random_seed: str | None = None,
     ) -> dict:
         folders = self.db.list_folders()
         xhs_uids = self.db.xhs_subscription_uids() if source_kind in {"site", "xhs"} else set()
@@ -463,24 +481,32 @@ class GalleryService:
                 )
             ]
         if view_mode == "pair":
-            items = self._fallback_pair_items(filtered, category, sort_order=sort_order)
+            items = self._fallback_pair_items(filtered, category, sort_order="desc" if sort_order == "random" else sort_order)
         else:
             items = [item for item in (self._folder_card_from_folder(folder) for folder in filtered) if item]
-            if sort_order == "random":
-                random.shuffle(items)
-            else:
-                reverse = sort_order != "asc"
-                items.sort(
-                    key=lambda item: (
-                        str(item.get("imported_at") or "") if sort_order == "imported" else int(item.get("pub_ts") or 0),
-                        str(item.get("folder_name") or item.get("item_key") or ""),
-                        int(item.get("pair_index") or 0),
-                    ),
-                    reverse=reverse,
-                )
-        total = len(items)
-        start = max(page - 1, 0) * page_size
-        page_items = items[start:start + page_size]
+            reverse = sort_order != "asc"
+            items.sort(
+                key=lambda item: (
+                    str(item.get("imported_at") or "") if sort_order == "imported" else int(item.get("pub_ts") or 0),
+                    str(item.get("folder_name") or item.get("item_key") or ""),
+                    int(item.get("pair_index") or 0),
+                ),
+                reverse=reverse,
+            )
+        if sort_order == "random":
+            table = "pair_index" if view_mode == "pair" else "folder_index"
+            where_sql, params = self.db._gallery_index_where(
+                category=category, year=year, month=month, start_month=start_month, end_month=end_month,
+                subscription_uids=subscription_uids, source_kind=source_kind, search_query=search_query,
+                table_alias=table, pair_mode=view_mode == "pair")
+            by_key = {item.get("item_key") or item["folder_name"]: item for item in items}
+            snapshot = page_keys(self.db, table, where_sql, params, random_seed, page, page_size, fallback_keys=by_key)
+            total = snapshot["total"]
+            page_items = [by_key[key] for key in snapshot["keys"] if key in by_key]
+        else:
+            total = len(items)
+            start = max(page - 1, 0) * page_size
+            page_items = items[start:start + page_size]
         return {
             "items": page_items,
             "page": page,
@@ -489,6 +515,7 @@ class GalleryService:
             "total_pages": ceil(total / page_size) if total else 1,
             "view_mode": view_mode,
             "sort_order": sort_order,
+            "random_seed": random_seed,
         }
 
     def _fallback_gallery_meta(self) -> dict:
@@ -535,16 +562,12 @@ class GalleryService:
 
     def _fallback_pair_items(self, folders: list[dict], category: str, sort_order: str = "desc") -> list[dict]:
         output: list[dict] = []
-        if sort_order == "random":
-            sorted_folders = list(folders)
-            random.shuffle(sorted_folders)
-        else:
-            reverse = sort_order != "asc"
-            sorted_folders = sorted(
-                folders,
-                key=lambda folder: (str(folder.get("created_at") or "") if sort_order == "imported" else int(folder.get("pub_ts") or 0), str(folder.get("folder_name") or "")),
-                reverse=reverse,
-            )
+        reverse = sort_order != "asc"
+        sorted_folders = sorted(
+            folders,
+            key=lambda folder: (str(folder.get("created_at") or "") if sort_order == "imported" else int(folder.get("pub_ts") or 0), str(folder.get("folder_name") or "")),
+            reverse=reverse,
+        )
         for folder in sorted_folders:
             detail = self.get_folder_detail(folder["folder_name"])
             if not detail:
@@ -580,8 +603,6 @@ class GalleryService:
                         "height": preview.get("height"),
                     }
                 )
-        if sort_order == "random":
-            random.shuffle(output)
         return output
 
     def _match(

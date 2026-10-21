@@ -11,7 +11,7 @@ import sqlite3
 
 MODULES = {
     'control': ('settings', 'auth_state', 'subscriptions', 'sidebar_count_cache'),
-    'browse': ('folder_index', 'pair_index', 'gallery_page_cache', 'browse_queries', 'browse_boundaries'),
+    'browse': ('folder_index', 'pair_index', 'gallery_page_cache', 'browse_queries', 'browse_boundaries', 'random_browse_sessions', 'random_browse_entries'),
 }
 
 
@@ -60,6 +60,12 @@ def install_hot_indexes(db, conn: sqlite3.Connection) -> None:
     conn.execute(f'''create table if not exists {schema}.browse_boundaries (
         query_key text not null, page integer not null, sort_value, folder_name text not null,
         pair_index integer not null, primary key(query_key,page))''')
+    conn.execute(f'''create table if not exists {schema}.random_browse_sessions (
+        id integer primary key, session_key text not null unique, total integer not null,
+        last_used real not null)''')
+    conn.execute(f'''create table if not exists {schema}.random_browse_entries (
+        session_id integer not null, position integer not null, item_key text not null,
+        primary key(session_id,position), unique(session_id,item_key))''')
     # Transactional revision counters replace COUNT/MAX/SUM on every cache read.
     watched = ('folders', 'assets', 'folder_index', 'pair_index', 'site_sources', 'subscriptions', 'site_posts', 'site_assets')
     for schema in ('main', 'control', 'browse') if db.modules_enabled else ('main',):
@@ -88,7 +94,7 @@ def split_modules(db, progress) -> None:
             conn.execute(f'pragma {module}.synchronous=full')
         conn.execute('pragma synchronous=full')
         conn.execute('begin immediate')
-        for table in ('gallery_page_cache', 'browse_queries', 'browse_boundaries'):
+        for table in ('gallery_page_cache', 'browse_queries', 'browse_boundaries', 'random_browse_entries', 'random_browse_sessions'):
             conn.execute(f'delete from main.{table}')
         for module, tables in MODULES.items():
             for table in tables:

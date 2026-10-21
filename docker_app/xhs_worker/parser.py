@@ -280,6 +280,8 @@ def normalize_note(raw: dict, *, detail: bool = False) -> tuple[dict, list[tuple
     note_id = identifier(raw.get('id') or raw.get('note_id') or card.get('note_id') or card.get('noteId') or card.get('id'))
     user = card.get('user') or {}
     author = user.get('user_id') or user.get('userId') or ''
+    author_name = user.get('nickname') or user.get('nickName') or user.get('name') or ''
+    author_name = re.sub(r'[\x00-\x1f\x7f]', ' ', author_name).strip()[:256] if isinstance(author_name, str) else ''
     published = card.get('time') or card.get('publish_time') or card.get('publishTime')
     try:
         if isinstance(published, (int, float)) and not isinstance(published, bool):
@@ -334,7 +336,7 @@ def normalize_note(raw: dict, *, detail: bool = False) -> tuple[dict, list[tuple
         title_value = ''
     title = re.sub(r'\s+', ' ', re.sub(r'[\x00-\x1f]', ' ', str(title_value))).strip()[:1000] or note_id
     note = {'note_id': note_id, 'url': f'https://www.xiaohongshu.com/explore/{note_id}', 'title': title,
-            'author_id': author, 'type': 'video' if card.get('type') == 'video' or bool(video) else (
+            'author_id': author, 'author_name': author_name, 'type': 'video' if card.get('type') == 'video' or bool(video) else (
                 'livephoto' if any(asset['kind'] == 'livephoto' for asset in assets) else 'image'),
             'published_at': published, 'observed_at': now_iso(), 'assets': assets}
     return note, candidates

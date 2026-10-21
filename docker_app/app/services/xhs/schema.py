@@ -173,3 +173,6 @@ def migrate(conn: sqlite3.Connection) -> None:
             (select l.site_post_id from xhs_like_state l join xhs_source_accounts a on a.source_id=l.source_id
              where a.auth_mode='browser' and l.note_type!='video')""")
         conn.execute("insert into xhs_schema_migrations values (7, datetime('now'))")
+    if 'author_name' not in {row[1] for row in conn.execute('pragma table_info(xhs_like_state)')}:
+        conn.execute("alter table xhs_like_state add column author_name text not null default ''")
+    conn.execute("insert or ignore into xhs_schema_migrations values (8, datetime('now'))")

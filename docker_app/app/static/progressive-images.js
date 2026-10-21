@@ -135,6 +135,8 @@
         old = snapshot;
         if (old) image.before(old);
         image.style.opacity = "0";
+        // Visibility and concurrency are managed above; native lazy loading can defer decode.
+        image.loading = "eager";
         image.src = url;
         try { if (image.decode) await image.decode(); }
         catch (_) {

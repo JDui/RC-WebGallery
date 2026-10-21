@@ -29,6 +29,8 @@ from app.services.bilibili import BilibiliAuthService
 from app.services.cleanup import CleanupService
 from app.services.duplicates import DuplicateService
 from app.services.gallery import GalleryService
+from app.services.creators import attach_creators
+from app.services.random_browse import RandomBrowseError, RandomFeedExpired
 from app.services.legacy_import import LegacyImporter
 from app.services.livephoto import LivePhotoError
 from app.services.media_indexer import MediaIndexer
@@ -311,21 +313,26 @@ def get_gallery_items(
     sort_order: str = "desc",
     page: int = 1,
     page_size: int = 24,
+    random_seed: str | None = None,
 ) -> dict[str, Any]:
-    return gallery.get_gallery_items(
-        category=category,
-        year=year,
-        month=month,
-        start_month=start_month,
-        end_month=end_month,
-        subscription_uids=[item for item in (subscription_uids or "").split(",") if item],
-        source_kind=source_kind,
-        search_query=search_query,
-        page=page,
-        page_size=page_size,
-        view_mode=view_mode,
-        sort_order=sort_order,
-    )
+    try:
+        return gallery.get_gallery_items(
+            category=category,
+            year=year,
+            month=month,
+            start_month=start_month,
+            end_month=end_month,
+            subscription_uids=[item for item in (subscription_uids or "").split(",") if item],
+            source_kind=source_kind,
+            search_query=search_query,
+            page=page,
+            page_size=page_size,
+            view_mode=view_mode,
+            sort_order=sort_order,
+            random_seed=random_seed,
+        )
+    except RandomBrowseError as exc:
+        return JSONResponse({"detail": str(exc), "random_feed_expired": isinstance(exc, RandomFeedExpired)}, status_code=409)
 
 
 @app.get("/api/gallery/meta")
@@ -348,7 +355,9 @@ def get_folder_detail(folder_name: str) -> dict[str, Any]:
 
 @app.get("/api/duplicates/items")
 def duplicate_items(force: bool = False) -> dict[str, Any]:
-    return duplicates.list_groups(force=force)
+    payload = duplicates.list_groups(force=force)
+    attach_creators(db, [item for group in payload.get("items", []) for item in group.get("items", [])])
+    return payload
 
 
 @app.post("/api/duplicates/{signature}/ignore")

@@ -100,10 +100,11 @@ class XhsNote:
     published_at: str | None
     observed_at: str
     assets: tuple[XhsAsset, ...]
+    author_name: str = ""
 
     @classmethod
     def parse(cls, value: Any) -> XhsNote:
-        value = fields(value, {"note_id", "url", "title", "author_id", "type", "published_at", "observed_at", "assets"},
+        value = fields(value, {"note_id", "url", "title", "author_id", "author_name", "type", "published_at", "observed_at", "assets"},
                        {"note_id", "url", "observed_at"})
         note_id = identifier(value["note_id"])
         kind = value.get("type", "image")
@@ -119,7 +120,7 @@ class XhsNote:
         return cls(note_id, note_url(value["url"], note_id), text(value.get("title", ""), 1000, empty=True),
                    identifier(value["author_id"]) if value.get("author_id") else "", kind,
                    timestamp(value["published_at"]) if value.get("published_at") is not None else None,
-                   timestamp(value["observed_at"]), assets)
+                   timestamp(value["observed_at"]), assets, text(value.get("author_name", ""), 256, empty=True))
 
 
 @dataclass(frozen=True)

@@ -65,3 +65,35 @@ test('jumping to the top restores the first virtual window without preserving an
   for(const method of ['measureGalleryWindow','observeGalleryCards','observeGalleryLoadSentinel'])state[method]=()=>{};
   state.shiftGalleryWindowIfNeeded();assert.equal(state.galleryRenderStart,0);assert.equal(state.galleryRenderEnd,108);assert.equal(moves.length,0);
 });
+
+test('random sorting uses continuous auto or manual pagination and finishes normally', () => {
+  const state=app();state.timeSortMode='random';state.sortOrder='random';
+  state.gallery={items:[{folder_name:'a'}],page:1,page_size:24,total_pages:3};
+  state.settings.auto_load_enabled=true;assert.equal(state.hasMoreItems(),true);assert.equal(state.autoLoadEnabled(),true);
+  state.settings.auto_load_enabled=false;assert.equal(state.showManualLoadMore(),true);
+  state.gallery.page=3;assert.equal(state.galleryLoadFinished(),true);
+  state.galleryRandomExpired=true;assert.equal(state.galleryLoadFinished(),false);assert.equal(state.hasMoreItems(),false);
+});
+
+test('compact gallery adapts between two and four columns using available content width', () => {
+  const state=app({window:{innerWidth:1280}});state.compactViewport=true;state.galleryColumnCount=1;
+  for(const [width,columns] of [[300,2],[390,2],[560,3],[680,3],[760,4],[1024,4],[1400,4]]) {
+    state.galleryStageWidth=width;assert.equal(state.resolveGalleryColumns(),columns);
+  }
+  state.compactViewport=false;state.narrowViewport=false;state.$refs={galleryStage:{clientWidth:1400}};
+  state.galleryColumnCount=5;assert.equal(state.resolveGalleryColumns(),5);
+});
+
+test('random pagination keeps a seed and page size across viewport changes', async () => {
+  const state=app();state.timeSortMode='random';state.sortOrder='random';state.gallery.page_size=24;
+  state.$nextTick=()=>{};
+  for(const method of ['cancelGalleryBatchWork','lockGalleryMinHeight','releaseGalleryMinHeight','writeLocalGalleryCache']) state[method]=()=>{};
+  state.applyGalleryPagePayload=(payload,page)=>{state.gallery={...payload,page};};
+  const requests=[];state.api=async url=>{const params=new URLSearchParams(url.split('?')[1]);requests.push(params);return {items:[{folder_name:`page-${params.get('page')}`}],page_size:Number(params.get('page_size')),total_pages:4}};
+  state.preferredGalleryPageSize=()=>24;
+  await state.refreshGallery(true);
+  const seed=state.galleryRandomSeed;state.preferredGalleryPageSize=()=>36;
+  await state.refreshGallery(false,2,'next');
+  assert.equal(requests[1].get('random_seed'),seed);assert.equal(requests[1].get('page_size'),'24');
+  await state.refreshGallery(true);assert.notEqual(state.galleryRandomSeed,seed);
+});
