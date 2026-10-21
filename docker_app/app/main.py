@@ -42,6 +42,7 @@ from app.services.xhs.embedded import EmbeddedWorker
 from app.services.xhs.browser import BrowserGateway, create_browser_router
 from app.services.xhs.sync import XhsConflict
 from app.services.storage import StorageService
+from app.services.data_upgrade import DataUpgrade, DataUpgradeMiddleware, storage_instance_lock
 from app.services.thumbnailer import ThumbnailService
 from app.services.task_priority import TaskPriorityCoordinator, TaskPriorityMiddleware
 from app.services.utils import format_pub_time, loads_json
@@ -60,6 +61,7 @@ config = load_config()
 task_priority = TaskPriorityCoordinator()
 storage = StorageService(config, priority=task_priority)
 db = Database(config.database_path)
+storage.db = db
 thumbnailer = ThumbnailService()
 indexer = MediaIndexer(db, storage, thumbnailer, priority=task_priority)
 cleanup = CleanupService(db, storage, priority=task_priority)
@@ -71,6 +73,7 @@ pull_manager = PullManager(db, storage, indexer, cleanup, auth, legacy_importer,
 site_syncer = SiteSyncManager(db, storage, indexer)
 pull_manager.attach_site_syncer(site_syncer)
 pull_manager.attach_duplicate_service(duplicates)
+data_upgrade = DataUpgrade(db, storage, indexer, pull_manager)
 site_syncer.bind_task_queue(pull_manager)
 scheduler = SchedulerService(db, pull_manager, site_syncer)
 xhs_manager = XhsManager(db, storage, indexer)
@@ -91,6 +94,14 @@ _icon_reset_lock = threading.Lock()
 _subscription_icon_reset_lock = threading.Lock()
 _site_icon_reset_lock = threading.Lock()
 _xhs_icon_reset_lock = threading.Lock()
+def _suspend_for_data_upgrade():
+    xhs_browser.revoke()
+    scheduler.suspend_for_maintenance()
+
+
+data_upgrade.before_run = _suspend_for_data_upgrade
+data_upgrade.after_run = scheduler.start
+data_upgrade.external_busy = lambda: any(lock.locked() for lock in (_icon_reset_lock, _subscription_icon_reset_lock, _site_icon_reset_lock, _xhs_icon_reset_lock))
 
 
 class CacheControlStaticFiles(StaticFiles):
@@ -115,23 +126,29 @@ class CacheControlStaticFiles(StaticFiles):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     storage.ensure()
-    ensure_config(config.config_dir)
-    db.init()
-    try:
-        if embedded_xhs.enabled:
-            xhs_manager.worker = await run_in_threadpool(embedded_xhs.start)
-        xhs_manager.recover()
-        thumbnailer.apply_settings(db.get_settings())
-        scheduler.start()
-        pull_manager.start_startup_sync()
-        yield
-    finally:
+    with storage_instance_lock(config.config_dir):
+        ensure_config(config.config_dir)
         try:
-            scheduler.shutdown()
-        finally:
-            xhs_browser.revoke()
+            db.init()
+            db.keep_hot()
+            with db.connect() as conn:
+                data_upgrade.version = conn.execute('select version from data_layout where id=1').fetchone()[0]
             if embedded_xhs.enabled:
-                await run_in_threadpool(embedded_xhs.stop)
+                xhs_manager.worker = await run_in_threadpool(embedded_xhs.start)
+            xhs_manager.recover()
+            thumbnailer.apply_settings(db.get_settings())
+            if not data_upgrade.blocked:
+                scheduler.start()
+                pull_manager.start_startup_sync()
+            yield
+        finally:
+            try:
+                scheduler.shutdown()
+            finally:
+                xhs_browser.revoke()
+                if embedded_xhs.enabled:
+                    await run_in_threadpool(embedded_xhs.stop)
+                db.close()
 
 
 app = FastAPI(title=APP_TITLE, lifespan=lifespan)
@@ -140,6 +157,9 @@ app.include_router(create_xhs_router(lambda: XhsSyncService(db), lambda: schedul
 app.include_router(create_browser_router(xhs_browser, lambda: xhs_manager.worker))
 app.add_middleware(TaskPriorityMiddleware, coordinator=task_priority)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+
+app.add_middleware(DataUpgradeMiddleware, upgrade=data_upgrade, templates=templates, app_title=APP_NAME)
 app.mount(
     "/static",
     CacheControlStaticFiles(
@@ -240,14 +260,15 @@ def intranet_health_options() -> Response:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
+    status = pull_manager.status()
     return {
         "ok": True,
         "app": app.title,
-        "status": pull_manager.status(),
+        "status": status,
         "site_status": site_syncer.status(),
         "site_stats": db.site_stats(),
         "sidebar_counts": db.get_sidebar_count_cache(),
-        "gallery_index": db.gallery_index_status(),
+        "gallery_index": status['gallery_index'],
         "task_priority": task_priority.snapshot(),
     }
 
@@ -921,7 +942,14 @@ def _looks_like_avatar_refresh_risk(message: str | None) -> bool:
 
 @app.get("/api/subscriptions")
 def get_subscriptions() -> dict[str, Any]:
-    return {"items": _subscription_stats(), "latest_pull_at": _latest_subscription_pull_at()}
+    signature = db.gallery_page_cache_signature()
+    cached = db.get_gallery_page_cache('subscription-stats-v1', signature)
+    if cached:
+        items = loads_json(cached['payload_json'], {}).get('items', [])
+    else:
+        items = _subscription_stats()
+        db.set_gallery_page_cache('subscription-stats-v1', signature, {'items': items})
+    return {"items": items, "latest_pull_at": _latest_subscription_pull_at()}
 
 
 @app.post("/api/subscriptions")
@@ -1260,7 +1288,11 @@ def get_settings() -> dict[str, Any]:
     except ValueError as exc:
         settings.update(INTRANET_DEFAULTS)
         settings["intranet_config_error"] = str(exc)
-    settings["auth"] = auth.check_cookie()
+    state = db.get_auth_state()
+    user = loads_json(state.get('user_json'), {})
+    settings['auth'] = {'ok': None if state.get('cookie') else False,
+                        'message': '已保存登录信息，点击检查 Cookie 可验证' if state.get('cookie') else '未登录',
+                        'user': user or None, 'cached': True}
     return settings
 
 
@@ -1311,6 +1343,32 @@ def reset_ui_theme() -> dict[str, Any]:
     db.save_settings({"ui_theme": dict(UI_THEME_DEFAULTS)})
     return {"ok": True, "theme": dict(UI_THEME_DEFAULTS),
             "revision": ui_theme_revision(dict(UI_THEME_DEFAULTS))}
+
+
+@app.get('/api/settings/data-upgrade')
+def data_upgrade_status():
+    return data_upgrade.status()
+
+
+@app.post('/api/settings/data-upgrade/start')
+def start_data_upgrade(payload: dict[str, Any] = Body(default={})):
+    # Profile/icon resets are independent background writers, outside task queue.
+    if any(lock.locked() for lock in (_icon_reset_lock, _subscription_icon_reset_lock, _site_icon_reset_lock, _xhs_icon_reset_lock)):
+        raise HTTPException(status_code=409, detail='请等待图标任务完成')
+    try:
+        action = payload.get('action', data_upgrade.state.get('action', 'upgrade') if data_upgrade.blocked else 'upgrade')
+        if action not in ('check', 'upgrade', 'repair'):
+            raise HTTPException(status_code=400, detail='无效的数据维护操作')
+        if data_upgrade.blocked and action != data_upgrade.state.get('action', 'upgrade'):
+            raise HTTPException(status_code=409, detail='请先继续上一次数据维护')
+        return data_upgrade.start(action)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get('/api/settings/data-upgrade/report')
+def data_upgrade_report():
+    return JSONResponse(data_upgrade.media_repair.load(), headers={'Cache-Control': 'no-store'})
 
 
 @app.get("/api/settings/storage-stats")

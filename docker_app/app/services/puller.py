@@ -591,7 +591,7 @@ class PullManager:
 
     def storage_stats(self, refresh: bool = False) -> dict[str, Any]:
         cached = self.db.get_storage_stats_cache()
-        if refresh or not cached.get("updated_at"):
+        if refresh:
             return self._refresh_storage_stats_cache()
         return cached
 
@@ -2430,6 +2430,7 @@ class PullManager:
         existing = self.db.get_folder_by_dynamic(candidate.top_dynamic_id, candidate.source_dynamic_id)
         used_names = {folder["folder_name"] for folder in self.db.list_folders()}
         folder_name = existing["folder_name"] if existing else build_folder_name(candidate.pub_ts, candidate.text, used_names)
+        self.storage.prepare_folder(folder_name, f"bilibili-{candidate.subscription_uid or settings['host_mid']}", format_pub_time(candidate.pub_ts))
         saved_files = 0
         header_uid = str(candidate.subscription_uid or settings["host_mid"])
         options = self._subscription_options(settings, header_uid, subscription)
@@ -2681,6 +2682,8 @@ class PullManager:
 
     def _queue_or_start(self, mode: str, label: str, target, *args) -> bool:
         with self._queue_lock:
+            if getattr(self, 'data_upgrade', None) and self.data_upgrade.blocked:
+                raise RuntimeError('数据升级期间暂停后台任务')
             if self._lock.locked():
                 queue_id = self._next_queue_id
                 self._next_queue_id += 1
@@ -2695,6 +2698,8 @@ class PullManager:
 
     def _run_next_queued_task(self) -> None:
         with self._queue_lock:
+            if getattr(self, 'data_upgrade', None) and self.data_upgrade.blocked:
+                return
             if self._lock.locked() or not self._queue:
                 return
             next_task = self._queue.popleft()
@@ -2911,11 +2916,7 @@ class PullManager:
 
     def _needs_library_reindex(self) -> bool:
         db_folders = {folder["folder_name"] for folder in self.db.list_folders()}
-        disk_folders = set()
-        for root in (self.storage.config.images_dir, self.storage.config.livephoto_dir):
-            if not root.exists():
-                continue
-            disk_folders.update(path.name for path in root.iterdir() if path.is_dir())
+        disk_folders = self.storage.media_folder_names()
         if not disk_folders:
             return False
         if not db_folders:

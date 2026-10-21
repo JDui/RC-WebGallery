@@ -65,3 +65,10 @@ class SchedulerService:
     def shutdown(self) -> None:
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
+
+    def suspend_for_maintenance(self) -> None:
+        if self.scheduler.running:
+            self.scheduler.shutdown(wait=True)
+        # A stopped APScheduler executor cannot be restarted safely.
+        self.scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+        self.xhs.scheduler = self.scheduler

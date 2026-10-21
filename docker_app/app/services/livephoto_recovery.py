@@ -18,14 +18,24 @@ class LivePhotoRecovery:
     def _root(self, folder_name, kind):
         root = self.storage.image_folder(folder_name) if kind == 'image' else self.storage.livephoto_folder(folder_name)
         base = self.storage.config.images_dir if kind == 'image' else self.storage.config.livephoto_dir
-        if root.resolve().parent != base.resolve() or root.is_symlink():
+        if root.resolve() == base.resolve() or not root.resolve().is_relative_to(base.resolve()):
             raise LivePhotoError('媒体目录无效')
+        # A mapped post may be below source/date; retain the original prohibition
+        # on following directory links when choosing files for a repair.
+        cursor = root
+        while cursor != base:
+            if cursor.is_symlink() or cursor.is_junction():
+                raise LivePhotoError('媒体目录无效')
+            if cursor == cursor.parent:
+                raise LivePhotoError('媒体目录无效')
+            cursor = cursor.parent
         return root
 
     def _path(self, folder_name, relative, kind):
         path = self.storage.resolve_storage_path(relative)
         root = self._root(folder_name, kind)
-        if (not path or path.is_symlink() or path.resolve().parent != root.resolve()
+        raw = self.storage.config.storage_root / relative if relative else None
+        if (not path or raw.is_symlink() or path.resolve().parent != root.resolve()
                 or not path.is_file() or path.suffix.lower() not in (IMAGES if kind == 'image' else VIDEOS)):
             raise LivePhotoError('所选文件不存在或不属于此贴文，请重新检查')
         return path

@@ -9,7 +9,7 @@ from pathlib import Path
 from app.db import Database
 from app.services.media_indexer import MediaIndexer
 from app.services.storage import StorageService
-from app.services.utils import build_folder_name, extract_chinese_prefix, parse_legacy_title
+from app.services.utils import build_folder_name, extract_chinese_prefix, parse_legacy_title, format_pub_time
 
 
 STATE_BEGIN = "<!-- DOWNLOAD_STATE_BEGIN -->"
@@ -54,6 +54,7 @@ class LegacyImporter:
             assert reference is not None
             title_hint = reference.title_hint or reference.folder_name
             folder_name = build_folder_name(reference.pub_ts, title_hint, used_names)
+            self.storage.prepare_folder(folder_name, f"bilibili-{self.db.get_settings()['host_mid']}", format_pub_time(reference.pub_ts))
 
             if image_record:
                 moved += self._move_folder(

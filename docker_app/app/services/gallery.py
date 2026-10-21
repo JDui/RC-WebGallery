@@ -5,6 +5,7 @@ from math import ceil
 
 from app.db import Database
 from app.services.storage import StorageService
+from app.services.thumb_chain import INDEX_THUMB_LEVELS, SMALL_LEVELS, pick_thumb_url
 from app.services.utils import dumps_json, loads_json
 
 
@@ -166,7 +167,13 @@ class GalleryService:
     def get_gallery_meta(self) -> dict:
         if not self.db.gallery_index_ready():
             return self._fallback_gallery_meta()
-        return self.db.gallery_meta_from_index()
+        signature = self.db.gallery_page_cache_signature()
+        cached = self.db.get_gallery_page_cache('gallery-meta-v1', signature)
+        if cached:
+            return loads_json(cached['payload_json'], {})
+        result = self.db.gallery_meta_from_index()
+        self.db.set_gallery_page_cache('gallery-meta-v1', signature, result)
+        return result
 
     def get_recent_updates(self, limit: int = 50) -> dict:
         normalized_limit = max(1, min(50, int(limit or 50)))
@@ -277,15 +284,7 @@ class GalleryService:
                     "pair_index": pair_index,
                     "image": image,
                     "livephoto": livephoto,
-                    "preview_url": (
-                        (image or {}).get("small_thumb_url")
-                        or (image or {}).get("thumb_url")
-                        or (image or {}).get("url")
-                        or (livephoto or {}).get("small_thumb_url")
-                        or (livephoto or {}).get("thumb_url")
-                        or (livephoto or {}).get("cover_url")
-                        or (livephoto or {}).get("url")
-                    ),
+                    "preview_url": pick_thumb_url([image, livephoto]),
                     "preview_kind": "paired" if image and livephoto else ("livephoto" if livephoto and not image else "image"),
                     "complete": bool(image and livephoto),
                     "display_ratio": self._display_ratio(preview_asset),
@@ -383,10 +382,7 @@ class GalleryService:
             "preview_url": item.get("preview_url"),
             "preview_kind": item.get("preview_kind"),
             "thumb_url": item.get("thumb_url"),
-            "small_thumb_url": (
-                (image or {}).get("small_thumb_url")
-                or (livephoto or {}).get("small_thumb_url")
-            ),
+            "small_thumb_url": pick_thumb_url([image, livephoto], levels=SMALL_LEVELS),
             "image": image,
             "livephoto": livephoto,
             "display_ratio": item.get("display_ratio"),
@@ -572,7 +568,7 @@ class GalleryService:
                         "has_livephoto": bool(pair.get("livephoto")),
                         "preview_url": pair.get("preview_url"),
                         "preview_kind": pair.get("preview_kind"),
-                        "thumb_url": preview.get("thumb_url") or preview.get("cover_url") or preview.get("url"),
+                        "thumb_url": pick_thumb_url([preview], levels=INDEX_THUMB_LEVELS, original_last=True),
                         "small_thumb_url": preview.get("small_thumb_url"),
                         "image": pair.get("image"),
                         "livephoto": pair.get("livephoto"),

@@ -1,3 +1,24 @@
+// 缩略图展示链的前端镜像（唯一出处 app/services/thumb_chain.py）：级别外层、来源内层（image → livephoto）。
+// THUMB_LEVELS / THUMB_PROMOTED_LEVELS 的名称与顺序必须与后端 CARD_LEVELS / PROMOTED_LEVELS 同步，
+// tests/test_thumb_chain.py 会逐字对拍；原图只能经 originalLast 显式放行（viewer 底图）。
+const THUMB_LEVELS = ["small_thumb_url", "thumb_url", "cover_url"];
+const THUMB_PROMOTED_LEVELS = ["thumb_url", "small_thumb_url", "cover_url"];
+function pickThumbUrl(sources, levels = THUMB_LEVELS, originalLast = false) {
+  const list = sources.filter(Boolean);
+  for (const level of levels) {
+    for (const source of list) {
+      const value = source[level];
+      if (value) return String(value);
+    }
+  }
+  if (originalLast) {
+    for (const source of list) {
+      if (source.url) return String(source.url);
+    }
+  }
+  return "";
+}
+
 // 界面配色的前端镜像：算法与 app/theme.py 保持一致，只负责设置页的实时预览，
 // 真正生效的色板仍由服务端 /theme/*.css 派生。预览有偏差也不会影响最终样式。
 const UI_THEME_DEFAULTS = { hue: 337, saturation: 0.5, value: 1 };
@@ -413,6 +434,10 @@ function galleryApp() {
     performanceSamples: [],
     performanceSampleTimer: null,
     galleryIndexStatus: {},
+    dataUpgrade: {},
+    dataUpgradeSubmitting: false,
+    dataCheckReport: null,
+    dataCheckReportPage: 1,
     storageStats: {},
     storageStatsLoading: false,
     storageCleanupRunning: false,
@@ -586,12 +611,9 @@ function galleryApp() {
       window.addEventListener("pointerup", () => this.finishTimeFilterDrag());
       window.addEventListener("pointercancel", () => this.finishTimeFilterDrag());
       this.updateHeaderState();
-      this.loadBootstrap()
-        .then(() => {
-          this.refreshGallery(true);
-          this.scheduleIdleWork(() => this.refreshDuplicates().catch(() => {}), 1400);
-        })
-        .catch(() => {});
+      // First paint must not wait for account checks, metadata or subscriptions.
+      this.refreshGallery(true).catch(() => {});
+      this.loadBootstrap().catch(() => {});
       this.scheduleStatusRefresh();
       this.startPerformanceSampling();
       window.setInterval(() => {
@@ -1044,6 +1066,7 @@ function galleryApp() {
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
+        if (payload.maintenance) window.location.reload();
         const error = new Error(payload.detail || payload.message || "请求失败");
         this.notify("error", "请求失败", error.message);
         throw error;
@@ -1230,7 +1253,9 @@ function galleryApp() {
     },
 
     showGallerySourceKindSwitch() {
-      return this.currentView === "gallery" && !this.searchActive() && this.selectedSubscriptionUids.length === 0;
+      // 搜索时同样展示来源页签：搜索请求会带上当前 sourceKind（动态/站点/小红书），
+      // 页签一旦隐藏就无法切换，用户会遇到“结果被悄悄过滤掉”却无从排查的情况。
+      return this.currentView === "gallery" && this.selectedSubscriptionUids.length === 0;
     },
 
     compactStats() {
@@ -1264,8 +1289,23 @@ function galleryApp() {
       if (this.galleryLoading || this.searchResultSignature !== this.searchSignature()) return "正在搜索…";
       const count = this.searchResultCount ?? 0;
       const unit = this.galleryViewMode === "pair" ? "组图片" : "条动态";
-      if (!count && this.timeFilterActive()) {
-        return `找到 0 ${unit} · 已限定「${this.timeFilterSummary()}」，试试清空时间范围`;
+      const limits = [];
+      const sourceLimited = this.sourceKind !== "all" && !this.selectedSubscriptionUids.length;
+      if (sourceLimited) {
+        const option = this.sourceKindOptions.find((item) => item.key === this.sourceKind);
+        limits.push(`来源限定「${option?.label || this.sourceKind}」`);
+      }
+      if (this.timeFilterActive()) {
+        limits.push(`时间限定「${this.timeFilterSummary()}」`);
+      }
+      if (!count && limits.length) {
+        const tips = [];
+        if (sourceLimited) tips.push("切换到「所有项目」");
+        if (this.timeFilterActive()) tips.push("清空时间范围");
+        return `找到 0 ${unit} · ${limits.join(" · ")}，试试${tips.join("或")}`;
+      }
+      if (limits.length) {
+        return `找到 ${count} ${unit} · ${limits.join(" · ")}`;
       }
       return `找到 ${count} ${unit}`;
     },
@@ -1442,14 +1482,18 @@ function galleryApp() {
     },
 
     async loadBootstrap() {
-      const [settings] = await Promise.all([
-        this.api("/api/settings"),
+      await Promise.allSettled([
+        this.api("/api/settings").then(settings => {
+          // The settings page may already have loaded and accepted edits while
+          // another bootstrap request is still pending.
+          if (this.lazyLoaded.settings || this.settingsDirty()) return;
+          this.settings = settings || {};
+          this.settingsError = settings?.intranet_config_error || "";
+        }),
         this.refreshStatus(),
         this.refreshMeta(),
         this.loadSubscriptions(),
       ]);
-      this.settings = settings || {};
-      this.settingsError = settings?.intranet_config_error || "";
     },
 
     scheduleStatusRefresh() {
@@ -1858,13 +1902,11 @@ function galleryApp() {
     },
 
     galleryTileUrl(tile) {
-      return tile?.small_thumb_url || tile?.thumb_url || tile?.cover_url || "";
+      return pickThumbUrl([tile]);
     },
 
     galleryPairImageUrl(item) {
-      return item?.small_thumb_url || item?.image?.small_thumb_url || item?.livephoto?.small_thumb_url
-        || item?.thumb_url || item?.image?.thumb_url || item?.livephoto?.thumb_url
-        || item?.livephoto?.cover_url || "";
+      return pickThumbUrl([item, item?.image, item?.livephoto]);
     },
 
     gallerySmallUrlsForItem(item) {
@@ -3568,12 +3610,10 @@ function galleryApp() {
       if (pair?.placeholder) {
         return "";
       }
-      const image = pair?.image || {};
-      const livephoto = pair?.livephoto || {};
-      if (pair?.promote_preview) {
-        return image.thumb_url || livephoto.thumb_url || image.small_thumb_url || livephoto.small_thumb_url || "";
-      }
-      return image.small_thumb_url || livephoto.small_thumb_url || image.thumb_url || livephoto.thumb_url || livephoto.cover_url || "";
+      return pickThumbUrl(
+        [pair?.image, pair?.livephoto],
+        pair?.promote_preview ? THUMB_PROMOTED_LEVELS : THUMB_LEVELS,
+      );
     },
 
     preloadDetailPairImages(pairs) {
@@ -4874,16 +4914,17 @@ function galleryApp() {
     },
 
     viewerPreviewUrl() {
+      // viewer 底图：thumb 优先档 + 持久化 preview_url、原图两级显式兜底（原图仅 image，视频不当底图）。
       return (
-        this.viewer.pair?.image?.thumb_url ||
-        this.viewer.pair?.image?.small_thumb_url ||
+        pickThumbUrl([this.viewer.pair?.image, this.viewer.pair?.livephoto], THUMB_PROMOTED_LEVELS) ||
         this.viewer.pair?.preview_url ||
-        this.viewer.pair?.livephoto?.thumb_url ||
-        this.viewer.pair?.livephoto?.small_thumb_url ||
-        this.viewer.pair?.livephoto?.cover_url ||
         this.viewer.pair?.image?.url ||
         ""
       );
+    },
+
+    livephotoViewerPoster() {
+      return pickThumbUrl([this.viewer.pair?.livephoto], ["thumb_url", "cover_url"]);
     },
 
     viewerStageClick(event) {
@@ -5973,6 +6014,7 @@ function galleryApp() {
         review: "待审核",
         validate: "校验",
         index: "索引",
+        "data-upgrade": "数据维护",
         "thumbnail-rebuild": "缩略图",
         thumbnails: "缩略图",
         "site-sync": "站点同步",
@@ -6867,22 +6909,47 @@ function galleryApp() {
 
     async loadSettings() {
       if (this.settingsDirty()) return;
-      const [settings, health, storageStats, themeSpec] = await Promise.all([
-        this.api("/api/settings"),
-        this.api("/api/health"),
-        this.api("/api/settings/storage-stats"),
-        this.api("/api/settings/theme").catch(() => null),
-      ]);
+      const settings = await this.api("/api/settings");
       this.settings = settings;
-      this.applyThemeSpec(themeSpec);
-      this.syncThemeState(settings);
       this.settingsError = settings.intranet_config_error || "";
       document.title = settings.app_title || document.title;
-      this.galleryIndexStatus = health.gallery_index || {};
-      this.storageStats = storageStats.stats || {};
-      this.keywordText = (this.settings.ad_filter_keywords || []).join("\n");
+      this.keywordText = (settings.ad_filter_keywords || []).join("\n");
+      this.syncThemeState(settings);
       this.settingsBaseline = this.settingsFingerprint();
       this.lazyLoaded.settings = true;
+      // Secondary maintenance statistics never hold the settings form hostage.
+      await Promise.allSettled([
+        this.api("/api/health").then(health => { this.galleryIndexStatus = health.gallery_index || {}; }),
+        this.api("/api/settings/storage-stats").then(result => { this.storageStats = result.stats || {}; }),
+        this.api("/api/settings/theme").then(spec => this.applyThemeSpec(spec)),
+        this.checkDataUpgrade(),
+      ]);
+    },
+
+    async checkDataUpgrade() {
+      this.dataUpgrade = await this.api('/api/settings/data-upgrade');
+    },
+
+    async startDataUpgrade(action = 'upgrade') {
+      if (this.dataUpgradeSubmitting) return;
+      this.dataUpgradeSubmitting = true;
+      try {
+        await this.api('/api/settings/data-upgrade/start', { method: 'POST', body: JSON.stringify({ action }) });
+        window.location.reload();
+      } catch (error) {
+        this.notify('error', '无法开始升级', error.message);
+      } finally { this.dataUpgradeSubmitting = false; }
+    },
+
+    async loadDataCheckReport() {
+      try {
+        this.dataCheckReport = await this.api('/api/settings/data-upgrade/report');
+        this.dataCheckReportPage = 1;
+      } catch (error) { this.notify('error', '读取检查明细失败', error.message); }
+    },
+
+    dataCheckReportRows() {
+      return (this.dataCheckReport?.items || []).slice((this.dataCheckReportPage - 1) * 50, this.dataCheckReportPage * 50);
     },
 
     formatBytes(value) {
@@ -7111,6 +7178,8 @@ function galleryApp() {
         id: task.id,
         label: this.taskModeLabel(task.task_type) || "实况配对检查",
         finishedAt: task.finished_at || "",
+        subset: details.scan_scope === "subset" || Array.isArray(details.scope_folders)
+          || (details.scan_scope !== "all" && !("scope_folders" in details) && !!details.source_task_id),
         checked: Number(details.checked) || 0,
         paired: Number(details.paired) || 0,
         repairable: Number(details.repairable) || (details.repairable_targets || []).length || 0,
@@ -7135,7 +7204,7 @@ function galleryApp() {
       const parts = [`检查 ${result.checked} 组`, `已配对 ${result.paired} 组`];
       if (result.repairable) parts.push(`待修复配对 ${result.repairable} 组`);
       if (result.exceptions) parts.push(`异常 ${result.exceptions} 组`);
-      return `${result.label}：${parts.join(" · ")}${time ? `（${time}）` : ""}`;
+      return `${result.label}（${result.subset ? "局部复查" : "全库检查"}）：${parts.join(" · ")}${time ? `（${time}）` : ""}`;
     },
 
     async submitLivephotoCheck() {

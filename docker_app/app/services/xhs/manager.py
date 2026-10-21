@@ -584,6 +584,7 @@ class XhsManager:
 
     def _archive(self, source, post):
         folder_name = f"xhs_{source['source_id']}_{post['note_id']}"
+        self.storage.prepare_folder(folder_name, f"xhs-{source['source_id']}", post.get('pub_date'))
         image_folder, video_folder = self.storage.image_folder(folder_name), self.storage.livephoto_folder(folder_name)
         image_folder.mkdir(parents=True, exist_ok=True)
         video_folder.mkdir(parents=True, exist_ok=True)

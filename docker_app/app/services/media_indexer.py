@@ -12,6 +12,7 @@ from app.db import Database
 from app.services.image_similarity import image_fingerprint
 from app.services.sidecar import SidecarRunner
 from app.services.storage import StorageService
+from app.services.thumb_chain import INDEX_PREVIEW_LEVELS, INDEX_THUMB_LEVELS, pick_thumb_url
 from app.services.livephoto import LivePhotoService
 from app.services.thumbnailer import ThumbnailService
 from app.services.task_priority import TaskPriorityCoordinator
@@ -100,8 +101,7 @@ class MediaIndexer:
         progress: ProgressCallback | None = None,
         cooperate: CooperateCallback | None = None,
     ) -> None:
-        folders = {path.name for path in self.storage.config.images_dir.iterdir() if path.is_dir()}
-        folders.update(path.name for path in self.storage.config.livephoto_dir.iterdir() if path.is_dir())
+        folders = self.storage.media_folder_names()
         existing = {
             folder["folder_name"]: folder
             for folder in self.db.list_folders()
@@ -365,19 +365,11 @@ class MediaIndexer:
                     "is_favorite": folder_index["is_favorite"],
                     "has_image": bool(image),
                     "has_livephoto": bool(livephoto),
-                    "preview_url": (
-                        (image_json or {}).get("thumb_url")
-                        or (image_json or {}).get("url")
-                        or (livephoto_json or {}).get("thumb_url")
-                        or (livephoto_json or {}).get("cover_url")
-                        or (livephoto_json or {}).get("url")
+                    "preview_url": pick_thumb_url(
+                        [image_json, livephoto_json], levels=INDEX_PREVIEW_LEVELS, original_last=True
                     ),
                     "preview_kind": "paired" if image and livephoto else ("livephoto" if livephoto and not image else "image"),
-                    "thumb_url": (
-                        (preview_json or {}).get("thumb_url")
-                        or (preview_json or {}).get("cover_url")
-                        or (preview_json or {}).get("url")
-                    ),
+                    "thumb_url": pick_thumb_url([preview_json], levels=INDEX_THUMB_LEVELS, original_last=True),
                     "display_ratio": self._display_ratio(preview),
                     "image_json": dumps_json(image_json),
                     "livephoto_json": dumps_json(livephoto_json),

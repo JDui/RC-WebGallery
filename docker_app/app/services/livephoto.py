@@ -265,10 +265,11 @@ class LivePhotoService:
         stats.update(checked=0, paired=0, repaired=0, needs_repair=0, repairable=0, unpaired=0, errors=0,
                      issues=[], repairable_targets=[], exception_targets=[], completed=False)
         names = {folder['folder_name'] for folder in self.db.list_folders()}
-        names.update(p.name for p in self.storage.config.livephoto_dir.iterdir()
-                     if p.is_dir() and not p.name.startswith('.'))
+        names.update(name for name in self.storage.media_folder_names() if not name.startswith('.'))
         if folders is not None:
             names.intersection_update(folders)
+        stats.update(scan_scope='all' if folders is None and targets is None else 'subset',
+                     scanned_folders=len(names))
         groups = []
         for name in sorted(names):
             if cooperate:

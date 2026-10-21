@@ -3,13 +3,15 @@ from __future__ import annotations
 import os
 import sqlite3
 import random
-from contextlib import contextmanager
+import threading
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
 from app.services.utils import dumps_json, loads_json, now_iso, safe_slug
 from app.services.xhs.schema import migrate as migrate_xhs
 from app.theme import DEFAULT_THEME as DEFAULT_UI_THEME
+from app.services.database_layout import module_ddl, install_hot_indexes
 
 
 DEFAULT_SETTINGS = {
@@ -97,17 +99,58 @@ DEFAULT_SITE_RULES = {
 class Database:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
+        self.modules_enabled = False
+        self.exclusive_maintenance = False
+        self._anchors: list[sqlite3.Connection] = []
+        self._stats_lock = threading.RLock()
+        self._stats_cache: dict[str, tuple[tuple, dict]] = {}
+        if db_path.exists():
+            with closing(sqlite3.connect(db_path)) as conn:
+                if conn.execute("select 1 from sqlite_master where name='data_layout'").fetchone():
+                    layout = conn.execute('select version from data_layout where id=1').fetchone()
+                    self.modules_enabled = bool(layout and layout[0] >= 1)
+
+    def keep_hot(self) -> None:
+        """Keep WALs open between requests instead of checkpointing on every close.
+
+        These idle connections never own transactions; request connections remain
+        thread-local. Exclusive maintenance closes them before changing schemas.
+        """
+        self.close()
+        for name in ('app', 'control', 'browse') if self.modules_enabled else ('app',):
+            path = self.db_path if name == 'app' else self.db_path.with_name(f'{name}.db')
+            conn = sqlite3.connect(path, check_same_thread=False)
+            conn.execute('pragma journal_mode=wal')
+            conn.execute('pragma query_only=on')
+            self._anchors.append(conn)
+
+    def close(self) -> None:
+        with self._stats_lock:
+            self._stats_cache.clear()
+        for conn in self._anchors:
+            conn.close()
+        self._anchors.clear()
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("pragma foreign_keys = on")
-        conn.execute("pragma journal_mode = wal")
-        conn.execute("pragma synchronous = normal")
-        conn.execute("pragma temp_store = memory")
-        conn.execute("pragma cache_size = -12000")
+        conn = sqlite3.connect(self.db_path, timeout=30)
         try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("pragma foreign_keys = on")
+            mode = 'delete' if self.exclusive_maintenance else 'wal'
+            sync = 'full' if self.exclusive_maintenance else 'normal'
+            conn.execute(f'pragma journal_mode={mode}')
+            conn.execute(f'pragma synchronous={sync}')
+            conn.execute("pragma temp_store = memory")
+            conn.execute("pragma cache_size = -12000")
+            if self.modules_enabled:
+                for module in ('control', 'browse'):
+                    path = self.db_path.with_name(f'{module}.db')
+                    if not path.is_file():
+                        raise RuntimeError(f'缺少数据库模块：{path.name}，请恢复完整 config 备份')
+                    conn.execute(f'attach database ? as {module}', (str(path),))
+                    conn.execute(f'pragma {module}.journal_mode={mode}')
+                    conn.execute(f'pragma {module}.synchronous={sync}')
             yield conn
             conn.commit()
         finally:
@@ -115,7 +158,7 @@ class Database:
 
     def init(self) -> None:
         with self.connect() as conn:
-            conn.executescript(
+            conn.executescript(module_ddl(
                 """
                 create table if not exists settings (
                     key text primary key,
@@ -452,8 +495,8 @@ class Database:
                 create index if not exists idx_pair_index_folder_pair on pair_index(folder_name, pair_index asc);
                 create index if not exists idx_pair_index_updated on pair_index(updated_at desc);
                 create index if not exists idx_gallery_page_cache_updated on gallery_page_cache(updated_at desc);
-                """
-            )
+                """, self.modules_enabled
+            ))
             self._ensure_column(conn, "folders", "subscription_uid", "text")
             self._ensure_column(conn, "folders", "subscription_name", "text")
             self._ensure_column(conn, "folders", "is_favorite", "integer not null default 0")
@@ -485,6 +528,24 @@ class Database:
             migrate_xhs(conn)
             self._ensure_column(conn, 'livephoto_pairs', 'auto_pair', 'integer not null default 0')
             self._ensure_column(conn, 'livephoto_pairs', 'confirmed_pair', 'integer not null default 0')
+            install_hot_indexes(self, conn)
+
+    @contextmanager
+    def control_connect(self) -> Iterator[sqlite3.Connection]:
+        if not self.modules_enabled:
+            with self.connect() as conn:
+                yield conn
+            return
+        path = self.db_path.with_name('control.db')
+        if not path.is_file():
+            raise RuntimeError('缺少 control.db，请恢复完整 config 备份')
+        conn = sqlite3.connect(path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
 
     def _ensure_default_settings(self, conn: sqlite3.Connection) -> None:
         existing_rows = conn.execute("select key, value from settings").fetchall()
@@ -702,7 +763,7 @@ class Database:
         )
 
     def get_settings(self) -> dict[str, Any]:
-        with self.connect() as conn:
+        with self.control_connect() as conn:
             rows = conn.execute("select key, value from settings").fetchall()
         output = dict(DEFAULT_SETTINGS)
         for row in rows:
@@ -712,12 +773,12 @@ class Database:
     def save_settings(self, updates: dict[str, Any]) -> dict[str, Any]:
         current = self.get_settings()
         current.update(updates)
-        with self.connect() as conn:
-            for key, value in current.items():
+        with self.control_connect() as conn:
+            for key, value in updates.items():
                 conn.execute(
                     """
                     insert into settings(key, value) values (?, ?)
-                    on conflict(key) do update set value = excluded.value
+                    on conflict(key) do update set value = excluded.value where settings.value != excluded.value
                     """,
                     (key, dumps_json(value)),
                 )
@@ -1323,7 +1384,7 @@ class Database:
             return int(cursor.rowcount or 0)
 
     def site_stats(self) -> dict[str, Any]:
-        with self.connect() as conn:
+        def compute(conn):
             source_count = conn.execute("select count(*) from site_sources where source_type != 'xhs_likes'").fetchone()[0]
             post_count = conn.execute("""select count(*) from site_posts p join site_sources s on s.id = p.source_id
                 where p.is_blocked = 0 and s.source_type != 'xhs_likes'""").fetchone()[0]
@@ -1334,13 +1395,14 @@ class Database:
             asset_count = conn.execute("""select count(*) from site_assets a
                 join site_posts p on p.id = a.post_id join site_sources s on s.id = p.source_id
                 where a.status = 'ready' and s.source_type != 'xhs_likes'""").fetchone()[0]
-        return {
-            "source_count": source_count,
-            "post_count": post_count,
-            "favorite_count": favorite_count,
-            "blocked_count": blocked_count,
-            "asset_count": asset_count,
-        }
+            return {
+                "source_count": source_count,
+                "post_count": post_count,
+                "favorite_count": favorite_count,
+                "blocked_count": blocked_count,
+                "asset_count": asset_count,
+            }
+        return self._cached_content_stats('sites', compute)
 
     def _site_post_row(self, row: sqlite3.Row | None) -> dict[str, Any]:
         if row is None:
@@ -1354,7 +1416,7 @@ class Database:
         return item
 
     def get_auth_state(self) -> dict[str, Any]:
-        with self.connect() as conn:
+        with self.control_connect() as conn:
             row = conn.execute("select * from auth_state where id = 1").fetchone()
         if not row:
             return {"qr_status": "idle"}
@@ -1365,7 +1427,7 @@ class Database:
             return
         assignments = ", ".join(f"{key} = ?" for key in kwargs)
         values = list(kwargs.values())
-        with self.connect() as conn:
+        with self.control_connect() as conn:
             conn.execute(f"update auth_state set {assignments} where id = 1", values)
 
     def get_folder(self, folder_name: str) -> dict[str, Any] | None:
@@ -1380,12 +1442,12 @@ class Database:
             sql += " where status = ?"
             params = ("active",)
         sql += " order by updated_at desc, uid asc"
-        with self.connect() as conn:
+        with self.control_connect() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
 
     def get_subscription(self, uid: str) -> dict[str, Any] | None:
-        with self.connect() as conn:
+        with self.control_connect() as conn:
             row = conn.execute("select * from subscriptions where uid = ?", (str(uid),)).fetchone()
         return dict(row) if row else None
 
@@ -1990,7 +2052,7 @@ class Database:
             return int(cursor.rowcount or 0)
 
     def get_sidebar_count_cache(self) -> dict[str, Any]:
-        with self.connect() as conn:
+        with self.control_connect() as conn:
             rows = conn.execute("select * from sidebar_count_cache order by key asc").fetchall()
         counts = {str(row["key"]): int(row["count"] or 0) for row in rows}
         updated_at = {str(row["key"]): row["updated_at"] for row in rows}
@@ -2358,40 +2420,27 @@ class Database:
             conn.execute("delete from folder_index")
 
     def gallery_page_cache_signature(self) -> str:
-        settings = self.get_settings()
         with self.connect() as conn:
-            row = conn.execute(
-                """
-                select
-                    (select count(*) from folders) as folder_rows,
-                    (select coalesce(max(updated_at), '') from folders) as folders_updated,
-                    (select count(*) from assets) as asset_rows,
-                    (select coalesce(max(updated_at), '') from assets) as assets_updated,
-                    (select count(*) from folder_index) as folder_index_rows,
-                    (select coalesce(sum(is_favorite), 0) from folder_index) as folder_index_favorites,
-                    (select coalesce(max(updated_at), '') from folder_index) as folder_index_updated,
-                    (select count(*) from pair_index) as pair_index_rows,
-                    (select coalesce(max(updated_at), '') from pair_index) as pair_index_updated,
-                    (select coalesce(group_concat(id), '') from
-                        (select id from site_sources where source_type = 'xhs_likes' order by id)) as xhs_source_ids
-                """
-            ).fetchone()
-        return dumps_json(
-            {
-                "version": int(settings.get("gallery_index_version") or 0),
-                "rebuilt_at": settings.get("gallery_index_rebuilt_at"),
-                "folder_rows": int(row["folder_rows"] or 0),
-                "folders_updated": row["folders_updated"] or "",
-                "asset_rows": int(row["asset_rows"] or 0),
-                "assets_updated": row["assets_updated"] or "",
-                "folder_index_rows": int(row["folder_index_rows"] or 0),
-                "folder_index_favorites": int(row["folder_index_favorites"] or 0),
-                "folder_index_updated": row["folder_index_updated"] or "",
-                "pair_index_rows": int(row["pair_index_rows"] or 0),
-                "pair_index_updated": row["pair_index_updated"] or "",
-                "xhs_source_ids": row["xhs_source_ids"] or "",
-            }
-        )
+            return self._content_revision(conn)
+
+    def _content_revision(self, conn) -> str:
+        schemas = ('main', 'browse', 'control') if self.modules_enabled else ('main',)
+        return ':'.join(str(conn.execute(f'select revision from {schema}.content_revision where id=1').fetchone()[0]) for schema in schemas)
+
+    def _cached_content_stats(self, key, compute, extra=()) -> dict:
+        # Health polling must not repeatedly scan media tables. Revisions and
+        # counts share a read snapshot, so concurrent writes cannot poison a
+        # cached revision with counts from another transaction. Cache hits only
+        # read three one-row counters and never write a persistent cache.
+        with self._stats_lock, self.connect() as conn:
+            conn.execute('begin')
+            signature = (self.modules_enabled, self._content_revision(conn), *extra)
+            cached = self._stats_cache.get(key)
+            if cached and cached[0] == signature:
+                return dict(cached[1])
+            result = compute(conn)
+            self._stats_cache[key] = (signature, dict(result))
+            return result
 
     def get_gallery_page_cache(self, cache_key: str, signature: str) -> dict[str, Any] | None:
         with self.connect() as conn:
@@ -2419,6 +2468,7 @@ class Database:
                 """,
                 (str(cache_key), str(signature), dumps_json(payload), now_iso()),
             )
+            conn.execute('delete from gallery_page_cache where cache_key in (select cache_key from gallery_page_cache order by updated_at desc, rowid desc limit -1 offset 256)')
 
     def replace_gallery_index(
         self,
@@ -2489,6 +2539,7 @@ class Database:
                 """,
                 folder_payload,
             )
+            conn.execute("update folder_index set imported_at=coalesce((select created_at from folders where folder_name=?),'') where folder_name=?", (folder_name, folder_name))
             conn.execute("delete from pair_index where folder_name = ?", (folder_name,))
             for row in pair_indexes:
                 conn.execute(
@@ -2524,9 +2575,11 @@ class Database:
                     ),
                 )
 
+            conn.execute("update pair_index set imported_at=coalesce((select created_at from folders where folder_name=?),'') where folder_name=?", (folder_name, folder_name))
+
     def gallery_index_status(self) -> dict[str, Any]:
         settings = self.get_settings()
-        with self.connect() as conn:
+        def compute(conn):
             counts = conn.execute(
                 """
                 select
@@ -2543,24 +2596,28 @@ class Database:
                     ) as asset_pair_rows
                 """
             ).fetchone()
-        version = int(settings.get("gallery_index_version") or 0)
-        stale = (
-            version != GALLERY_INDEX_VERSION
-            or (counts["folder_rows"] and not counts["folder_index_rows"])
-            or int(counts["folder_index_rows"] or 0) != int(counts["folder_rows"] or 0)
-            or int(counts["pair_index_rows"] or 0) != int(counts["asset_pair_rows"] or 0)
-        )
-        return {
-            "version": version,
-            "current_version": GALLERY_INDEX_VERSION,
-            "rebuilt_at": settings.get("gallery_index_rebuilt_at"),
-            "rebuilding": bool(settings.get("gallery_index_rebuilding")),
-            "folder_rows": int(counts["folder_rows"] or 0),
-            "folder_index_rows": int(counts["folder_index_rows"] or 0),
-            "pair_index_rows": int(counts["pair_index_rows"] or 0),
-            "asset_pair_rows": int(counts["asset_pair_rows"] or 0),
-            "stale": stale,
-        }
+            version = int(settings.get("gallery_index_version") or 0)
+            stale = (
+                version != GALLERY_INDEX_VERSION
+                or (counts["folder_rows"] and not counts["folder_index_rows"])
+                or int(counts["folder_index_rows"] or 0) != int(counts["folder_rows"] or 0)
+                or int(counts["pair_index_rows"] or 0) != int(counts["asset_pair_rows"] or 0)
+            )
+            return {
+                "version": version,
+                "current_version": GALLERY_INDEX_VERSION,
+                "rebuilt_at": settings.get("gallery_index_rebuilt_at"),
+                "rebuilding": bool(settings.get("gallery_index_rebuilding")),
+                "folder_rows": int(counts["folder_rows"] or 0),
+                "folder_index_rows": int(counts["folder_index_rows"] or 0),
+                "pair_index_rows": int(counts["pair_index_rows"] or 0),
+                "asset_pair_rows": int(counts["asset_pair_rows"] or 0),
+                "stale": stale,
+            }
+        return self._cached_content_stats('gallery-index', compute, (
+            settings.get('gallery_index_version'), settings.get('gallery_index_rebuilt_at'),
+            bool(settings.get('gallery_index_rebuilding')),
+        ))
 
     def gallery_index_needs_rebuild(self) -> bool:
         return bool(self.gallery_index_status().get("stale"))
@@ -2580,6 +2637,48 @@ class Database:
             return False
         settings = self.get_settings()
         return folder_rows == 0 or int(settings.get("gallery_index_version") or 0) == GALLERY_INDEX_VERSION
+
+    def _query_browse_page(self, table, where_sql, params, page, page_size, column, direction, random_order):
+        # Each boundary is a small lookup entry for the next waterfall page.
+        # Deep sequential browsing seeks into the B tree instead of walking OFFSET.
+        revision = self.gallery_page_cache_signature()
+        key = dumps_json([table, where_sql, params, page_size, column, direction])
+        pair = table == 'pair_index'
+        order = f"{column} {direction}, folder_name {direction}" + (", pair_index asc" if pair else "")
+        with self.connect() as conn:
+            cached = conn.execute('select * from browse_queries where query_key=?', (key,)).fetchone()
+            if not cached or cached['revision'] != revision:
+                total = conn.execute(f'select count(*) from {table} where {where_sql}', params).fetchone()[0]
+                conn.execute('delete from browse_boundaries where query_key=?', (key,))
+                conn.execute('insert or replace into browse_queries values(?,?,?)', (key, revision, total))
+            else:
+                total = cached['total']
+            boundary = conn.execute('select * from browse_boundaries where query_key=? and page=?', (key, page)).fetchone()
+            if random_order:
+                offsets = random.sample(range(total), min(page_size, total))
+                rows = [conn.execute(f'select * from {table} where {where_sql} order by {order} limit 1 offset ?', [*params, offset]).fetchone() for offset in offsets]
+            else:
+                predicate, values = '', []
+                offset = max(page - 1, 0) * page_size
+                if boundary:
+                    op = '>' if direction == 'asc' else '<'
+                    # The inclusive tuple bound seeks directly into the index;
+                    # the residual handles pairs ascending within each folder.
+                    if pair:
+                        predicate = f' and ({column},folder_name) {op}= (?,?) and (({column},folder_name) {op} (?,?) or pair_index>?)'
+                        values = [boundary['sort_value'], boundary['folder_name']] * 2 + [boundary['pair_index']]
+                    else:
+                        predicate = f' and ({column},folder_name) {op} (?,?)'
+                        values = [boundary['sort_value'], boundary['folder_name']]
+                    offset = 0
+                rows = conn.execute(f'select * from {table} where ({where_sql}){predicate} order by {order} limit ? offset ?', [*params, *values, page_size, offset]).fetchall()
+                if rows:
+                    last = rows[-1]
+                    conn.execute('insert or ignore into browse_boundaries values(?,?,?,?,?)', (key, page+1, last[column], last['folder_name'], last['pair_index'] if pair else 0))
+            # Bound lookup storage even when filters/search combinations proliferate.
+            conn.execute('delete from browse_boundaries where query_key in (select query_key from browse_queries order by rowid desc limit -1 offset 128)')
+            conn.execute('delete from browse_queries where rowid in (select rowid from browse_queries order by rowid desc limit -1 offset 128)')
+        return {'total': total, 'items': [dict(row) for row in rows if row is not None]}
 
     def query_folder_index(
         self,
@@ -2611,41 +2710,8 @@ class Database:
         order_direction = "asc" if sort_order == "asc" else "desc"
         order_column = "pub_ts"
         if sort_order == "imported":
-            order_column = "(select created_at from folders where folders.folder_name = folder_index.folder_name)"
-        offset = max(page - 1, 0) * page_size
-        with self.connect() as conn:
-            total = int(
-                conn.execute(f"select count(*) from folder_index where {where_sql}", params).fetchone()[0]
-            )
-            if random_order:
-                sample_size = min(int(page_size), total)
-                offsets = sorted(random.sample(range(total), sample_size)) if sample_size > 0 else []
-                rows = [
-                    conn.execute(
-                        f"""
-                        select *
-                        from folder_index
-                        where {where_sql}
-                        order by pub_ts desc, folder_name desc
-                        limit 1 offset ?
-                        """,
-                        [*params, int(sample_offset)],
-                    ).fetchone()
-                    for sample_offset in offsets
-                ]
-                rows = [row for row in rows if row is not None]
-            else:
-                rows = conn.execute(
-                    f"""
-                    select *
-                    from folder_index
-                    where {where_sql}
-                    order by {order_column} {order_direction}, folder_name {order_direction}
-                    limit ? offset ?
-                    """,
-                    [*params, int(page_size), int(offset)],
-                ).fetchall()
-        return {"total": total, "items": [dict(row) for row in rows]}
+            order_column = "imported_at"
+        return self._query_browse_page("folder_index", where_sql, params, page, page_size, order_column, order_direction, random_order)
 
     def query_pair_index(
         self,
@@ -2677,41 +2743,8 @@ class Database:
         order_direction = "asc" if sort_order == "asc" else "desc"
         order_column = "pub_ts"
         if sort_order == "imported":
-            order_column = "(select created_at from folders where folders.folder_name = pair_index.folder_name)"
-        offset = max(page - 1, 0) * page_size
-        with self.connect() as conn:
-            total = int(
-                conn.execute(f"select count(*) from pair_index where {where_sql}", params).fetchone()[0]
-            )
-            if random_order:
-                sample_size = min(int(page_size), total)
-                offsets = sorted(random.sample(range(total), sample_size)) if sample_size > 0 else []
-                rows = [
-                    conn.execute(
-                        f"""
-                        select *
-                        from pair_index
-                        where {where_sql}
-                        order by pub_ts desc, folder_name desc, pair_index asc
-                        limit 1 offset ?
-                        """,
-                        [*params, int(sample_offset)],
-                    ).fetchone()
-                    for sample_offset in offsets
-                ]
-                rows = [row for row in rows if row is not None]
-            else:
-                rows = conn.execute(
-                    f"""
-                    select *
-                    from pair_index
-                    where {where_sql}
-                    order by {order_column} {order_direction}, folder_name {order_direction}, pair_index asc
-                    limit ? offset ?
-                    """,
-                    [*params, int(page_size), int(offset)],
-                ).fetchall()
-        return {"total": total, "items": [dict(row) for row in rows]}
+            order_column = "imported_at"
+        return self._query_browse_page("pair_index", where_sql, params, page, page_size, order_column, order_direction, random_order)
 
     def gallery_meta_from_index(self) -> dict[str, Any]:
         with self.connect() as conn:

@@ -5536,3 +5536,10 @@ html.is-interacting .detail-card {
         animation: none;
     }
 }
+
+/* Closed maintenance disclosures keep expensive/destructive tools out of the way. */
+details.settings-card > summary { cursor: pointer; margin: 0; list-style: none; font-weight: 650; }
+details.settings-card > summary::-webkit-details-marker { display: none; }
+details.settings-card > summary::after { content: "⌄"; margin-left: auto; }
+details.settings-card[open] > summary { margin-bottom: 16px; }
+details.settings-card[open] > summary::after { content: "⌃"; }

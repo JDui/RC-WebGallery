@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-responsive-video-controls-18' %}
+    {% set ui_revision = app_version ~ '-data-layout-2' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -1138,7 +1138,7 @@
                     </article>
 
                     <article class="settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance" data-testid="livephoto-maintenance" x-init="$watch('settingsGroup', (group) => { if (group === 'maintenance') refreshTasks().catch(() => {}); })">
-                        <h4 class="heading-with-help">Live Photo 配对与历史修复<button type="button" class="help-button" aria-label="Live Photo 配对与历史修复说明" data-tooltip="新抓取的 B 站与小红书实况自动写入 Immich 兼容配对标识。已有文件保持原样，仍可正常预览。检查只读取本地媒体；检查完成后会先出现“修复配对”，为可确定配对的图片和视频补写标识；再出现“修复异常”，自动尝试找回缺失原图并确认配对。缺失或配对不明确的文件保留原样，并列入任务报告。">?</button></h4>
+                        <h4 class="heading-with-help">Live Photo 配对与历史修复<button type="button" class="help-button" aria-label="Live Photo 配对与历史修复说明" data-tooltip="左侧 Live Photo 数量是含实况的动态数，这里按图片与视频组统计。“检查实况配对”检查全库，覆盖 B 站和小红书，并读取迁移后的目录映射；修复后的局部复查只检查上次有问题的内容，不代表全库数量。新抓取的实况自动写入 Immich 兼容配对标识。已有文件保持原样，仍可正常预览。检查只读取本地媒体；检查完成后会先出现“修复配对”，为可确定配对的图片和视频补写标识；再出现“修复异常”，自动尝试找回缺失原图并确认配对。缺失或配对不明确的文件保留原样，并列入任务报告。">?</button></h4>
                         <div class="button-row">
                             <button type="button" class="secondary-button" data-testid="livephoto-check" @click="submitLivephotoCheck()" :disabled="livephotoSubmitting">检查实况配对</button>
                         </div>
@@ -1154,15 +1154,41 @@
                         </template>
                     </article>
 
-                    <article class="settings-card danger-settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
-                        <h4 class="heading-with-help">内容校验<button type="button" class="help-button" aria-label="内容校验说明" data-tooltip="检查当前资料库里的动态是否缺图、是否存在重复素材。发现重复会清重，发现缺失会重新拉取该动态。">?</button></h4>
+                    <article class="settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance" data-testid="data-upgrade-maintenance">
+                        <h4 class="heading-with-help">数据检查<button type="button" class="help-button" aria-label="数据结构升级说明" data-tooltip="检查会验证数据库与原始媒体引用，并记录缺失文件；已标为 duplicate 的站点去重记录不算缺失。修复会重新检查，优先寻找同一内容目录中的原文件，再使用已有站点原文件地址补下；不删除记录、不覆盖已有文件。过期地址、小红书或无下载地址的条目会列出原因，需重新同步来源。检查、修复与升级期间所有页面均暂停访问，完成后解封，不会自动循环修复。旧版本数据标记为脏、待升级。升级会备份数据库，拆分设置、订阅与浏览索引，建立发布时间及入库时间索引，并将 images、livephoto 迁移为 类型／来源／日期／内容。服务中断后可继续。数据库备份保留在 config/before-data-layout-v2；请先备份完整 config 与 data，并预留备份、模块副本及事务日志所需空间。">?</button></h4>
+                        <p class="field-copy" role="status" x-text="dataUpgrade.current_version ? (dataUpgrade.dirty ? '旧版数据（脏） · 待升级' : '数据结构已是最新版本') : '正在检查数据版本…'"></p>
+                        <p class="field-copy" x-show="dataUpgrade.result" x-text="`上次检查 ${dataUpgrade.result?.checked_assets || 0} 个媒体引用，缺失 ${dataUpgrade.result?.missing_assets || 0} 个`"></p>
+                        <p class="field-copy" x-show="dataUpgrade.result && !dataUpgrade.result.check_version">旧规则结果，待重新检查</p>
+                        <p class="field-copy" x-show="dataUpgrade.result?.ignored_duplicates" x-text="`已排除 ${dataUpgrade.result?.ignored_duplicates || 0} 条站点去重记录`"></p>
+                        <div class="button-row">
+                            <button type="button" class="secondary-button" @click="startDataUpgrade('check')" :disabled="dataUpgradeSubmitting">检查数据</button>
+                            <button type="button" class="secondary-button" data-testid="data-repair-start" x-show="dataUpgrade.result?.missing_assets > 0" @click="startDataUpgrade('repair')" :disabled="dataUpgradeSubmitting">重新检查并修复缺失</button>
+                            <button type="button" class="secondary-button" x-show="dataUpgrade.result" @click="loadDataCheckReport()" :disabled="dataUpgradeSubmitting">查看检查明细</button>
+                            <button type="button" class="primary-button" data-testid="data-upgrade-start" @click="startDataUpgrade()" :disabled="dataUpgradeSubmitting || !dataUpgrade.dirty" x-text="dataUpgradeSubmitting ? '准备升级…' : '升级数据结构并迁移 data'"></button>
+                        </div>
+                        <div x-show="dataCheckReport" style="max-height:360px;overflow:auto" x-cloak>
+                            <p class="field-copy" x-show="dataCheckReport?.needs_check">尚无完整明细，请先检查数据。</p>
+                            <p class="field-copy" x-show="dataCheckReport?.recovered_files" x-text="`已恢复 ${dataCheckReport?.recovered_files || 0} 个原文件，仍有 ${dataCheckReport?.missing_files || 0} 个原文件需要处理`"></p>
+                            <template x-for="(item, index) in dataCheckReportRows()" :key="`${item.table}-${item.id}`">
+                                <p class="field-copy" style="overflow-wrap:anywhere"><span x-text="item.rel_path || '无效路径'"></span><br><span x-text="item.status === 'recovered' ? '已恢复' : (item.error || item.reason)"></span></p>
+                            </template>
+                            <div class="button-row" x-show="(dataCheckReport?.items?.length || 0) > 50">
+                                <button type="button" class="secondary-button" @click="dataCheckReportPage--" :disabled="dataCheckReportPage <= 1">上一页</button>
+                                <span class="field-copy" x-text="`${dataCheckReportPage} / ${Math.max(1, Math.ceil((dataCheckReport?.items?.length || 0) / 50))}`"></span>
+                                <button type="button" class="secondary-button" @click="dataCheckReportPage++" :disabled="dataCheckReportPage * 50 >= (dataCheckReport?.items?.length || 0)">下一页</button>
+                            </div>
+                        </div>
+                    </article>
+
+                    <details class="settings-card danger-settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
+                        <summary class="heading-with-help">内容校验<button type="button" class="help-button" @click.stop aria-label="内容校验说明" data-tooltip="检查当前资料库里的动态是否缺图、是否存在重复素材。发现重复会清重，发现缺失会重新拉取该动态。">?</button></summary>
                         <div class="button-row confirm-row" x-show="validateConfirmStep === 0">
                             <button class="secondary-button confirm-anchor" @click="askValidateContent()" x-text="validateButtonLabel()"></button>
                         </div>
                         <div class="button-row confirm-row" x-show="validateConfirmStep === 1" x-cloak>
                             <button class="primary-button confirm-anchor" @click="confirmValidateContent()">确认开始校验</button>
                         </div>
-                    </article>
+                    </details>
 
                     <article class="settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
                         <h4 class="heading-with-help">页面索引<button type="button" class="help-button" aria-label="页面索引说明" :data-tooltip="`版本 ${galleryIndexStatus.version || 0} / ${galleryIndexStatus.current_version || 0}；最近重建：${galleryIndexStatus.rebuilt_at || '暂无'}`">?</button></h4>
@@ -1178,22 +1204,22 @@
                     </article>
 
                     <article class="settings-card storage-stats-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
-                        <h4 class="heading-with-help">数据统计<button type="button" class="help-button" aria-label="数据统计说明" data-tooltip="展示原图、缩略图与垃圾桶残留文件占用。开启“定期清理垃圾文件”后，每次拉取完成（动态、站点、小红书）都会自动清理垃圾桶残留文件与孤立记录；关闭时仅清理孤立记录，可在此手动清理。">?</button></h4>
+                        <h4 class="heading-with-help">数据统计<button type="button" class="help-button" aria-label="数据统计说明" data-tooltip="展示原图、缩略图与垃圾文件占用；垃圾文件包含废弃的媒体 tiny 缩略图，保留订阅和站点头像。开启“定期清理垃圾文件”后，每次拉取完成（动态、站点、小红书）都会自动清理垃圾桶残留文件与孤立记录；关闭时仅清理孤立记录，可在此手动清理。">?</button></h4>
                         <div class="storage-stat-list">
                             <div class="storage-stat-row">
                                 <span>原图文件</span>
-                                <strong x-text="formatBytes(storageStats.image_bytes)"></strong>
-                                <small x-text="`${storageStats.image_files || 0} 个文件`"></small>
+                                <strong x-text="storageStats.updated_at ? formatBytes(storageStats.image_bytes) : '未统计'"></strong>
+                                <small x-show="storageStats.updated_at" x-text="`${storageStats.image_files || 0} 个文件`"></small>
                             </div>
                             <div class="storage-stat-row">
                                 <span>缩略图文件</span>
-                                <strong x-text="formatBytes(storageStats.thumbnail_bytes)"></strong>
-                                <small x-text="`${storageStats.thumbnail_files || 0} 个文件`"></small>
+                                <strong x-text="storageStats.updated_at ? formatBytes(storageStats.thumbnail_bytes) : '未统计'"></strong>
+                                <small x-show="storageStats.updated_at" x-text="`${storageStats.thumbnail_files || 0} 个文件`"></small>
                             </div>
                             <div class="storage-stat-row danger">
-                                <span>垃圾桶残留文件</span>
-                                <strong x-text="formatBytes(storageStats.trash_bytes)"></strong>
-                                <small x-text="`${storageStats.trash_files || 0} 个文件`"></small>
+                                <span>垃圾文件</span>
+                                <strong x-text="storageStats.updated_at ? formatBytes(storageStats.trash_bytes) : '未统计'"></strong>
+                                <small x-show="storageStats.updated_at" x-text="`${storageStats.trash_files || 0} 个文件`"></small>
                             </div>
                         </div>
 
@@ -1205,8 +1231,8 @@
                         </div>
                     </article>
 
-                    <article class="settings-card danger-settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
-                        <h4 class="heading-with-help">危险操作：清空内容<button type="button" class="help-button" aria-label="危险操作：清空内容说明" data-tooltip="会清空资料库、待审核、过滤日志、任务记录、垃圾桶和黑名单，但会保留当前 Cookie 登录状态与设置。">?</button></h4>
+                    <details class="settings-card danger-settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
+                        <summary class="heading-with-help">危险操作：清空内容<button type="button" class="help-button" @click.stop aria-label="危险操作：清空内容说明" data-tooltip="会清空资料库、待审核、过滤日志、任务记录、垃圾桶和黑名单，但会保留当前 Cookie 登录状态与设置。">?</button></summary>
                         <div class="button-row confirm-row" x-show="clearDataConfirmStep === 0">
                             <button class="secondary-button danger-button confirm-anchor" @click="askClearAllData()" x-text="clearDataButtonLabel()"></button>
                         </div>
@@ -1216,7 +1242,7 @@
                         <div class="button-row confirm-row" x-show="clearDataConfirmStep >= 3" x-cloak>
                             <button class="primary-button danger-confirm confirm-anchor" @click="confirmClearAllData()">确认清空全部内容</button>
                         </div>
-                    </article>
+                    </details>
                 </div>
             </section>
 
@@ -1983,7 +2009,7 @@
                                 :class="{ hidden: !viewer.showVideo }"
                                 playsinline
                                 muted
-                                :poster="viewer.pair?.livephoto?.thumb_url || viewer.pair?.livephoto?.cover_url"
+                                :poster="livephotoViewerPoster()"
                                 :data-viewer-token="viewerToken"
                                 :data-forward="viewer.pair?.livephoto?.url"
                                 :data-reverse="viewer.pair?.livephoto?.reverse_url"
@@ -2021,5 +2047,6 @@
             </section>
         </div>
     </div>
+    <script src="/static/data-upgrade.js?v={{ ui_revision }}"></script>
 </body>
 </html>

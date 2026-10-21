@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据升级 · {{ app_title }}</title>
+    <link rel="stylesheet" href="/static/ui-tokens.css?v=data-layout-2">
+    <link rel="stylesheet" href="/static/intranet.css?v=data-layout-2">
+    <style>
+        progress { width:100%; height:8px; margin:20px 0 8px; accent-color:#637bd0; }
+        .upgrade-detail { overflow-wrap:anywhere; white-space:pre-wrap; }
+        button.connection-fallback { width:100%; cursor:pointer; font:inherit; }
+        [hidden] { display:none !important; }
+    </style>
+</head>
+<body data-upgrade-page>
+    <main class="connection-card" aria-labelledby="upgrade-title">
+        <header class="connection-brand">{{ app_title }}</header>
+        <h1 id="upgrade-title">正在升级数据</h1>
+        <p class="connection-copy" id="upgrade-message" role="status" aria-live="polite">正在读取迁移进度</p>
+        <progress id="upgrade-progress" max="100" value="0" aria-label="升级进度"></progress>
+        <div class="connection-target"><span>迁移进度</span><bdi id="upgrade-percent">0%</bdi></div>
+        <p class="connection-notice upgrade-detail" id="upgrade-current"></p>
+        <p class="connection-notice upgrade-detail" id="upgrade-error" role="alert"></p>
+        <button type="button" class="connection-fallback" id="upgrade-resume" hidden>继续升级</button>
+        <noscript><p>请启用 JavaScript 以查看升级进度。升级完成后刷新页面。</p></noscript>
+    </main>
+    <script src="/static/data-upgrade.js?v=data-layout-2"></script>
+</body>
+</html>

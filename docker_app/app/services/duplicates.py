@@ -12,6 +12,7 @@ from app.db import Database
 from app.services.image_similarity import color_distance, hamming_distance, image_fingerprint, parse_fingerprint
 from app.services.storage import StorageService
 from app.services.task_priority import TaskPriorityCoordinator
+from app.services.thumb_chain import pick_thumb_url
 from app.services.utils import loads_json, now_iso
 
 
@@ -87,6 +88,16 @@ class DuplicateService:
         self._cache_stale = True
         self._signature_aliases: dict[str, str] = {}
         self._cache_lock = threading.RLock()
+
+    def invalidate_cache(self) -> None:
+        """Drop derived URLs after a storage-layout change; keep ignore choices."""
+        with self._cache_lock:
+            self._cache_signature = ''
+            self._cached_groups = []
+            self._cache_updated_at = None
+            self._has_cache = False
+            self._cache_stale = True
+            self._signature_aliases = {}
 
     def list_groups(self, include_ignored: bool = False, force: bool = False) -> dict[str, Any]:
         threshold = self._image_threshold()
@@ -335,6 +346,7 @@ class DuplicateService:
             fingerprint = str(row.get("duplicate_fingerprint") or "")
             parsed = parse_fingerprint(fingerprint)
             if parsed is None:
+                # 独立于展示链的文件优先级：感知哈希取“最小可分辨文件路径”，非 URL。
                 fingerprint_rel_path = row.get("small_thumb_rel_path") or row.get("thumb_rel_path") or row.get("rel_path")
                 path = self.storage.resolve_storage_path(fingerprint_rel_path)
                 fingerprint = image_fingerprint(path) if path else None
@@ -364,7 +376,7 @@ class DuplicateService:
                     width=max(1, int(row.get("width") or 1)),
                     height=max(1, int(row.get("height") or 1)),
                     file_size_bytes=file_size_bytes,
-                    preview_url=tile.get("small_thumb_url") or tile.get("thumb_url") or tile.get("url"),
+                    preview_url=pick_thumb_url([tile], original_last=True),
                     tile=tile,
                 )
             )
