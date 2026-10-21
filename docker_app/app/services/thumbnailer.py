@@ -17,11 +17,11 @@ except ImportError:  # pragma: no cover - optional runtime fallback
 class ThumbnailService:
     def __init__(
         self,
-        thumb_size: tuple[int, int] = (576, 576),
-        small_thumb_size: tuple[int, int] = (192, 192),
+        thumb_size: tuple[int, int] = (368, 368),
+        small_thumb_size: tuple[int, int] = (368, 368),
         tiny_thumb_size: tuple[int, int] = (32, 32),
-        thumb_quality: int = 68,
-        small_thumb_quality: int = 48,
+        thumb_quality: int = 50,
+        small_thumb_quality: int = 50,
         tiny_thumb_quality: int = 28,
     ) -> None:
         self.thumb_size = thumb_size
@@ -32,10 +32,10 @@ class ThumbnailService:
         self.tiny_thumb_quality = tiny_thumb_quality
 
     def apply_settings(self, settings: dict) -> None:
-        self.thumb_size = self._edge_size(settings.get("thumb_edge"), 576)
-        self.small_thumb_size = self._edge_size(settings.get("small_thumb_edge"), 192)
-        self.thumb_quality = self._quality(settings.get("thumb_quality"), 68)
-        self.small_thumb_quality = self._quality(settings.get("small_thumb_quality"), 48)
+        self.small_thumb_size = self._edge_size(settings.get("small_thumb_edge"), 368)
+        self.small_thumb_quality = self._quality(settings.get("small_thumb_quality"), 50)
+        self.thumb_size = self.small_thumb_size
+        self.thumb_quality = self.small_thumb_quality
 
     def sidecar_options(self) -> dict[str, int]:
         return {

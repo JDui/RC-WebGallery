@@ -27,32 +27,64 @@
         if (env.requestIdleCallback) idle = env.requestIdleCallback(flush, {timeout: 80});
       }
     }
+    const waiting = [];
+    const seenUrls = new Map();
+    let inflight = 0;
+    function pump() {
+      while (inflight < 6 && waiting.length) {
+        const job = waiting.shift();
+        if (!job.cancelled) job.start();
+      }
+    }
+    function remember(url) {
+      seenUrls.delete(url);
+      seenUrls.set(url, true);
+      if (seenUrls.size > 512) seenUrls.delete(seenUrls.keys().next().value);
+    }
     function preload(url) {
       const image = new env.Image();
-      let resolve, settled = false;
+      let resolve, settled = false, started = false, timer = null;
       const promise = new Promise((done) => { resolve = done; });
       const finish = (ok) => {
         if (settled) return;
         settled = true;
-        env.clearTimeout(timer);
+        if (timer !== null) env.clearTimeout(timer);
+        job.cancelled = true;
+        if (started) inflight--;
+        else {
+          const index = waiting.indexOf(job);
+          if (index >= 0) waiting.splice(index, 1);
+        }
         image.onload = image.onerror = null;
         resolve(ok ? image : null);
         if (!ok) retire(image);
+        pump();
       };
-      const timer = env.setTimeout(() => finish(false), 8000);
-      image.decoding = "async";
-      image.onload = async () => {
-        try { if (image.decode) await image.decode(); finish(image.naturalWidth > 0); }
-        catch (_) { finish(false); }
-      };
-      image.onerror = () => finish(false);
-      image.src = url;
-      if (image.complete && image.naturalWidth > 0) image.onload();
+      const job = {cancelled: false, start() {
+        started = true;
+        inflight++;
+        timer = env.setTimeout(() => finish(false), 8000);
+        image.decoding = "async";
+        image.onload = async () => {
+          try { if (image.decode) await image.decode(); finish(image.naturalWidth > 0); }
+          catch (_) { finish(false); }
+        };
+        image.onerror = () => finish(false);
+        image.src = url;
+        if (image.complete && image.naturalWidth > 0) image.onload();
+      }};
+      waiting.push(job);
+      pump();
       return {promise, cancel: () => finish(false)};
     }
+    const controllers = new Map();
+    const exposure = env.IntersectionObserver ? new env.IntersectionObserver(entries => {
+      for (const entry of entries) controllers.get(entry.target)?.setVisible(entry.isIntersecting);
+    }, {rootMargin: "100% 0px", threshold: 0}) : null;
     function attach(image) {
       let latest = "", committed = "", failed = "", epoch = 0, disposed = false, suspended = false, committing = false;
       let loading = false, pending = null, old = null, animation = null, finishTimer = null;
+      let visible = true, pageHidden = false;
       image.setAttribute("data-progressive-image", "1");
       function finishFade() {
         if (finishTimer !== null) env.clearTimeout(finishTimer);
@@ -120,7 +152,8 @@
         loading = false;
         image.dataset.progressiveReady = "1";
         image.style.removeProperty("opacity");
-        const duration = env.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? 0 : 260;
+        const duration = seenUrls.has(url) || env.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? 0 : 260;
+        remember(url);
         if (!duration || !image.animate) { finishFade(); return; }
         image.dataset.imageTransition = "1";
         image.style.willChange = "opacity";
@@ -147,10 +180,23 @@
             } else loadLatest();
           }
         },
-        suspend(value) {
-          suspended = value;
-          if (value) { ++epoch; pending?.cancel(); pending = null; loading = false; finishFade(); }
-          else loadLatest();
+        setVisible(value) {
+          visible = value;
+          controller.suspend(pageHidden, !visible);
+        },
+        suspend(value, release = !visible) {
+          pageHidden = value;
+          suspended = value || !visible;
+          if (suspended) {
+            ++epoch;
+            pending?.cancel(); pending = null; loading = false;
+            finishFade();
+            if (release) {
+              committed = "";
+              clearImage(image);
+              delete image.dataset.progressiveReady;
+            }
+          } else loadLatest();
         },
         dispose() {
           if (disposed) return;
@@ -162,13 +208,20 @@
           clearImage(image);
           image.removeAttribute("data-progressive-image");
           delete image.dataset.progressiveReady;
+          exposure?.unobserve(image);
+          controllers.delete(image);
           active.delete(controller);
         },
       };
       active.add(controller);
+      controllers.set(image, controller);
+      if (exposure && image.closest?.(".gallery-item-card, .detail-card")) {
+        controller.setVisible(false);
+        exposure.observe(image);
+      }
       return controller;
     }
-    function dispose() { for (const controller of active) controller.dispose(); flush(); }
+    function dispose() { for (const controller of active) controller.dispose(); exposure?.disconnect(); flush(); }
     async function warm(url) {
       const candidate = await preload(url).promise;
       if (candidate) retire(candidate);
@@ -185,6 +238,15 @@
       const evaluate = evaluateLater(expression);
       effect(() => evaluate((url) => controller.setSource(url)));
       cleanup(() => controller.dispose());
+    });
+    root.Alpine.directive("retire-video", (element, _, {cleanup}) => {
+      cleanup(() => {
+        element.pause();
+        element.onended = element.onerror = element.onloadeddata = element.oncanplay = null;
+        element.removeAttribute("src");
+        element.removeAttribute("poster");
+        element.load();
+      });
     });
     root.Alpine.directive("retire-image", (element, _, {cleanup}) => {
       cleanup(() => manager.retire(element));

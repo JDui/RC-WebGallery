@@ -15,7 +15,7 @@ RC-WebGallery 是一个面向个人收藏与自托管场景的多平台媒体采
 - **订阅与站点源**：管理 B 站 UP 主订阅和外部站点订阅；站点源支持 RSS、Sitemap 或 HTML 列表页，并可配置定时同步、筛选规则和网络代理。
 - **小红书个人点赞**：内置浏览器扫码与持久化登录，支持本人点赞笔记扫描、图文/视频/Live Photo 媒体解析与归档、失败重试和手工清单导入；首次拉取条数默认 100，可设 1–10000 或不限，锚点数默认 3、可设 1–20。固定直连，刷新周期独立设置，每轮随机前后抖动 1–22 分钟；图库提供独立的小红书来源筛选入口。首次使用需完成本人账号、分页与访问规则确认。
 - **登录与运行控制**：支持 B 站二维码登录、Cookie 状态检查和退出登录；可以配置定时拉取间隔、站点同步间隔及过滤关键词。
-- **缩略图与性能调度**：为原图生成 small、thumb 两级缩略图，配合页面按需加载和本地索引；前台浏览拥有更高优先级，后台拉取、清理、索引和重复检测会主动让行。
+- **缩略图与性能调度**：为原图生成统一 thumb 缩略图（默认短边 368px、WebP 质量 50，沿用 small 存储路径），配合页面按需加载和本地索引；前台浏览拥有更高优先级，后台拉取、清理、索引和重复检测会主动让行。
 
 ## 效果展示
 
@@ -81,12 +81,12 @@ Compose 中的关键环境变量如下：
 
 ### AMD64 NAS 使用预构建镜像
 
-v11.4.1 的 AMD64 镜像包不纳入 Git 工作树。请从[RC-WebGallery Releases 页面](https://github.com/JDui/RC-WebGallery/releases)或其他正式发布交付物取得对应版本的 tar 包和 <code>.sha256</code> 校验文件；页面上的版本和资产名称以实际发布内容为准。将镜像包和对应部署包解压到 NAS，保留其中的目录关系；部署包已包含默认 Compose 和浏览器沙箱配置。在部署目录执行：
+v11.4.2 的 AMD64 镜像包不纳入 Git 工作树。请从[RC-WebGallery Releases 页面](https://github.com/JDui/RC-WebGallery/releases)或其他正式发布交付物取得对应版本的 tar 包和 <code>.sha256</code> 校验文件；页面上的版本和资产名称以实际发布内容为准。将镜像包和对应部署包解压到 NAS，保留其中的目录关系；部署包已包含默认 Compose 和浏览器沙箱配置。在部署目录执行：
 
 ~~~bash
-sha256sum -c zzs-bili-gallery_v11.4.1_amd64.tar.sha256
-docker load -i zzs-bili-gallery_v11.4.1_amd64.tar
-docker image inspect zzs-bili-gallery:11.4.1-amd64 --format '{{.Id}}'
+sha256sum -c zzs-bili-gallery_v11.4.2_amd64.tar.sha256
+docker load -i zzs-bili-gallery_v11.4.2_amd64.tar
+docker image inspect zzs-bili-gallery:11.4.2-amd64 --format '{{.Id}}'
 ~~~
 
 启动前必须编辑 <code>docker_app/docker-compose.nas-amd64.yml</code> 的 <code>volumes</code>。文件中的示例宿主机路径是占位配置，请改成 NAS 上真实、可写的目录，并保留容器目标路径：
@@ -114,7 +114,7 @@ NAS Compose 已将容器端口 <code>7860</code> 映射到宿主机 <code>7860</
 docker compose -f docker_app/docker-compose.nas-amd64.yml down
 
 # 载入新 tar 后重建容器
-docker load -i zzs-bili-gallery_v11.4.1_amd64.tar
+docker load -i zzs-bili-gallery_v11.4.2_amd64.tar
 docker compose -f docker_app/docker-compose.nas-amd64.yml up -d
 ~~~
 
@@ -174,7 +174,7 @@ PYTHONPATH=. .venv/bin/pytest -q
 页面审查截图使用隔离占位数据。<code>review_capture.sh</code> 当前针对 macOS 的 Lima Docker 流程：需要本机已有可运行的 <code>limactl</code>、Lima 的 <code>lima-docker</code> context、Docker、Playwright 浏览器和审查镜像；脚本会在 <code>docker_app/review/&lt;时间戳&gt;/</code> 下生成临时运行目录与截图：
 
 ~~~bash
-bash docker_app/scripts/review_capture.sh zzs-bili-gallery:11.4.1-amd64
+bash docker_app/scripts/review_capture.sh zzs-bili-gallery:11.4.2-amd64
 ~~~
 
 脚本内部调用 <code>seed_review_data.py</code>，不会读取真实 <code>storage/</code>。如果只需要生成占位数据库和媒体，可单独执行：
@@ -184,7 +184,7 @@ docker_app/.venv/bin/python docker_app/scripts/seed_review_data.py \
   --storage-root /tmp/rc-webgallery-review
 ~~~
 
-当前应用版本由 <code>docker_app/app/version.py</code> 中的 <code>APP_VERSION = "11.4.1"</code> 定义；对应 NAS 镜像标签为 <code>zzs-bili-gallery:11.4.1-amd64</code>，镜像包文件名为 <code>zzs-bili-gallery_v11.4.1_amd64.tar</code>。
+当前应用版本由 <code>docker_app/app/version.py</code> 中的 <code>APP_VERSION = "11.4.2"</code> 定义；对应 NAS 镜像标签为 <code>zzs-bili-gallery:11.4.2-amd64</code>，镜像包文件名为 <code>zzs-bili-gallery_v11.4.2_amd64.tar</code>。
 
 ## 小红书个人点赞
 
@@ -194,7 +194,7 @@ docker_app/.venv/bin/python docker_app/scripts/seed_review_data.py \
 
 ### 开箱使用
 
-v11.4.1 主镜像内置浏览器。按前文使用默认 NAS Compose 启动即可，整个应用只有一个容器和网页端口 `7860`；不需要另外部署浏览器服务、创建密钥、映射登录端口或设置 SSH 转发。源码部署也使用默认的 `docker-compose.example.yml`。
+v11.4.2 主镜像内置浏览器。按前文使用默认 NAS Compose 启动即可，整个应用只有一个容器和网页端口 `7860`；不需要另外部署浏览器服务、创建密钥、映射登录端口或设置 SSH 转发。源码部署也使用默认的 `docker-compose.example.yml`。
 
 升级时导入新镜像，使用本版本部署包中的 `docker_app/docker-compose.nas-amd64.yml`，保留原来的两条配置、数据挂载路径，然后正常重建主容器。部署包中的 `docker_app/xhs_worker/seccomp_profile.json` 与 Compose 保持相对位置；默认配置会自动使用它启用 Chromium 沙箱。
 
@@ -278,4 +278,10 @@ Live Photo 以同序号的静态图和 MP4 视频分别保存，并在图库中�
 
 界面与内网检测页的圆角统一使用 `docker_app/app/static/ui-tokens.css` 中的令牌：按钮和表单控件 10px、卡片 12px、外框及弹窗 18px、内嵌缩略图和标签 8px。组合按钮外框按内层圆角加内边距计算；开关、进度轨道和圆形状态点保留功能形状。
 
-图库使用 small → thumb → 原图的加载层级，不再生成媒体 tiny 缩略图；订阅与站点头像仍保留独立 tiny 背景。历史媒体 tiny 文件不会自动删除，可通过重建页面索引清理，旧数据库字段保留兼容。缩略图分级升级先完成新图解码，再以 260ms 交叠淡入；旧图层和临时预加载图片在过渡结束后进入空闲清理队列，并设 80ms 清理兜底。连续切换只提交最后请求的等级，加载失败保留可用旧图，关闭或隐藏页面会取消待处理任务并清理资源。查看器原图淡入完成后移除预览层。悬浮说明使用半透明渐变、磨砂模糊与内侧高光，并保留键盘及触屏操作。
+图库与动态详情共用单档 thumb 缩略图，默认短边 368px、WebP 质量 50；存储及配置兼容字段沿用 `.thumbs/small`、`small_thumb_edge` 和 `small_thumb_quality`。查看器再加载原图。升级自动迁移原有默认值，保留自定义参数，并通过页面索引版本更新补齐缩略图。旧 thumb 与 tiny 媒体派生图纳入垃圾文件统计和清理；头像、原图和仍作为有效封面的文件保留。
+
+“设置 → 界面”支持宽屏切换单张简易封面，默认仍为多图聚合；单张封面的随机选图默认开启，两项均保存在服务端。随机候选从整组媒体抽取并随索引保存，避免缓存刷新时封面跳动。动态详情下滑后保留紧凑顶部栏，提供标题、上一篇、下一篇和关闭入口。
+
+图片按视口流式加载，全局最多并发 6 个预加载与解码任务；离屏卡片释放图片源，移除视频节点时停止播放并释放资源。卡片刷新通过稳定 key 原位合并，已显示图片再次出现时不重复淡入；本地图库页面缓存最多保留 12 份，质量记录有上限。全屏查看器的彩虹加载层使用淡入淡出，并遵循系统减少动画偏好。
+
+相关回归检查：`node --test docker_app/checks/gallery_loading.test.cjs docker_app/checks/image_resources.test.cjs`，以及在 `docker_app` 目录执行 `PYTHONPATH=. python -m pytest -q checks/test_thumbnail_policy.py`。

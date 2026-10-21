@@ -495,7 +495,8 @@ class PullManager:
     def start_thumbnail_rebuild(self, level: str) -> dict[str, Any]:
         if level not in {"small", "thumb"}:
             raise RuntimeError("缩略图等级无效")
-        label = f"重建 {level} 缩略图"
+        level = "thumb"
+        label = "重建 thumb 缩略图"
         queued = self._queue_or_start("thumbnail-rebuild", label, self._run_thumbnail_rebuild, level)
         return {"ok": True, "message": "已加入任务队列" if queued else f"已开始{label}", "queued": queued}
 
@@ -1818,6 +1819,7 @@ class PullManager:
             self._run_next_queued_task()
 
     def _run_thumbnail_rebuild(self, level: str) -> None:
+        level = "thumb"
         task_id = self.db.create_task_run(
             "thumbnail-rebuild",
             "running",
@@ -1834,7 +1836,7 @@ class PullManager:
                 target=f"重建 {level} 缩略图",
                 next_step="并发生成缩略图",
             )
-            removed = self.storage.clear_thumbnail_level(level)
+            removed = self.storage.clear_thumbnail_level("small")
             self._cooperate()
             self.indexer.rebuild_gallery_indexes(
                 clear_derivatives=False,

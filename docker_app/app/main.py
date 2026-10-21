@@ -243,6 +243,11 @@ def index(request: Request) -> HTMLResponse:
             "theme_rev": theme_rev,
             "theme_color": theme_color,
             "intranet_access": "local" if is_local_host(request.url.hostname or "") else "external",
+            "initial_ui_settings": {
+                "wide_single_cover": bool(settings.get("wide_single_cover", False)),
+                "random_cover_enabled": bool(settings.get("random_cover_enabled", True)),
+                "auto_load_enabled": bool(settings.get("auto_load_enabled", True)),
+            },
         },
         headers={"Cache-Control": "no-store"},
     )

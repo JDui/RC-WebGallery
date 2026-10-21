@@ -302,6 +302,7 @@ class GalleryService:
         image_count = int(item.get("image_count") or 0)
         livephoto_count = int(item.get("livephoto_count") or 0)
         video_count = max(0, int(item.get('asset_count') or 0) - image_count - livephoto_count)
+        previews = loads_json(item.get("preview_assets_json"), [])
         return {
             "folder_name": item["folder_name"],
             "title": item.get("title") or item["folder_name"],
@@ -320,7 +321,8 @@ class GalleryService:
             "is_favorite": bool(item.get("is_favorite")),
             "review_status": item.get("review_status"),
             "review_reason": item.get("review_reason"),
-            "preview_tiles": loads_json(item.get("preview_assets_json"), []),
+            "preview_tiles": [tile for tile in previews if not tile.get("random_cover")],
+            "random_cover": next((tile for tile in previews if tile.get("random_cover")), None),
             "image_count": image_count,
             "video_count": video_count,
             "livephoto_count": livephoto_count,
@@ -355,6 +357,7 @@ class GalleryService:
             "review_status": folder.get("review_status"),
             "review_reason": folder.get("review_reason"),
             "preview_tiles": [self._asset_json(asset) for asset in preview_assets[:4]],
+            "random_cover": self._asset_json(random.choice(preview_assets)) if preview_assets else None,
             "image_count": image_count,
             "video_count": sum(1 for asset in assets if asset['media_type'] == 'video'),
             "livephoto_count": livephoto_count,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import random
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -305,10 +306,9 @@ class MediaIndexer:
             return None, None
         target_source = media_path or source
         thumb_root = target_source.parent / ".thumbs"
-        thumb_target = thumb_root / f"{target_source.stem}.webp"
+        thumb_target = thumb_root / "small" / f"{target_source.stem}.webp"
         small_thumb_target = thumb_root / "small" / f"{target_source.stem}.webp"
         if media_type != "image" or not self._derive_image_with_sidecar(source, thumb_target, small_thumb_target):
-            self.thumbnailer.ensure_image_thumbnail(source, thumb_target)
             self.thumbnailer.ensure_small_image_thumbnail(source, small_thumb_target)
         return (
             self.storage.relative_to_storage(thumb_target) if thumb_target.exists() else None,
@@ -336,7 +336,8 @@ class MediaIndexer:
             "image_count": len(image_assets),
             "livephoto_count": len(livephoto_assets),
             "asset_count": len(assets),
-            "preview_assets_json": dumps_json([self._asset_json(asset) for asset in preview_assets[:4]]),
+            "preview_assets_json": dumps_json([self._asset_json(asset) for asset in preview_assets[:4]] +
+                ([{**self._asset_json(random.choice(preview_assets)), "random_cover": True}] if preview_assets else [])),
             "year_key": (folder.get("pub_time") or "")[:4],
             "month_key": (folder.get("pub_time") or "")[:7],
         }
@@ -394,7 +395,7 @@ class MediaIndexer:
             explicit_pair_index = confirmed.get(self.storage.relative_to_storage(file_path)) or self._extract_pair_index(file_path.name)
             pair_index = explicit_pair_index or next_pair_index
             next_pair_index = max(next_pair_index, pair_index + 1)
-            thumb_path = folder_path / ".thumbs" / f"{file_path.stem}.webp"
+            thumb_path = folder_path / ".thumbs" / "small" / f"{file_path.stem}.webp"
             small_thumb_path = folder_path / ".thumbs" / "small" / f"{file_path.stem}.webp"
             width = height = None
             sidecar_result = None
@@ -404,7 +405,6 @@ class MediaIndexer:
                     width = sidecar_result.get("width")
                     height = sidecar_result.get("height")
                 else:
-                    self.thumbnailer.ensure_image_thumbnail(file_path, thumb_path)
                     self.thumbnailer.ensure_small_image_thumbnail(file_path, small_thumb_path)
             if width is None or height is None:
                 probe = self.sidecar.probe_image(file_path)
@@ -436,8 +436,11 @@ class MediaIndexer:
         return assets
 
     def _derive_image_with_sidecar(self, source: Path, thumb: Path, small: Path) -> bool:
+        if (small.exists() and small.stat().st_mtime >= source.stat().st_mtime
+                and self.thumbnailer._thumbnail_matches(small, source, self.thumbnailer.small_thumb_size)):
+            return True
         result = self.sidecar.derive_image(source, thumb, small, self.thumbnailer.sidecar_options())
-        return bool(result and thumb.exists() and small.exists())
+        return bool(result and small.exists())
 
     def _index_livephotos(
         self,
@@ -470,14 +473,13 @@ class MediaIndexer:
                     cover_path = candidate
                 else:
                     provided_cover = None
-            cover_webp = folder_path / ".thumbs" / f"{file_path.stem}.webp"
+            cover_webp = folder_path / ".thumbs" / "small" / f"{file_path.stem}.webp"
             small_cover_webp = folder_path / ".thumbs" / "small" / f"{file_path.stem}.webp"
             reverse_path = folder_path / ".reverse" / file_path.name
             if generate_derivatives:
                 if not provided_cover:
                     self.thumbnailer.ensure_video_cover(file_path, cover_path)
                 if cover_path.exists():
-                    self.thumbnailer.ensure_image_thumbnail(cover_path, cover_webp)
                     self.thumbnailer.ensure_small_image_thumbnail(cover_path, small_cover_webp)
                 if generate_reverse:
                     self.thumbnailer.ensure_reverse_video(file_path, reverse_path)

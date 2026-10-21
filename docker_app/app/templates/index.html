@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-data-layout-2' %}
+    {% set ui_revision = app_version ~ '-single-thumb-4' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -24,7 +24,7 @@
     <script defer src="/static/liquid-glass.js?v={{ ui_revision }}"></script>
     <script defer src="/static/vendor/alpinejs.min.js?v={{ app_version }}"></script>
 </head>
-<body x-data="galleryApp()" data-intranet-access="{{ intranet_access }}">
+<body x-data="galleryApp({{ initial_ui_settings | default({}) | tojson | forceescape }})" data-intranet-access="{{ intranet_access }}">
     <div class="intranet-edge" aria-hidden="true"></div>
     <svg class="ui-icon-definitions" xmlns="http://www.w3.org/2000/svg" width="0" height="0" aria-hidden="true" focusable="false">
         <defs>
@@ -401,7 +401,7 @@
                                                     </template>
                                                     <template x-if="item.has_livephoto">
                                                         <video
-                                                            class="hover-preview-video hidden"
+                                                            x-retire-video class="hover-preview-video hidden"
                                                             playsinline
                                                             muted
                                                             preload="none"
@@ -984,7 +984,7 @@
                     </article>
 
                     <article class="settings-card thumbnail-settings-card" x-show="settingsGroup === 'media'" data-settings-group="media">
-                        <h4 class="heading-with-help">界面与缩略图<button type="button" class="help-button" aria-label="界面与缩略图说明" data-tooltip="瀑布流使用 small，详情按需升级 thumb，查看器再加载原图。">?</button></h4>
+                        <h4 class="heading-with-help">界面与缩略图<button type="button" class="help-button" aria-label="界面与缩略图说明" data-tooltip="瀑布流与详情共用 thumb 缩略图，查看器加载原图。">?</button></h4>
                         <div class="interface-settings-grid">
                             <label>应用标题 <input class="ui-field" type="text" x-model="settings.app_title" placeholder="RC-WebGallery"></label>
                             <label>显示性能模式
@@ -996,6 +996,8 @@
                             </label>
                             <label class="toggle-row interface-preview-toggle switch-row"><input type="checkbox" :checked="hoverPreviewEnabled" @change="setHoverPreviewEnabled($event.target.checked)"> 自动预览 Live Photo</label>
                             <label class="toggle-row interface-preview-toggle switch-row"><input type="checkbox" x-model="settings.video_default_loop"> 视频默认循环播放</label>
+                            <label class="toggle-row interface-preview-toggle switch-row"><input type="checkbox" x-model="settings.wide_single_cover"> 宽屏使用单张简易封面</label>
+                            <label class="toggle-row interface-preview-toggle switch-row"><input type="checkbox" x-model="settings.random_cover_enabled"> 单张封面随机选图</label>
                             <label>视频默认音量（0 为静音）
                                 <input class="ui-field" type="range" min="0" max="100" step="5" x-model.number="settings.video_default_volume">
                                 <output x-text="Number(settings.video_default_volume || 0) + '%'"></output>
@@ -1003,18 +1005,9 @@
                         </div>
                         <div class="thumbnail-level-grid">
                             <div class="thumbnail-level-row">
-                                <strong>small</strong>
-                                <label>短边<input class="ui-field" type="number" min="64" max="1024" step="1" aria-label="small 缩略图短边" x-model.number="settings.small_thumb_edge"></label>
-                                <label>质量<input class="ui-field" type="number" min="1" max="100" step="1" aria-label="small 缩略图质量" x-model.number="settings.small_thumb_quality"></label>
-                                <button class="secondary-button" x-show="thumbnailRebuildConfirmLevel !== 'small'" @click="askThumbnailRebuild('small')" aria-label="重建 small 缩略图" data-tooltip="重新生成 small 缩略图">重建</button>
-                                <div class="button-row confirm-row" x-show="thumbnailRebuildConfirmLevel === 'small'" x-cloak>
-                                    <button class="primary-button confirm-anchor" @click="confirmThumbnailRebuild('small')">确认重建</button>
-                                </div>
-                            </div>
-                            <div class="thumbnail-level-row">
                                 <strong>thumb</strong>
-                                <label>短边<input class="ui-field" type="number" min="128" max="2048" step="1" aria-label="thumb 缩略图短边" x-model.number="settings.thumb_edge"></label>
-                                <label>质量<input class="ui-field" type="number" min="1" max="100" step="1" aria-label="thumb 缩略图质量" x-model.number="settings.thumb_quality"></label>
+                                <label>短边<input class="ui-field" type="number" min="64" max="1024" step="1" aria-label="thumb 缩略图短边" x-model.number="settings.small_thumb_edge"></label>
+                                <label>质量<input class="ui-field" type="number" min="1" max="100" step="1" aria-label="thumb 缩略图质量" x-model.number="settings.small_thumb_quality"></label>
                                 <button class="secondary-button" x-show="thumbnailRebuildConfirmLevel !== 'thumb'" @click="askThumbnailRebuild('thumb')" aria-label="重建 thumb 缩略图" data-tooltip="重新生成 thumb 缩略图">重建</button>
                                 <div class="button-row confirm-row" x-show="thumbnailRebuildConfirmLevel === 'thumb'" x-cloak>
                                     <button class="primary-button confirm-anchor" @click="confirmThumbnailRebuild('thumb')">确认重建</button>
@@ -1204,7 +1197,7 @@
                     </article>
 
                     <article class="settings-card storage-stats-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
-                        <h4 class="heading-with-help">数据统计<button type="button" class="help-button" aria-label="数据统计说明" data-tooltip="展示原图、缩略图与垃圾文件占用；垃圾文件包含废弃的媒体 tiny 缩略图，保留订阅和站点头像。开启“定期清理垃圾文件”后，每次拉取完成（动态、站点、小红书）都会自动清理垃圾桶残留文件与孤立记录；关闭时仅清理孤立记录，可在此手动清理。">?</button></h4>
+                        <h4 class="heading-with-help">数据统计<button type="button" class="help-button" aria-label="数据统计说明" data-tooltip="展示原图、缩略图与垃圾文件占用；垃圾文件包含废弃的旧 thumb 和 tiny 缩略图，保留订阅和站点头像。开启“定期清理垃圾文件”后，每次拉取完成（动态、站点、小红书）都会自动清理垃圾桶残留文件与孤立记录；关闭时仅清理孤立记录，可在此手动清理。">?</button></h4>
                         <div class="storage-stat-list">
                             <div class="storage-stat-row">
                                 <span>原图文件</span>
@@ -1784,7 +1777,15 @@
         </main>
 
         <div class="detail-backdrop" data-testid="detail-backdrop" data-modal-layer="detail" role="dialog" :aria-label="detail.folder?.title || '动态详情'" tabindex="-1" x-show="detail.open || detailClosing" :class="{ open: detail.open && !detailClosing, closing: detailClosing }" @click.self="closeDetail()" @wheel.prevent.stop @touchmove.prevent.self x-cloak>
-            <section class="detail-shell" x-ref="detailShell" x-show="detail.open || detailClosing" :class="{ open: detail.open && !detailClosing, closing: detailClosing }" @wheel.stop @touchmove.stop @scroll="scheduleDetailWindowShift()">
+            <section class="detail-shell" x-ref="detailShell" x-show="detail.open || detailClosing" :class="{ open: detail.open && !detailClosing, closing: detailClosing }" @wheel.stop @touchmove.stop @scroll.passive="updateDetailHeader($event); scheduleDetailWindowShift()">
+                <div class="detail-sticky-bar">
+                    <div class="detail-compact-bar" role="toolbar" aria-label="动态详情操作" x-show="detailHeaderCompact" x-transition.opacity.duration.160ms x-cloak>
+                        <strong class="detail-compact-title" :title="detail.folder?.title" x-text="detail.folder?.title || '动态详情'"></strong>
+                        <button type="button" class="secondary-button viewer-icon-button" :disabled="!canShowPreviousFolder()" @click="showPreviousFolder()" aria-label="上一篇动态"><svg class="nav-icon" aria-hidden="true"><use href="#icon-previous"></use></svg></button>
+                        <button type="button" class="secondary-button viewer-icon-button" :disabled="!canShowNextFolder()" @click="showNextFolder()" aria-label="下一篇动态"><svg class="nav-icon" aria-hidden="true"><use href="#icon-next"></use></svg></button>
+                        <button type="button" class="secondary-button viewer-icon-button" data-modal-close @click="closeDetail()" aria-label="关闭动态详情"><svg class="nav-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
+                    </div>
+                </div>
                 <header class="detail-head">
                     <div class="detail-head-copy">
                         <p class="viewer-kicker" :title="detail.folder?.pub_time" x-text="displayDate(detail.folder?.pub_time)"></p>
@@ -1854,7 +1855,7 @@
                                 </template>
                                 <template x-if="pair.livephoto">
                                     <video
-                                        class="hover-preview-video hidden"
+                                        x-retire-video class="hover-preview-video hidden"
                                         playsinline
                                         muted
                                         preload="none"
@@ -1978,7 +1979,6 @@
                     <template x-if="deletePairConfirmStep >= 1">
                         <div class="button-row confirm-row viewer-action-row viewer-action-confirm">
                             <button type="button" class="primary-button danger-confirm confirm-anchor" @click="confirmDeleteViewerPair()">确认永久删除，不可恢复</button>
-                            <button type="button" class="secondary-button" @click="cancelDeleteViewerPair()">取消</button>
                         </div>
                     </template>
                     <button type="button" class="secondary-button viewer-icon-button" data-modal-close @click="closeViewer()" aria-label="关闭" title="关闭（Esc）"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
@@ -1998,13 +1998,13 @@
                         <template x-if="viewer.pair?.image && !viewerPreviewRetired">
                             <img x-retire-image class="viewer-stage-preview" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) }" :src="viewerPreviewUrl()" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片预览'" decoding="async" loading="eager" draggable="false" @load="fadeLoadedImage($event)">
                         </template>
-                        <div class="viewer-stage-loading-wash" :class="{ hidden: !viewerShouldShowImageWash() }" :style="viewerMediaStyle()"></div>
+                        <div class="viewer-stage-loading-wash" x-show="viewerShouldShowImageWash()" x-transition:enter="wash-fade" x-transition:enter-start="wash-transparent" x-transition:enter-end="wash-visible" x-transition:leave="wash-fade" x-transition:leave-start="wash-visible" x-transition:leave-end="wash-transparent" :style="viewerMediaStyle()"></div>
                         <template x-if="viewer.pair?.image">
                             <img x-retire-image class="viewer-stage-image" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) || !viewerImageReady }" :src="viewer.pair?.image?.url" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片'" :data-viewer-token="viewerToken" decoding="async" loading="eager" fetchpriority="high" draggable="false" @load="viewerMediaLoaded('image', $event)" @error="viewerMediaFailed('image', $event)">
                         </template>
                         <template x-if="viewer.pair?.livephoto">
                             <video
-                                class="viewer-video"
+                                x-retire-video class="viewer-video"
                                 :style="viewerMediaStyle()"
                                 :class="{ hidden: !viewer.showVideo }"
                                 playsinline

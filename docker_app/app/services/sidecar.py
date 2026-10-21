@@ -61,26 +61,28 @@ class SidecarRunner:
         options: dict[str, int] | None = None,
     ) -> dict[str, Any] | None:
         options = options or {}
-        return self._run_json(
+        result = self._run_json(
             self.media_worker,
             [
                 "derive-image",
                 "--source",
                 str(source),
                 "--thumb",
-                str(thumb),
+                str(small),
                 "--small",
                 str(small),
                 "--thumb-edge",
-                str(options.get("thumb_edge", 576)),
+                str(options.get("small_edge", 368)),
                 "--thumb-quality",
-                str(options.get("thumb_quality", 68)),
+                str(options.get("small_quality", 50)),
                 "--small-edge",
-                str(options.get("small_edge", 192)),
+                str(options.get("small_edge", 368)),
                 "--small-quality",
-                str(options.get("small_quality", 48)),
+                str(options.get("small_quality", 50)),
             ],
         )
+        # Older workers produce two tiers or ignore WebP quality. Use the local fallback.
+        return result if result and result.get("thumbnail_policy") == "single-v1" else None
 
     def probe_image(self, source: Path) -> dict[str, Any] | None:
         return self._run_json(self.media_worker, ["probe-image", "--source", str(source)])

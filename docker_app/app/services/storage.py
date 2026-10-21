@@ -214,6 +214,7 @@ class StorageService:
         if self.db is not None:
             with self.db.connect() as conn:
                 conn.execute('update assets set tiny_thumb_rel_path=null where tiny_thumb_rel_path is not null')
+                conn.execute("update assets set thumb_rel_path=small_thumb_rel_path where thumb_rel_path like '%/.thumbs/%.webp'")
         return {"removed_files": removed_files, "removed_bytes": removed_bytes}
 
     def trash_asset_files(self, trash_items: list[dict]) -> list[Path]:
@@ -221,12 +222,12 @@ class StorageService:
         seen: set[Path] = set()
         protected = set()
         if self.db is not None:
-            # A deleted record may share files with a live record. Media tiny
-            # derivatives are obsolete, but originals and all other live paths
-            # must never become garbage through an old trash reference.
+            # Deleted records may share originals and retained small thumbnails
+            # with live records. Retired thumb/tiny paths are garbage unless
+            # also referenced as an original, cover or avatar.
             with self.db.connect() as conn:
                 for query in (
-                    'select rel_path,thumb_rel_path,small_thumb_rel_path,cover_rel_path,reverse_rel_path from assets',
+                    'select rel_path,small_thumb_rel_path,cover_rel_path,reverse_rel_path from assets',
                     'select image_path,video_path from livephoto_pairs',
                     'select rel_path from site_assets where rel_path is not null',
                 ):
@@ -271,6 +272,11 @@ class StorageService:
         for root in (self.config.images_dir, self.config.livephoto_dir, self.config.data_dir / 'sites'):
             if not root.exists():
                 continue
+            for thumbs in root.rglob('.thumbs'):
+                if thumbs.is_dir() and not thumbs.is_symlink() and not thumbs.is_junction():
+                    for path in thumbs.glob('*.webp'):
+                        self._background_checkpoint()
+                        collect(path)
             for tiny in root.rglob('tiny'):
                 if tiny.is_dir() and not tiny.is_symlink() and not tiny.is_junction() and tiny.parent.name == '.thumbs':
                     for path in tiny.rglob('*'):

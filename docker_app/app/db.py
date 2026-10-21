@@ -25,6 +25,9 @@ DEFAULT_SETTINGS = {
     "image_threshold_default_migrated": False,
     "reload_all_once": False,
     "auto_load_enabled": True,
+    "wide_single_cover": False,
+    "random_cover_enabled": True,
+    "single_thumbnail_migrated": True,
     "download_sleep": 0.2,
     "scheduler_enabled": False,
     "scheduler_interval_hours": 12,
@@ -58,10 +61,8 @@ DEFAULT_SETTINGS = {
     "site_proxy_host": "127.0.0.1",
     "site_proxy_port": 7890,
     "review_source_open_mode": "browser",
-    "thumb_edge": 576,
-    "thumb_quality": 68,
-    "small_thumb_edge": 192,
-    "small_thumb_quality": 48,
+    "small_thumb_edge": 368,
+    "small_thumb_quality": 50,
     "video_default_loop": True,
     "video_default_volume": 0,
     # 界面配色：色相 / 饱和度 / 明度三个参数，整套色板由 app/theme.py 派生。
@@ -81,7 +82,7 @@ LEGACY_SITE_USER_AGENTS = {
     "PostArchiver/0.1",
 }
 LEGACY_SITE_REQUEST_TIMEOUTS = {20, 120}
-GALLERY_INDEX_VERSION = 3
+GALLERY_INDEX_VERSION = 4
 
 DEFAULT_SITE_RULES = {
     "mode": "blacklist",
@@ -562,6 +563,13 @@ class Database:
             existing_settings.get("scheduler_interval_hours"),
             DEFAULT_SETTINGS["scheduler_interval_hours"],
         )
+        if "single_thumbnail_migrated" not in existing_settings:
+            for key, old_default in (("small_thumb_edge", 192), ("small_thumb_quality", 48)):
+                previous = loads_json(existing_settings.get(key), old_default)
+                if previous == old_default:
+                    conn.execute("insert or replace into settings(key,value) values (?,?)",
+                                 (key, dumps_json(DEFAULT_SETTINGS[key])))
+            conn.execute("delete from settings where key in ('thumb_edge','thumb_quality')")
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
                 "insert or ignore into settings(key, value) values (?, ?)",
@@ -772,6 +780,7 @@ class Database:
 
     def save_settings(self, updates: dict[str, Any]) -> dict[str, Any]:
         current = self.get_settings()
+        updates = {key: value for key, value in updates.items() if key not in {"thumb_edge", "thumb_quality"}}
         current.update(updates)
         with self.control_connect() as conn:
             for key, value in updates.items():
