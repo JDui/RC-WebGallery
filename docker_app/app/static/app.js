@@ -478,6 +478,7 @@ function galleryApp(initialSettings = {}) {
     viewerPendingDirection: "",
     viewerZoom: 1,
     viewerToolbarOpen: false,
+    viewerToolbarHideTimer: null,
     viewerOffsetX: 0,
     viewerOffsetY: 0,
     viewerTransitionEnabled: true,
@@ -497,8 +498,7 @@ function galleryApp(initialSettings = {}) {
       active: false,
       isPinch: false,
     },
-    viewerWheelOffset: 0,
-    viewerWheelNavigateOffset: 0,
+    trackpadGesture: null,
     viewerWheelTimer: null,
     viewerNavigationLockedUntil: 0,
     timeFilterOpen: false,
@@ -1047,7 +1047,7 @@ function galleryApp(initialSettings = {}) {
 
     touchBackLayer({ keyboard = false } = {}) {
       const layer = this.topOverlayLayer();
-      // The viewer owns horizontal image switching, zooming and pull-down dismissal.
+      // The viewer handles its own image navigation, zooming and horizontal actions.
       if (layer === "viewer") return keyboard && this.viewer.open ? "viewer" : "";
       if (layer === "detail" && this.detailClosing) return "";
       if (layer) return layer;
@@ -1073,6 +1073,7 @@ function galleryApp(initialSettings = {}) {
 
     installTouchNavigation() {
       this.installMediaContextMenu();
+      document.addEventListener("wheel", event => this.compactTrackpadWheel(event), { capture: true, passive: false });
       document.addEventListener("touchstart", event => this.startRandomPull(event), { capture: true, passive: true });
       document.addEventListener("touchmove", event => this.moveRandomPull(event), { capture: true, passive: false });
       document.addEventListener("touchend", event => this.endRandomPull(event), { capture: true, passive: false });
@@ -1101,6 +1102,72 @@ function galleryApp(initialSettings = {}) {
         event.preventDefault();
         event.stopImmediatePropagation();
       }, true);
+    },
+
+    wheelGestureStep(event, field, context) {
+      const now = Date.now();
+      let gesture = this[field];
+      if (!gesture || now - gesture.lastAt > 240) {
+        gesture = { x: 0, y: 0, axis: "", fired: false, context, lastAt: now };
+        this[field] = gesture;
+      }
+      gesture.lastAt = now;
+      // Consume the remainder of a burst even if its action changed the active layer.
+      if (gesture.context !== context) { gesture.fired = true; return gesture; }
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
+      gesture.x += (event.deltaX || 0) * unit;
+      gesture.y += (event.deltaY || 0) * unit;
+      if (!gesture.axis && Math.max(Math.abs(gesture.x), Math.abs(gesture.y)) >= 12) {
+        if (Math.abs(gesture.x) > Math.abs(gesture.y) * 1.4) gesture.axis = "x";
+        else if (Math.abs(gesture.y) > Math.abs(gesture.x) * 1.4) gesture.axis = "y";
+      }
+      return gesture;
+    },
+
+    compactTrackpadWheel(event) {
+      if (!(this.compactViewport || this.narrowViewport) || event.ctrlKey || event.metaKey) return;
+      const layer = this.topOverlayLayer();
+      if (layer === "viewer") return;
+      const target = event.target;
+      if (target.closest?.('input, textarea, select, audio, iframe, [contenteditable]:not([contenteditable="false"]), [role="slider"], [data-gesture-ignore]')) return;
+      const player = target.closest?.("video");
+      if (player && event.clientY > player.getBoundingClientRect().bottom - 72) return;
+      for (let element = target; element && element !== document.body; element = element.parentElement) {
+        if (element.scrollWidth > element.clientWidth + 2 && /^(auto|scroll)$/.test(window.getComputedStyle(element).overflowX)) return;
+      }
+      const newBurst = !this.trackpadGesture || Date.now() - this.trackpadGesture.lastAt > 240;
+      const gesture = this.wheelGestureStep(event, "trackpadGesture", this.touchBackContextKey());
+      if (newBurst) {
+        gesture.pullAllowed = this.randomPullAllowed(true);
+        for (let element = target; element && element !== document.body; element = element.parentElement) {
+          if (element.scrollTop > 2) gesture.pullAllowed = false;
+        }
+      }
+      if (gesture.fired) { if (event.cancelable) event.preventDefault(); return; }
+      if (gesture.axis === "x" && gesture.x < 0 && this.touchBackLayer()) {
+        if (event.cancelable) event.preventDefault();
+        if (-gesture.x >= this.touchBackThreshold()) {
+          gesture.fired = true;
+          this.navigateTouchBack();
+        }
+      } else if (gesture.axis === "y" && layer === "video-note" && this.videoFeed.active
+          && !target.closest?.('button, a, header, .video-feed-caption')) {
+        if (event.cancelable) event.preventDefault();
+        if (Math.abs(gesture.y) >= 72) {
+          gesture.fired = true;
+          this.stepVideoFeed(gesture.y > 0 ? 1 : -1);
+        }
+      } else if (gesture.axis === "y" && gesture.y < 0 && gesture.pullAllowed && this.randomPullAllowed(true)
+          && target.closest?.(".workspace") && !target.closest?.('button:not(.card-open-button), a, video')) {
+        for (let element = target; element && element !== document.body; element = element.parentElement) {
+          if (element.scrollTop > 2) return;
+        }
+        if (event.cancelable) event.preventDefault();
+        if (-gesture.y >= this.randomPullThreshold()) {
+          gesture.fired = true;
+          this.refreshRandomGallery();
+        }
+      }
     },
 
     startTouchBack(event) {
@@ -1434,12 +1501,12 @@ function galleryApp(initialSettings = {}) {
       if (!this.viewer.open) {
         return;
       }
-      if (event.key === "ArrowLeft") {
-        this.showPreviousPair();
-      }
-      if (event.key === "ArrowRight") {
-        this.showNextPair();
-      }
+      if (event.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) event.preventDefault();
+      if (event.key === "ArrowUp") this.showPreviousPair();
+      if (event.key === "ArrowDown") this.showNextPair();
+      if (event.key === "ArrowRight" && !event.repeat) this.closeViewer();
+      if (event.key === "ArrowLeft") this.revealViewerToolbar();
     },
 
     handleEscape() {
@@ -3441,8 +3508,8 @@ function galleryApp(initialSettings = {}) {
       }
     },
 
-    randomPullAllowed() {
-      return this.mobileRandomRefresh() && this.currentView === "gallery" && this.randomModeActive()
+    randomPullAllowed(trackpad = false) {
+      return (this.mobileRandomRefresh() || (trackpad && (this.compactViewport || this.narrowViewport))) && this.currentView === "gallery" && this.randomModeActive()
         && !this.topOverlayLayer() && !this.sidebarDrawerOpen && !this.timeFilterOpen
         && !this.galleryFetching && !this.randomRefreshing && (window.scrollY || 0) <= 2;
     },
@@ -3655,7 +3722,7 @@ function galleryApp(initialSettings = {}) {
 
     startVideoFeedGesture(event) {
       this.videoFeedGesture = null;
-      if (!this.narrowViewport || !this.videoFeed.active || event.touches.length !== 1 || event.target.closest('button, a, input, header, .video-feed-caption')) return;
+      if (!(this.compactViewport || this.narrowViewport) || !this.videoFeed.active || event.touches.length !== 1 || event.target.closest('button, a, input, header, .video-feed-caption')) return;
       const touch = event.touches[0];
       const player = this.$refs?.xhsNoteVideo;
       if (player && touch.clientY > player.getBoundingClientRect().bottom - 72) return;
@@ -4228,6 +4295,8 @@ function galleryApp(initialSettings = {}) {
     },
 
     closeViewer(skipAnimation = false) {
+      if (this.viewerToolbarHideTimer) window.clearTimeout(this.viewerToolbarHideTimer);
+      this.viewerToolbarHideTimer = null;
       this.viewerToolbarOpen = false;
       this.cancelViewerPreviewRetirement();
       if (!this.viewer.open && !this.viewerClosing) {
@@ -5086,7 +5155,7 @@ function galleryApp(initialSettings = {}) {
       this.pauseCurrentViewerMedia(true);
       this.viewerSequence = sequence;
       this.viewerIndex = currentIndex - 1;
-      this.openViewerEntry(sequence[this.viewerIndex], true, false, "right");
+      this.openViewerEntry(sequence[this.viewerIndex], true, false, "down");
     },
 
     showNextPair() {
@@ -5101,7 +5170,7 @@ function galleryApp(initialSettings = {}) {
       this.pauseCurrentViewerMedia(true);
       this.viewerSequence = sequence;
       this.viewerIndex = currentIndex + 1;
-      this.openViewerEntry(sequence[this.viewerIndex], true, false, "left");
+      this.openViewerEntry(sequence[this.viewerIndex], true, false, "up");
     },
 
     pauseCurrentViewerMedia(resetSource = false) {
@@ -5144,8 +5213,6 @@ function galleryApp(initialSettings = {}) {
       this.viewerOffsetX = 0;
       this.viewerOffsetY = 0;
       this.viewerTransitionEnabled = true;
-      this.viewerWheelOffset = 0;
-      this.viewerWheelNavigateOffset = 0;
       if (this.viewerWheelTimer) {
         window.clearTimeout(this.viewerWheelTimer);
         this.viewerWheelTimer = null;
@@ -5298,79 +5365,58 @@ function galleryApp(initialSettings = {}) {
       this.closeViewer();
     },
 
+    revealViewerToolbar() {
+      if (this.viewerToolbarHideTimer) window.clearTimeout(this.viewerToolbarHideTimer);
+      this.viewerToolbarHideTimer = null;
+      this.viewerToolbarOpen = true;
+    },
+
+    scheduleViewerToolbarHide() {
+      if (!this.viewerToolbarOpen || this.viewerToolbarHideTimer) return;
+      this.viewerToolbarHideTimer = window.setTimeout(() => {
+        this.viewerToolbarHideTimer = null;
+        const toolbar = document.querySelector(".viewer-floating-right");
+        if (!toolbar?.matches(":focus-visible") && !toolbar?.querySelector(":focus-visible")) this.viewerToolbarOpen = false;
+      }, 1000);
+    },
+
+    viewerPointerNearToolbar(event) {
+      if (event.pointerType !== "mouse" || this.viewerGesture.active) return;
+      if (event.target.closest?.(".viewer-floating-right") || event.clientX >= window.innerWidth - 88) {
+        this.revealViewerToolbar();
+      } else this.scheduleViewerToolbarHide();
+    },
+
     viewerWheel(event) {
-      if (this.viewerGesture.active || this.viewerGesture.isPinch) {
+      event.preventDefault();
+      if (this.viewerGesture.active || this.viewerGesture.isPinch || !this.viewer.open) return;
+      if (event.ctrlKey || event.metaKey) {
+        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
+        this.setViewerZoomLevel(this.viewerZoom * Math.exp(-event.deltaY * unit * 0.012), event, false);
         return;
       }
-      const absX = Math.abs(event.deltaX || 0);
-      const absY = Math.abs(event.deltaY || 0);
-      const zoomGesture = event.ctrlKey || event.metaKey;
-      event.preventDefault();
-      if (this.viewerZoom > 1 && !zoomGesture) {
-        const likelyMouseWheel = event.deltaMode === 1 || (absY >= 48 && absY > absX * 1.4);
-        if (likelyMouseWheel && absY > absX * 1.4) {
-          const direction = event.deltaY < 0 ? 1 : -1;
-          this.stepViewerZoom(direction, event);
-          return;
-        }
+      if (this.viewerZoom > 1.02) {
         this.viewerTransitionEnabled = false;
-        this.viewerOffsetX -= event.deltaX || 0;
-        this.viewerOffsetY -= event.deltaY || 0;
+        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
+        this.viewerOffsetX -= (event.deltaX || 0) * unit;
+        this.viewerOffsetY -= (event.deltaY || 0) * unit;
         this.clampViewerTransform(event.currentTarget);
-        if (this.viewerWheelTimer) {
-          window.clearTimeout(this.viewerWheelTimer);
-        }
+        if (this.viewerWheelTimer) window.clearTimeout(this.viewerWheelTimer);
         this.viewerWheelTimer = window.setTimeout(() => {
           this.viewerTransitionEnabled = true;
           this.viewerWheelTimer = null;
         }, 120);
         return;
       }
-      if (this.viewerZoom <= 1 && absX > Math.max(18, absY * 1.25)) {
-        this.viewerWheelNavigateOffset += event.deltaX || 0;
-        if (this.viewerWheelTimer) {
-          window.clearTimeout(this.viewerWheelTimer);
-        }
-        this.viewerWheelTimer = window.setTimeout(() => {
-          this.viewerWheelNavigateOffset = 0;
-          this.viewerWheelTimer = null;
-        }, 140);
-        if (Math.abs(this.viewerWheelNavigateOffset) < 82) {
-          return;
-        }
-        const direction = this.viewerWheelNavigateOffset > 0 ? 1 : -1;
-        this.viewerWheelNavigateOffset = 0;
-        if (direction > 0) {
-          this.showNextPair();
-        } else {
-          this.showPreviousPair();
-        }
-        return;
+      const gesture = this.wheelGestureStep(event, "trackpadGesture", "viewer");
+      if (gesture.fired) return;
+      if (gesture.axis === "y" && Math.abs(gesture.y) >= 72) {
+        gesture.fired = true;
+        if (gesture.y > 0) this.showNextPair(); else this.showPreviousPair();
+      } else if (gesture.axis === "x" && Math.abs(gesture.x) >= 82) {
+        gesture.fired = true;
+        if (gesture.x < 0) this.closeViewer(); else this.revealViewerToolbar();
       }
-      if (!zoomGesture && absY < Math.max(8, absX)) {
-        return;
-      }
-      const threshold = zoomGesture ? 4 : 72;
-      this.viewerWheelOffset += event.deltaY;
-      if (this.viewerWheelTimer) {
-        window.clearTimeout(this.viewerWheelTimer);
-      }
-      this.viewerWheelTimer = window.setTimeout(() => {
-        this.viewerWheelOffset = 0;
-        this.viewerWheelNavigateOffset = 0;
-        this.viewerWheelTimer = null;
-      }, 120);
-      if (Math.abs(this.viewerWheelOffset) < threshold) {
-        return;
-      }
-      const direction = this.viewerWheelOffset < 0 ? 1 : -1;
-      this.viewerWheelOffset = 0;
-      if (zoomGesture) {
-        const ratio = Math.exp(-event.deltaY * 0.012);
-        this.setViewerZoomLevel((Number(this.viewerZoom) || 1) * ratio, event, false);
-        return;
-      }
-      this.stepViewerZoom(direction, event);
     },
 
     viewerZoomSteps() {
@@ -5495,8 +5541,8 @@ function galleryApp(initialSettings = {}) {
       if (!this.viewerGesture.dismissAxis && Math.max(Math.abs(deltaX), Math.abs(deltaY)) > 12) {
         this.viewerGesture.dismissAxis = Math.abs(deltaY) > Math.abs(deltaX) * 1.4 ? "vertical" : "horizontal";
       }
-      this.viewerOffsetX = deltaX * 0.35;
-      this.viewerOffsetY = deltaY * (event.pointerType === "touch" && this.viewerGesture.dismissAxis === "vertical" && deltaY > 0 ? 0.65 : 0.35);
+      this.viewerOffsetX = deltaX * (this.viewerGesture.dismissAxis === "horizontal" && deltaX > 0 ? 0.65 : 0.35);
+      this.viewerOffsetY = deltaY * 0.35;
     },
 
     viewerPointerUp(event) {
@@ -5526,19 +5572,13 @@ function galleryApp(initialSettings = {}) {
       } else if (wasPinch) {
         this.setViewerZoomLevel(this.viewerZoom, null, false);
       } else if (this.viewerZoom <= 1.02) {
-        if (event.pointerType === "touch" && this.viewerGesture.dismissAxis === "vertical"
-            && deltaY >= 96 && deltaY > absX * 1.4) {
+        if (this.viewerGesture.dismissAxis === "horizontal" && deltaX >= 96 && deltaX > absY * 1.4) {
           this.viewerSyntheticTapUntil = Date.now() + 450;
           this.closeViewer();
-        } else if (event.pointerType === "touch" && this.viewerGesture.dismissAxis === "vertical"
-            && deltaY <= -72 && -deltaY > absX * 1.4) {
-          this.viewerToolbarOpen = true;
-        } else if (this.viewerGesture.dismissAxis !== "vertical" && absX > 120 && absX > absY * 1.2) {
-          if (deltaX < 0) {
-            this.showNextPair();
-          } else {
-            this.showPreviousPair();
-          }
+        } else if (this.viewerGesture.dismissAxis === "horizontal" && deltaX <= -72 && -deltaX > absY * 1.4) {
+          this.revealViewerToolbar();
+        } else if (this.viewerGesture.dismissAxis === "vertical" && absY > 100 && absY > absX * 1.4) {
+          if (deltaY < 0) this.showNextPair(); else this.showPreviousPair();
         } else if (!this.viewerGesture.moved && event.pointerType !== "mouse") {
           this.viewerSyntheticTapUntil = Date.now() + 220;
           this.handleViewerTap(event.clientX, event.clientY, event.currentTarget);

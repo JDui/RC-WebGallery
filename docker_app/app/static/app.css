@@ -3392,12 +3392,12 @@ html.is-interacting .detail-card {
     opacity: 0;
 }
 
-.viewer-stage-wrap.switch-left {
-    animation: viewer-fade-left 420ms var(--ease-fluid);
+.viewer-stage-wrap.switch-up {
+    animation: viewer-fade-up 420ms var(--ease-fluid);
 }
 
-.viewer-stage-wrap.switch-right {
-    animation: viewer-fade-right 420ms var(--ease-fluid);
+.viewer-stage-wrap.switch-down {
+    animation: viewer-fade-down 420ms var(--ease-fluid);
 }
 
 .viewer-floating {
@@ -3888,9 +3888,9 @@ html.is-interacting .detail-card {
     }
 }
 
-@keyframes viewer-fade-left {
+@keyframes viewer-fade-up {
     0% {
-        transform: translate3d(18px, 0, 0) scale(0.992);
+        transform: translate3d(0, 18px, 0) scale(0.992);
         opacity: 0;
     }
     45% {
@@ -3902,9 +3902,9 @@ html.is-interacting .detail-card {
     }
 }
 
-@keyframes viewer-fade-right {
+@keyframes viewer-fade-down {
     0% {
-        transform: translate3d(-18px, 0, 0) scale(0.992);
+        transform: translate3d(0, -18px, 0) scale(0.992);
         opacity: 0;
     }
     45% {

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-pull-toolbar-links-1' %}
+    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -2000,30 +2000,28 @@
         </div>
 
         <div class="viewer-backdrop" data-testid="viewer-backdrop" data-modal-layer="viewer" role="dialog" aria-label="图片查看器" tabindex="-1" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @click.self="closeViewer()" @wheel.prevent.stop @touchmove.prevent.stop x-cloak>
-            <div class="viewer-shell viewer-shell-full" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @click="viewerShellClick($event)" @wheel.prevent.stop @touchmove.prevent.stop>
-                <div class="viewer-floating viewer-floating-right" :class="{ 'toolbar-open': viewerToolbarOpen }" role="toolbar" aria-label="图片操作" @pointerenter="if ($event.pointerType === 'mouse') viewerToolbarOpen = true" @pointerleave="if ($event.pointerType === 'mouse' && !$el.querySelector(':focus-visible')) viewerToolbarOpen = false" @focusin="viewerToolbarOpen = true" @focusout="$nextTick(() => { if (!$el.matches(':hover') && !$el.contains(document.activeElement)) viewerToolbarOpen = false })" @click.stop @wheel.prevent.stop @touchmove.prevent.stop>
-                    <button type="button" class="secondary-button viewer-icon-button viewer-toolbar-toggle" :aria-expanded="viewerToolbarOpen" aria-label="图片工具栏" data-tooltip="图片工具栏，悬停或点击展开" @click="viewerToolbarOpen = !viewerToolbarOpen"><svg class="viewer-control-icon" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
+            <div class="viewer-shell viewer-shell-full" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @pointermove="viewerPointerNearToolbar($event)" @pointerleave="scheduleViewerToolbarHide()" @click="viewerShellClick($event)" @wheel.prevent.stop @touchmove.prevent.stop>
+                <div class="viewer-floating viewer-floating-right" :class="{ 'toolbar-open': viewerToolbarOpen }" role="toolbar" aria-label="图片操作" aria-orientation="vertical" tabindex="0" @pointerenter="if ($event.pointerType === 'mouse') revealViewerToolbar()" @focusin="revealViewerToolbar()" @focusout="$nextTick(() => { if (!$el.contains(document.activeElement)) scheduleViewerToolbarHide() })" @click.stop @wheel.prevent.stop @touchmove.prevent.stop>
                     <div class="viewer-toolbar-actions">
-                    <button type="button" class="secondary-button viewer-action-button" x-show="viewer.pair?.livephoto" @click="cyclePlayback()" :aria-label="`播放模式：${playbackModeLabel()}`" :data-tooltip="`播放模式：${playbackModeLabel()}，点击切换`" x-text="playbackModeLabel()"></button>
-                    <button type="button" class="secondary-button viewer-icon-button" x-show="viewer.folder?.folder_name" @click="openViewerFolder()" aria-label="返回动态" data-tooltip="返回动态"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-back"></use></svg></button>
-                    <div class="viewer-pagination" role="group" aria-label="图片翻页">
-                        <button type="button" class="secondary-button viewer-icon-button" :disabled="!canShowPreviousPair()" @click="showPreviousPair()" aria-label="上一张" data-tooltip="上一张（←）"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-previous"></use></svg></button>
-                        <span class="viewer-position" role="status" aria-label="当前图片序号" x-text="viewerPositionText()"></span>
-                        <button type="button" class="secondary-button viewer-icon-button" :disabled="!canShowNextPair()" @click="showNextPair()" aria-label="下一张" data-tooltip="下一张（→）"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-next"></use></svg></button>
-                    </div>
-                    <template x-if="deletePairConfirmStep < 1">
-                        <button type="button" class="secondary-button danger-button viewer-icon-button" @click="askDeleteViewerPair()" aria-label="删除当前图片" data-tooltip="永久删除当前图片，不可恢复"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-trash"></use></svg></button>
-                    </template>
-                    <template x-if="deletePairConfirmStep >= 1">
-                        <div class="button-row confirm-row viewer-action-row viewer-action-confirm">
-                            <button type="button" class="primary-button danger-confirm confirm-anchor" @click="confirmDeleteViewerPair()">确认永久删除，不可恢复</button>
+                        <template x-if="deletePairConfirmStep < 1">
+                            <button type="button" class="secondary-button danger-button viewer-icon-button" @click="askDeleteViewerPair()" aria-label="删除当前图片" data-tooltip="永久删除当前图片，不可恢复"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-trash"></use></svg></button>
+                        </template>
+                        <template x-if="deletePairConfirmStep >= 1">
+                            <div class="button-row confirm-row viewer-action-row viewer-action-confirm">
+                                <button type="button" class="primary-button danger-confirm confirm-anchor" @click="confirmDeleteViewerPair()">确认永久删除，不可恢复</button>
+                            </div>
+                        </template>
+                        <span class="viewer-toolbar-spacer" aria-hidden="true"></span>
+                        <div class="viewer-pagination" role="group" aria-label="图片翻页">
+                            <button type="button" class="secondary-button viewer-icon-button" :disabled="!canShowPreviousPair()" @click="showPreviousPair()" aria-label="上一张" data-tooltip="上一张（↑）"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-previous"></use></svg></button>
+                            <span class="viewer-position" role="status" aria-label="当前图片序号" x-text="viewerPositionText()"></span>
+                            <button type="button" class="secondary-button viewer-icon-button" :disabled="!canShowNextPair()" @click="showNextPair()" aria-label="下一张" data-tooltip="下一张（↓）"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-next"></use></svg></button>
                         </div>
-                    </template>
-                    <button type="button" class="secondary-button viewer-icon-button" data-modal-close @click="closeViewer()" aria-label="关闭" title="关闭（Esc）"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
-                    <button type="button" class="secondary-button viewer-icon-button viewer-toolbar-hide" @click="viewerToolbarOpen = false; $el.blur()" aria-label="收起工具栏" data-tooltip="收起工具栏，上滑图片可再次展开"><svg class="viewer-control-icon" aria-hidden="true"><path d="m5 9 7 7 7-7"/></svg></button>
+                        <span class="viewer-toolbar-spacer" aria-hidden="true"></span>
+                        <button type="button" class="secondary-button viewer-icon-button" data-modal-close @click="closeViewer()" aria-label="关闭" title="关闭（Esc）"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
                     </div>
                 </div>
-                <article class="viewer-stage-wrap" :class="{ live: viewer.pair?.livephoto, closing: viewerClosing, 'switch-left': viewerSwitchDirection === 'left', 'switch-right': viewerSwitchDirection === 'right', 'is-swapping': viewerSwapPending }" x-show="viewer.pair || viewerClosing" x-cloak>
+                <article class="viewer-stage-wrap" :class="{ live: viewer.pair?.livephoto, closing: viewerClosing, 'switch-up': viewerSwitchDirection === 'up', 'switch-down': viewerSwitchDirection === 'down', 'is-swapping': viewerSwapPending }" x-show="viewer.pair || viewerClosing" x-cloak>
                     <div
                         class="viewer-media stage"
                         :class="{ replayable: playbackMode === 'once' && viewer.pair?.livephoto && !viewer.showVideo, dragging: !viewerTransitionEnabled }"

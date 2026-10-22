@@ -81,12 +81,12 @@ Compose 中的关键环境变量如下：
 
 ### AMD64 NAS 使用预构建镜像
 
-v11.4.3 的 AMD64 镜像包不纳入 Git 工作树。请从[RC-WebGallery Releases 页面](https://github.com/JDui/RC-WebGallery/releases)或其他正式发布交付物取得对应版本的 tar 包和 <code>.sha256</code> 校验文件；页面上的版本和资产名称以实际发布内容为准。将镜像包和对应部署包解压到 NAS，保留其中的目录关系；部署包已包含默认 Compose 和浏览器沙箱配置。在部署目录执行：
+v12.0 的 AMD64 镜像包不纳入 Git 工作树。请从[RC-WebGallery Releases 页面](https://github.com/JDui/RC-WebGallery/releases)或其他正式发布交付物取得对应版本的 tar 包和 <code>.sha256</code> 校验文件；页面上的版本和资产名称以实际发布内容为准。将镜像包和对应部署包解压到 NAS，保留其中的目录关系；部署包已包含默认 Compose 和浏览器沙箱配置。在部署目录执行：
 
 ~~~bash
-sha256sum -c zzs-bili-gallery_v11.4.3_amd64.tar.sha256
-docker load -i zzs-bili-gallery_v11.4.3_amd64.tar
-docker image inspect zzs-bili-gallery:11.4.3-amd64 --format '{{.Id}}'
+sha256sum -c zzs-bili-gallery_v12.0_amd64.tar.sha256
+docker load -i zzs-bili-gallery_v12.0_amd64.tar
+docker image inspect zzs-bili-gallery:12.0-amd64 --format '{{.Id}}'
 ~~~
 
 启动前必须编辑 <code>docker_app/docker-compose.nas-amd64.yml</code> 的 <code>volumes</code>。文件中的示例宿主机路径是占位配置，请改成 NAS 上真实、可写的目录，并保留容器目标路径：
@@ -114,7 +114,7 @@ NAS Compose 已将容器端口 <code>7860</code> 映射到宿主机 <code>7860</
 docker compose -f docker_app/docker-compose.nas-amd64.yml down
 
 # 载入新 tar 后重建容器
-docker load -i zzs-bili-gallery_v11.4.3_amd64.tar
+docker load -i zzs-bili-gallery_v12.0_amd64.tar
 docker compose -f docker_app/docker-compose.nas-amd64.yml up -d
 ~~~
 
@@ -174,7 +174,7 @@ PYTHONPATH=. .venv/bin/pytest -q
 页面审查截图使用隔离占位数据。<code>review_capture.sh</code> 当前针对 macOS 的 Lima Docker 流程：需要本机已有可运行的 <code>limactl</code>、Lima 的 <code>lima-docker</code> context、Docker、Playwright 浏览器和审查镜像；脚本会在 <code>docker_app/review/&lt;时间戳&gt;/</code> 下生成临时运行目录与截图：
 
 ~~~bash
-bash docker_app/scripts/review_capture.sh zzs-bili-gallery:11.4.3-amd64
+bash docker_app/scripts/review_capture.sh zzs-bili-gallery:12.0-amd64
 ~~~
 
 脚本内部调用 <code>seed_review_data.py</code>，不会读取真实 <code>storage/</code>。如果只需要生成占位数据库和媒体，可单独执行：
@@ -184,7 +184,7 @@ docker_app/.venv/bin/python docker_app/scripts/seed_review_data.py \
   --storage-root /tmp/rc-webgallery-review
 ~~~
 
-当前应用版本由 <code>docker_app/app/version.py</code> 中的 <code>APP_VERSION = "11.4.3"</code> 定义；对应 NAS 镜像标签为 <code>zzs-bili-gallery:11.4.3-amd64</code>，镜像包文件名为 <code>zzs-bili-gallery_v11.4.3_amd64.tar</code>。
+当前应用版本由 <code>docker_app/app/version.py</code> 中的 <code>APP_VERSION = "12.0"</code> 定义；对应 NAS 镜像标签为 <code>zzs-bili-gallery:12.0-amd64</code>，镜像包文件名为 <code>zzs-bili-gallery_v12.0_amd64.tar</code>。
 
 ## 小红书个人点赞
 
@@ -194,7 +194,7 @@ docker_app/.venv/bin/python docker_app/scripts/seed_review_data.py \
 
 ### 开箱使用
 
-v11.4.3 主镜像内置浏览器。按前文使用默认 NAS Compose 启动即可，整个应用只有一个容器和网页端口 `7860`；不需要另外部署浏览器服务、创建密钥、映射登录端口或设置 SSH 转发。源码部署也使用默认的 `docker-compose.example.yml`。
+v12.0 主镜像内置浏览器。按前文使用默认 NAS Compose 启动即可，整个应用只有一个容器和网页端口 `7860`；不需要另外部署浏览器服务、创建密钥、映射登录端口或设置 SSH 转发。源码部署也使用默认的 `docker-compose.example.yml`。
 
 升级时导入新镜像，使用本版本部署包中的 `docker_app/docker-compose.nas-amd64.yml`，保留原来的两条配置、数据挂载路径，然后正常重建主容器。部署包中的 `docker_app/xhs_worker/seccomp_profile.json` 与 Compose 保持相对位置；默认配置会自动使用它启用 Chromium 沙箱。
 
@@ -290,4 +290,6 @@ Live Photo 以同序号的静态图和 MP4 视频分别保存，并在图库中�
 
 排序通过“随机 / 按序”药丸切换；按序依次提供“最近入库、最新发布、最早发布”，切回按序时保留本次选择。设置中的“默认随机”开关决定打开或重新进入全部项目时是否使用随机排序，关闭时初始使用最近入库。
 
-随机排序使用连续瀑布流，与其他排序一样支持自动或手动加载。浏览器缓存本轮随机种子，普通刷新、重新打开页面和切换排序均沿用原种子；只有移动端（窄屏或方屏）在顶部下拉刷新，或桌面端（方屏或宽屏）点击药丸旁的“手气不错”，才生成新一轮随机顺序，新入库内容随新一轮参与排序。随机顺序缓存在 SQLite 中，读取后续页面无需重新抽取或遍历深分页；最多保留 16 轮，过期后页面提供“重新开始浏览”。窄屏到方屏的图库按内容可用宽度自动适配每行 2～4 张卡片，宽屏保留密度设置。
+随机排序使用连续瀑布流，与其他排序一样支持自动或手动加载。浏览器缓存本轮随机种子，普通刷新、重新打开页面和切换排序均沿用原种子；只有窄屏或方屏在顶部通过触摸或触控板下拉刷新，或桌面端（方屏或宽屏）点击药丸旁的“手气不错”，才生成新一轮随机顺序，新入库内容随新一轮参与排序。随机顺序缓存在 SQLite 中，读取后续页面无需重新抽取或遍历深分页；最多保留 16 轮，过期后页面提供“重新开始浏览”。窄屏到方屏的图库按内容可用宽度自动适配每行 2～4 张卡片，宽屏保留密度设置。
+
+图片查看器支持上下滑动切换图片，右滑返回、左滑展开右侧居中的竖向工具栏；鼠标靠近右侧时滑出，离开触发区域 1 秒后收回。工具栏按删除、留空、上一张、张数/总数、下一张、留空、关闭排列。方向键上/下切图、方向键右返回、方向键左展开工具栏；双击或双指捏合缩放，放大后拖动或触控板滚动平移。窄屏和方屏支持触控板手势：横向右滑返回或打开菜单、上下切换视频、随机列表顶部下拉刷新。每次触控板手势只触发一次操作，惯性滚动不会连续穿透多层页面。
