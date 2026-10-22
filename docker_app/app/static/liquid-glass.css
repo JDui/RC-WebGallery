@@ -1340,6 +1340,39 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 .density-chip .range-caption { white-space: nowrap; font-size: 11px; }
 .gallery-sort-label { gap: 5px; font-size: 12px; }
 .gallery-sort-label select { max-width: 182px; }
+.gallery-sort-controls { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.workspace .gallery-sort-switch { flex: 0 0 auto; width: auto; min-width: 0; grid-template-columns: repeat(2, minmax(52px, 1fr)); min-height: 36px; border-radius: var(--radius-pill); padding: 4px; }
+.workspace .gallery-sort-switch button, .gallery-sort-switch .segmented-pill-indicator { border-radius: var(--radius-pill); }
+.workspace .gallery-sort-switch button { min-height: 30px; padding: 4px 12px; white-space: nowrap; }
+.gallery-pull-hint {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    height: calc(var(--gallery-pull-progress, 0) * 76px); padding: 0; overflow: hidden;
+    opacity: var(--gallery-pull-progress, 0); color: var(--muted); font-size: 12px;
+    pointer-events: none; user-select: none;
+    transition: height 260ms var(--ease-soft), opacity 200ms var(--ease-soft);
+}
+.gallery-pull-symbol { display: flex; flex: 0 0 32px; width: 32px; height: 32px; color: var(--accent); }
+.gallery-pull-symbol svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.gallery-pull-track { opacity: .16; }
+.gallery-pull-ring { stroke-dasharray: 100; stroke-dashoffset: calc((1 - var(--gallery-pull-progress, 0)) * 100); }
+.gallery-pull-arrow { transform-origin: 18px 18px; transform: rotate(calc(var(--gallery-pull-progress, 0) * 180deg)); }
+.gallery-stage > .gallery-layout {
+    opacity: calc(1 - var(--gallery-pull-progress, 0) * .65);
+    transform: translate3d(0, calc(var(--gallery-pull-progress, 0) * 10px), 0);
+    transition: opacity 260ms var(--ease-soft), transform 260ms var(--ease-soft);
+}
+.gallery-stage.is-pulling > .gallery-pull-hint,
+.gallery-stage.is-pulling > .gallery-layout { transition: none; }
+.gallery-stage.is-pulling > .gallery-layout { will-change: opacity, transform; }
+.gallery-stage.is-refreshing .gallery-pull-symbol { animation: gallery-refresh-spin .8s linear infinite; }
+.gallery-stage.is-refreshing .gallery-pull-ring { stroke-dasharray: 72 100; stroke-dashoffset: 0; }
+.gallery-stage.is-refreshing .gallery-pull-arrow { opacity: 0; }
+@keyframes gallery-refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+    .gallery-stage > .gallery-pull-hint, .gallery-stage > .gallery-layout { transition: none; }
+    .gallery-stage > .gallery-layout { transform: none; }
+    .gallery-stage.is-refreshing .gallery-pull-symbol { animation: none; }
+}
 .search-results-bar { padding: 0 0 10px; gap: 8px; }
 .search-engine-form { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .search-results-bar .search-submit-button { min-width: 66px; }
@@ -1445,11 +1478,30 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 .viewer-position { min-width: 42px; color: #edf4ff; text-align: center; font-size: 12px; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .viewer-floating .viewer-action-row { align-items: center; margin: 0; gap: 6px; }
 .viewer-floating .viewer-action-row .confirm-anchor { justify-content: center; white-space: normal; line-height: 1.25; }
+.viewer-floating.viewer-floating-right { flex-wrap: nowrap; }
+.viewer-floating .viewer-toolbar-toggle { order: 2; }
+.viewer-toolbar-actions {
+    display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px;
+    max-width: 0; max-height: 0; overflow: hidden; opacity: 0; visibility: hidden; pointer-events: none;
+    transform: translateX(8px); transition: max-width 220ms var(--ease-soft), max-height 220ms var(--ease-soft), opacity 160ms var(--ease-soft), transform 220ms var(--ease-soft), visibility 220ms;
+}
+.toolbar-open .viewer-toolbar-actions { max-width: calc(100vw - 110px); max-height: 180px; opacity: 1; visibility: visible; pointer-events: auto; transform: none; }
+.viewer-floating .viewer-toolbar-hide { display: none; }
+@media (hover: none), (pointer: coarse) {
+    .viewer-floating .viewer-toolbar-toggle { display: none; }
+    .viewer-floating.viewer-floating-right { opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(12px); }
+    .viewer-floating.viewer-floating-right.toolbar-open { opacity: 1; visibility: visible; pointer-events: auto; transform: none; }
+    .toolbar-open .viewer-toolbar-actions { max-width: calc(100vw - 46px); }
+    .viewer-floating .viewer-toolbar-hide { display: inline-flex; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .viewer-toolbar-actions, .viewer-floating.viewer-floating-right { transition: none; transform: none; }
+}
 
 .heading-with-help { display: flex; align-items: center; gap: 7px; }
 .help-button { display: inline-grid; place-items: center; flex: 0 0 auto; width: 22px; height: 22px; min-height: 0; padding: 0; border: 1px solid #9cacc4; border-radius: var(--radius-control); background: transparent; color: #52698d; font-size: 12px; font-weight: 650; line-height: 1; cursor: help; box-shadow: none; }
 .help-button:hover, .help-button:focus-visible { color: #2458ba; border-color: #4266bc; background: #edf3ff; }
-.ui-tooltip { position: fixed; z-index: 200; width: max-content; max-width: min(320px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; padding: 9px 12px; border: 1px solid rgba(220, 235, 255, .28); border-radius: var(--radius-control); background: linear-gradient(145deg, rgba(35, 52, 78, .8), rgba(23, 40, 65, .68)); color: #f6f9ff; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14), 0 6px 20px rgba(14, 28, 51, .16); backdrop-filter: blur(18px) saturate(1.2); -webkit-backdrop-filter: blur(18px) saturate(1.2); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.ui-tooltip { position: fixed; z-index: 1800; width: max-content; max-width: min(320px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; padding: 9px 12px; border: 1px solid rgba(220, 235, 255, .28); border-radius: var(--radius-control); background: linear-gradient(145deg, rgba(35, 52, 78, .8), rgba(23, 40, 65, .68)); color: #f6f9ff; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14), 0 6px 20px rgba(14, 28, 51, .16); backdrop-filter: blur(18px) saturate(1.2); -webkit-backdrop-filter: blur(18px) saturate(1.2); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .ui-tooltip[hidden] { display: none; }
 @media (max-width: 1100px), (max-aspect-ratio: 11/10) {
     .settings-save-bar { position: static; }
@@ -1588,8 +1640,16 @@ body[data-intranet-access="local"] .intranet-current-status { color: #167b61; }
     .gallery-toolbar .density-chip, .gallery-toolbar > .toggle-chip { display: none; }
     .workspace .gallery-toolbar .gallery-sort-label { flex: 1 1 auto; min-width: 0; font-size: 10px; gap: 4px; }
     .workspace .gallery-toolbar .gallery-sort-label select { width: 100%; max-width: 190px; min-width: 0; min-height: 30px; height: 30px; font-size: 11px; padding-block: 2px; }
+    .workspace .gallery-sort-controls { flex: 1 1 auto; gap: 6px; }
+    .workspace .gallery-sort-switch { flex: 0 0 auto; grid-template-columns: repeat(2, minmax(42px, 1fr)); min-height: 30px; padding: 4px; }
+    .workspace .gallery-sort-switch button { min-height: 26px; padding: 3px 8px; font-size: 11px; }
+    .workspace .gallery-sort-controls .random-refresh-button { min-height: 30px; padding: 4px 8px; font-size: 11px; white-space: nowrap; }
     .workspace .gallery-toolbar > .secondary-button { flex: 0 0 auto; width: auto; min-height: 30px; padding: 4px 8px; font-size: 11px; }
-    .gallery-stage .gallery-page { gap: 8px; grid-auto-rows: 4px; align-items: start; }
+    .gallery-stage .gallery-page { gap: 8px; align-items: start; }
+    /* Keep normal rows until every card has a measured span, including appended cards.
+       This also provides a safe layout when ResizeObserver is unavailable. */
+    .gallery-stage .gallery-page:not(:has(> .gallery-item-card:not([data-masonry-measured]))) { grid-auto-rows: 4px; }
+    .gallery-stage .gallery-page:has(> .gallery-item-card:not([data-masonry-measured])) > .gallery-item-card { grid-row-end: auto !important; }
     .gallery-page .photo-card { content-visibility: visible; contain-intrinsic-size: none; border-radius: 10px; }
     .gallery-page .photo-visual:not(.asset-visual) { min-height: 0; aspect-ratio: auto; height: auto; }
     .gallery-page .photo-card.video { border: 1px solid var(--line); background: var(--surface-strong); animation: none; }

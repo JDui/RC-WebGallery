@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from contextlib import nullcontext
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from app.services.utils import loads_json
@@ -16,7 +17,15 @@ def _web_url(value: str) -> str:
     return ''
 
 
-def attach_creators(db, items: list[dict]) -> None:
+def site_creator_url(entry_url, source_type):
+    url = _web_url(str(entry_url or ''))
+    if url and source_type in {'rss', 'sitemap'}:
+        parsed = urlsplit(url)
+        url = urlunsplit((parsed.scheme, parsed.netloc, '/', '', ''))
+    return url
+
+
+def attach_creators(db, items: list[dict], *, conn=None) -> None:
     """Enrich visible cards in batches while preserving subscription names for filtering."""
     notes = defaultdict(set)
     site_ids = set()
@@ -30,7 +39,7 @@ def attach_creators(db, items: list[dict]) -> None:
                 site_ids.add(int(value))
     authors, sites = {}, {}
     if notes or site_ids:
-        with db.connect() as conn:
+        with (nullcontext(conn) if conn is not None else db.connect()) as conn:
             for source_id, note_ids in notes.items():
                 keys = sorted(note_ids)
                 for offset in range(0, len(keys), 400):
@@ -62,8 +71,4 @@ def attach_creators(db, items: list[dict]) -> None:
             if uid.isdigit():
                 item['creator_url'] = f'https://space.bilibili.com/{uid}'
             else:
-                url = _web_url(str(source.get('entry_url') or ''))
-                if url and source.get('source_type') in {'rss', 'sitemap'}:
-                    parsed = urlsplit(url)
-                    url = urlunsplit((parsed.scheme, parsed.netloc, '/', '', ''))
-                item['creator_url'] = url
+                item['creator_url'] = site_creator_url(source.get('entry_url'), source.get('source_type'))

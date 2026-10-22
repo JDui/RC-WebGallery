@@ -199,13 +199,25 @@ const UI_THEME_ENGINE = {
 };
 
 function galleryApp(initialSettings = {}) {
+  const defaultRandom = initialSettings.gallery_default_random === true;
+  const defaultSortMode = defaultRandom ? "random" : "imported";
   // Keep native Window objects outside Alpine's reactive proxies.
   let xhsLoginPopup = null;
   let masonryObserver = null;
   const masonryElements = new Set();
+  let detailResizeObserver = null;
   let galleryFetchController = null;
+  let webkitFullscreenVideo = null;
+  let mediaLongPressTimer = null;
+  let mediaLongPressStart = null;
+  let mediaLongPressOpened = false;
+  let mediaMenuAnchor = null;
   return {
     currentView: "gallery",
+    touchBackGesture: null,
+    touchBackProgress: 0,
+    touchBackClickUntil: 0,
+    mediaContextMenu: { open: false, folderName: "", pairIndex: null, x: 12, y: 12 },
     category: "all",
     navItems: [
       { key: "all", label: "全部项目", short: "全", copy: "所有图片与动态内容" },
@@ -235,6 +247,7 @@ function galleryApp(initialSettings = {}) {
     settingsSaving: false,
     settingsError: "",
     livephotoSubmitting: false,
+    xhsAuthorSubmitting: false,
     trashSearch: "",
     modalFocusStack: [],
     sourceKind: ["all", "up", "site", "xhs"].includes(localStorage.getItem("gallery_source_kind"))
@@ -250,6 +263,7 @@ function galleryApp(initialSettings = {}) {
     gallery: { items: [], total: 0, page: 1, page_size: 36, total_pages: 1 },
     recentUpdates: { groups: [], total_groups: 0, total_items: 0 },
     recentUpdatesLoading: false,
+    recentUpdatesPendingRefresh: false,
     recentUpdatesRequestId: 0,
     recentUpdateExpanded: {},
     recentUpdateExpandable: {},
@@ -264,15 +278,18 @@ function galleryApp(initialSettings = {}) {
     galleryWindowMeasureRaf: null,
     galleryLoading: false,
     galleryFetching: false,
-    galleryRandomSeed: "",
+    galleryRandomSeed: /^[A-Za-z0-9_-]{1,128}$/.test(localStorage.getItem("gallery_random_seed") || "")
+      ? localStorage.getItem("gallery_random_seed") : "",
     galleryRandomExpired: false,
+    randomPullGesture: null,
+    randomPullProgress: 0,
+    randomRefreshing: false,
     galleryMinHeight: 0,
     galleryViewMode: localStorage.getItem("gallery_view_mode") || "folder",
     displayedGalleryViewMode: localStorage.getItem("gallery_view_mode") || "folder",
-    sortOrder: localStorage.getItem("gallery_time_sort_mode") === "random"
-      ? "random"
-      : (localStorage.getItem("gallery_sort_order") || "desc"),
-    timeSortMode: localStorage.getItem("gallery_time_sort_mode") || "desc",
+    sortOrder: defaultSortMode,
+    timeSortMode: defaultSortMode,
+    orderedSortMode: "imported",
     galleryRenderKey: 0,
     galleryPayloadFingerprint: "",
     galleryRequestId: 0,
@@ -424,7 +441,8 @@ function galleryApp(initialSettings = {}) {
     siteValidatePageDraftById: {},
     siteClearDeleteConfirmId: null,
     siteClearDeleteConfirmStep: 0,
-    settings: { ...initialSettings },
+    settings: { gallery_default_random: defaultRandom, ...initialSettings },
+    savedGalleryDefaultRandom: defaultRandom,
     performanceMode: ["auto", "full", "low"].includes(localStorage.getItem("gallery_performance_mode"))
       ? localStorage.getItem("gallery_performance_mode")
       : "auto",
@@ -459,6 +477,7 @@ function galleryApp(initialSettings = {}) {
     viewerSwapPending: false,
     viewerPendingDirection: "",
     viewerZoom: 1,
+    viewerToolbarOpen: false,
     viewerOffsetX: 0,
     viewerOffsetY: 0,
     viewerTransitionEnabled: true,
@@ -506,6 +525,7 @@ function galleryApp(initialSettings = {}) {
     videoFeedHintTimer: null,
     videoFeedDirection: 1,
     subscriptionPullPending: false,
+    allSubscriptionsPullPending: false,
     compactViewport: false,
     sidebarDrawerOpen: false,
     favoritePending: {},
@@ -592,7 +612,8 @@ function galleryApp(initialSettings = {}) {
         this.$watch(key, () => this.$nextTick(() => window.GalleryGlass?.refresh()));
       });
       this.updateViewportMode();
-      ["videoNote.open", "detail.open", "viewer.open", "taskInspector.open", "sourcePreview.open"].forEach((key) => {
+      this.installTouchNavigation();
+      ["videoNote.open", "detail.open", "viewer.open", "taskInspector.open", "sourcePreview.open", "xhsLoginInlineOpen", "mediaContextMenu.open"].forEach((key) => {
         this.$watch(key, () => this.$nextTick(() => this.syncModalAccessibility()));
       });
       window.addEventListener("beforeunload", (event) => {
@@ -610,8 +631,7 @@ function galleryApp(initialSettings = {}) {
       window.addEventListener("pointercancel", () => this.finishTimeFilterDrag());
       this.updateHeaderState();
       // First paint must not wait for account checks, metadata or subscriptions.
-      this.refreshGallery(true).catch(() => {});
-      this.loadBootstrap().catch(() => {});
+      this.refreshGallery(true).catch(() => {}).finally(() => this.loadBootstrap().catch(() => {}));
       this.scheduleStatusRefresh();
       this.startPerformanceSampling();
       window.setInterval(() => {
@@ -762,7 +782,7 @@ function galleryApp(initialSettings = {}) {
         };
         this.displayedGalleryViewMode = this.galleryViewMode;
       }
-      this.refreshGallery(reset).catch(() => {});
+      return this.refreshGallery(reset).catch(() => {});
     },
 
     scheduleScrollEffects() {
@@ -968,6 +988,7 @@ function galleryApp(initialSettings = {}) {
       this.narrowViewport = window.matchMedia("(max-width: 760px), (max-width: 1100px) and (orientation: portrait)").matches;
       if (!nextCompact) {
         this.sidebarDrawerOpen = false;
+        this.closeMediaContextMenu();
       }
       this.galleryColumnCache = null;
       this.detailColumnCache = null;
@@ -979,6 +1000,7 @@ function galleryApp(initialSettings = {}) {
         this.scheduleFixedLayoutMetrics();
         this.refreshDetailTextOverflow();
         this.scheduleRecentUpdatesMeasure();
+        this.scheduleDetailWindowShift();
       });
     },
 
@@ -986,7 +1008,253 @@ function galleryApp(initialSettings = {}) {
       this.sidebarDrawerOpen = false;
     },
 
+    touchBackContextKey() {
+      // Only invalidate a gesture when its context changes; pages are never back-history entries.
+      return JSON.stringify([this.currentView, this.category, this.sourceKind, this.selectedSubscriptionUids,
+        this.subscriptionPanel, this.settingsGroup, this.detailRequestId, this.viewerToken,
+        this.videoFeedToken, this.sourcePreview.url]);
+    },
+
+    currentFullscreenElement() {
+      return document.fullscreenElement || document.webkitFullscreenElement
+        || (webkitFullscreenVideo?.webkitDisplayingFullscreen ? webkitFullscreenVideo : null)
+        || (this.$refs?.xhsNoteVideo?.webkitDisplayingFullscreen ? this.$refs.xhsNoteVideo : null);
+    },
+
+    exitCurrentFullscreen() {
+      const element = this.currentFullscreenElement();
+      if (!element) return;
+      // Exit the native top layer without closing the player or browser underneath it.
+      try {
+        const result = document.fullscreenElement ? document.exitFullscreen()
+          : document.webkitFullscreenElement ? document.webkitExitFullscreen()
+          : element.webkitExitFullscreen?.();
+        result?.catch?.(() => {});
+      } catch (error) { void error; }
+    },
+
+    topOverlayLayer(includeClosing = true) {
+      if (this.currentFullscreenElement()) return "fullscreen";
+      if (this.mediaContextMenu.open) return "media-menu";
+      if (this.viewer.open || (includeClosing && this.viewerClosing)) return "viewer";
+      if (this.xhsLoginInlineOpen) return "xhs-login";
+      if (this.sourcePreview.open) return "source";
+      if (this.videoNote.open) return "video-note";
+      if (this.taskInspector.open) return "task";
+      if (this.detail.open || (includeClosing && this.detailClosing)) return "detail";
+      return "";
+    },
+
+    touchBackLayer({ keyboard = false } = {}) {
+      const layer = this.topOverlayLayer();
+      // The viewer owns horizontal image switching, zooming and pull-down dismissal.
+      if (layer === "viewer") return keyboard && this.viewer.open ? "viewer" : "";
+      if (layer === "detail" && this.detailClosing) return "";
+      if (layer) return layer;
+      if (this.sidebarDrawerOpen) return "sidebar";
+      if (this.compactViewport) return "open-sidebar";
+      return keyboard && this.sidebarCollapsed ? "expand-sidebar" : "";
+    },
+
+    navigateTouchBack(options = {}) {
+      const layer = this.touchBackLayer(options);
+      if (layer === "fullscreen") { this.exitCurrentFullscreen(); return; }
+      if (layer === "media-menu") { this.closeMediaContextMenu(); return; }
+      if (layer === "viewer") { this.closeViewer(); return; }
+      if (layer === "open-sidebar") { this.sidebarDrawerOpen = true; return; }
+      if (layer === "expand-sidebar") { this.toggleSidebar(); return; }
+      if (layer === "xhs-login") { this.xhsLoginInlineOpen = false; return; }
+      if (layer === "source") { this.closeSourcePreview(); return; }
+      if (layer === "video-note") { this.closeVideoNote(); return; }
+      if (layer === "task") { this.closeTaskInspector(); return; }
+      if (layer === "detail") { this.closeDetail(); return; }
+      if (layer === "sidebar") { this.closeSidebarDrawer(); return; }
+    },
+
+    installTouchNavigation() {
+      this.installMediaContextMenu();
+      document.addEventListener("touchstart", event => this.startRandomPull(event), { capture: true, passive: true });
+      document.addEventListener("touchmove", event => this.moveRandomPull(event), { capture: true, passive: false });
+      document.addEventListener("touchend", event => this.endRandomPull(event), { capture: true, passive: false });
+      document.addEventListener("touchcancel", () => this.cancelRandomPull(), { capture: true, passive: true });
+      const fullscreenChanged = () => {
+        this.cancelTouchBack();
+        this.syncModalAccessibility();
+      };
+      document.addEventListener("fullscreenchange", fullscreenChanged);
+      document.addEventListener("webkitfullscreenchange", fullscreenChanged);
+      document.addEventListener("webkitbeginfullscreen", event => {
+        webkitFullscreenVideo = event.target;
+        fullscreenChanged();
+      }, true);
+      document.addEventListener("webkitendfullscreen", () => {
+        webkitFullscreenVideo = null;
+        fullscreenChanged();
+      }, true);
+      // Capture sees gestures even inside drawers that stop touchmove propagation.
+      document.addEventListener("touchstart", event => this.startTouchBack(event), { capture: true, passive: true });
+      document.addEventListener("touchmove", event => this.moveTouchBack(event), { capture: true, passive: false });
+      document.addEventListener("touchend", event => this.endTouchBack(event), { capture: true, passive: false });
+      document.addEventListener("touchcancel", () => this.cancelTouchBack(), { capture: true, passive: true });
+      document.addEventListener("click", event => {
+        if (Date.now() >= this.touchBackClickUntil || event.detail === 0 || event.target?.closest?.(".media-context-menu")) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }, true);
+    },
+
+    startTouchBack(event) {
+      this.cancelTouchBack();
+      if (!(this.compactViewport || this.narrowViewport || window.matchMedia("(any-pointer: coarse)").matches)
+          || event.touches.length !== 1) return;
+      const layer = this.touchBackLayer();
+      const target = event.target;
+      if (!layer || target.closest?.('input, textarea, select, audio, iframe, [contenteditable]:not([contenteditable="false"]), [role="slider"], [data-gesture-ignore]')
+          || window.getSelection()?.toString()) return;
+      const touch = event.touches[0];
+      const video = target.closest?.("video");
+      if (video && touch.clientY > video.getBoundingClientRect().bottom - 72) return;
+      for (let element = target; element && element !== document.body; element = element.parentElement) {
+        if (element.scrollWidth > element.clientWidth + 2
+            && /^(auto|scroll)$/.test(window.getComputedStyle(element).overflowX)) return;
+      }
+      this.touchBackGesture = { id: touch.identifier, x: touch.clientX, y: touch.clientY,
+        startedAt: Date.now(), layer, location: this.touchBackContextKey(), locked: false };
+    },
+
+    moveTouchBack(event) {
+      const gesture = this.touchBackGesture;
+      if (!gesture) return;
+      if (event.touches.length !== 1 || this.touchBackLayer() !== gesture.layer
+          || this.touchBackContextKey() !== gesture.location) { this.cancelTouchBack(); return; }
+      const touch = event.touches[0];
+      if (touch.identifier !== gesture.id) { this.cancelTouchBack(); return; }
+      const dx = touch.clientX - gesture.x, dy = touch.clientY - gesture.y;
+      if (!gesture.locked) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < 12) return;
+        if (dx <= 0 || dx < Math.abs(dy) * 1.4) { this.cancelTouchBack(); return; }
+        gesture.locked = true;
+      }
+      if (event.cancelable) event.preventDefault();
+      this.touchBackProgress = Math.max(0, Math.min(1, dx / this.touchBackThreshold()));
+    },
+
+    touchBackThreshold() {
+      return Math.max(72, Math.min(112, window.innerWidth * 0.22));
+    },
+
+    endTouchBack(event) {
+      const gesture = this.touchBackGesture;
+      this.cancelTouchBack();
+      if (!gesture || !gesture.locked) return;
+      // Also suppress synthetic clicks after an abandoned horizontal drag.
+      this.touchBackClickUntil = Date.now() + 450;
+      if (event.cancelable) event.preventDefault();
+      const touch = Array.from(event.changedTouches).find(item => item.identifier === gesture.id);
+      if (!touch || event.touches.length || Date.now() - gesture.startedAt > 1400
+          || this.touchBackLayer() !== gesture.layer || this.touchBackContextKey() !== gesture.location) return;
+      const dx = touch.clientX - gesture.x, dy = touch.clientY - gesture.y;
+      if (dx >= this.touchBackThreshold() && dx > Math.abs(dy) * 1.4) {
+        this.videoFeedGesture = null;
+        this.navigateTouchBack();
+      }
+    },
+
+    cancelTouchBack() {
+      this.touchBackGesture = null;
+      this.touchBackProgress = 0;
+    },
+
+    mediaMenuTarget(target) {
+      if (!this.compactViewport || target.closest?.('button:not(.card-open-button):not(.detail-content-toggle), a, input, textarea, select, [contenteditable="true"], [data-gesture-ignore]')) return null;
+      const element = target.closest?.("[data-media-menu-folder]");
+      return element?.dataset.mediaMenuFolder ? element : null;
+    },
+
+    installMediaContextMenu() {
+      document.addEventListener("contextmenu", event => {
+        const element = this.mediaMenuTarget(event.target);
+        if (!element) return;
+        event.preventDefault();
+        this.openMediaContextMenu(element, event.clientX, event.clientY);
+      }, true);
+      document.addEventListener("touchstart", event => {
+        this.cancelMediaLongPress();
+        mediaLongPressOpened = false;
+        if (event.touches.length !== 1) return;
+        const element = this.mediaMenuTarget(event.target);
+        if (!element) return;
+        const touch = event.touches[0];
+        mediaLongPressStart = { x: touch.clientX, y: touch.clientY };
+        mediaLongPressTimer = window.setTimeout(() => {
+          mediaLongPressTimer = null;
+          if (!element.isConnected || !mediaLongPressStart) return;
+          mediaLongPressOpened = true;
+          this.openMediaContextMenu(element, touch.clientX, touch.clientY);
+        }, 550);
+      }, { capture: true, passive: true });
+      document.addEventListener("touchmove", event => {
+        if (!mediaLongPressStart) return;
+        const touch = event.touches[0];
+        if (event.touches.length !== 1 || Math.hypot(touch.clientX - mediaLongPressStart.x, touch.clientY - mediaLongPressStart.y) > 10) this.cancelMediaLongPress();
+      }, { capture: true, passive: true });
+      document.addEventListener("touchend", event => {
+        this.cancelMediaLongPress();
+        if (mediaLongPressOpened) {
+          this.touchBackClickUntil = Date.now() + 450;
+          if (event.cancelable) event.preventDefault();
+          mediaLongPressOpened = false;
+        }
+      }, { capture: true, passive: false });
+      document.addEventListener("touchcancel", () => this.cancelMediaLongPress(), { capture: true, passive: true });
+      document.addEventListener("scroll", () => this.cancelMediaLongPress(), { capture: true, passive: true });
+    },
+
+    cancelMediaLongPress() {
+      if (mediaLongPressTimer !== null) window.clearTimeout(mediaLongPressTimer);
+      mediaLongPressTimer = null;
+      mediaLongPressStart = null;
+    },
+
+    openMediaContextMenu(element, x, y) {
+      if (!this.compactViewport || !element?.dataset.mediaMenuFolder) return;
+      this.cancelMediaLongPress();
+      this.cancelTouchBack();
+      this.videoFeedGesture = null;
+      this.touchBackClickUntil = Date.now() + 800;
+      mediaMenuAnchor = element;
+      const rect = element.getBoundingClientRect();
+      this.mediaContextMenu = { open: true, folderName: element.dataset.mediaMenuFolder,
+        pairIndex: Number(element.dataset.mediaMenuPair) || null,
+        x: Math.max(12, Math.min(x || rect.left + 16, window.innerWidth - 232)),
+        y: Math.max(12, Math.min(y || rect.top + 16, window.innerHeight - 112)) };
+      this.$nextTick(() => this.$refs.mediaContextDelete?.focus({ preventScroll: true }));
+    },
+
+    closeMediaContextMenu() {
+      this.cancelMediaLongPress();
+      this.mediaContextMenu.open = false;
+      mediaMenuAnchor = null;
+    },
+
+    chooseMediaContextDelete() {
+      const { folderName, pairIndex } = this.mediaContextMenu;
+      const element = mediaMenuAnchor;
+      this.closeMediaContextMenu();
+      // A virtualized card may have disappeared or been reused while the menu was open.
+      if (!element?.isConnected || element.dataset.mediaMenuFolder !== folderName
+          || (Number(element.dataset.mediaMenuPair) || null) !== pairIndex) return;
+      if (pairIndex) this.askDeletePair(folderName, pairIndex);
+      else this.askTrashFolder(folderName);
+      this.$nextTick(() => {
+        const confirmation = element.querySelector(pairIndex ? ".mini-confirm-button" : ".detail-trash-confirm button, .card-trash-zone .mini-confirm-button, [data-testid='video-delete-confirm']");
+        confirmation?.scrollIntoView({ block: "nearest", inline: "nearest" });
+        confirmation?.focus({ preventScroll: true });
+      });
+    },
+
     closeGalleryLayers() {
+      this.closeMediaContextMenu();
       this.closeVideoNote();
       this.closeViewer(true);
       this.closeDetail(true);
@@ -1137,7 +1405,20 @@ function galleryApp(initialSettings = {}) {
       this.toast.open = false;
     },
 
+    handleSpaceBack(event) {
+      if (!(event.code === "Space" || event.key === " " || event.key === "Spacebar")
+          || event.defaultPrevented || event.isComposing || event.keyCode === 229
+          || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return false;
+      const target = event.target;
+      if (target?.isContentEditable || target?.closest?.('input, textarea, select, iframe, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="searchbox"], [role="combobox"], [role="slider"]')) return false;
+      event.preventDefault();
+      // A held key must not dismiss several layers or trigger a focused button on keyup.
+      if (!event.repeat) this.navigateTouchBack({ keyboard: true });
+      return true;
+    },
+
     handleKeydown(event) {
+      if (this.handleSpaceBack(event)) return;
       this.trapModalTab(event);
       if (event.key === "Escape") {
         this.handleEscape();
@@ -1162,6 +1443,22 @@ function galleryApp(initialSettings = {}) {
     },
 
     handleEscape() {
+      if (this.currentFullscreenElement()) {
+        this.exitCurrentFullscreen();
+        return;
+      }
+      if (this.mediaContextMenu.open) {
+        this.closeMediaContextMenu();
+        return;
+      }
+      if (this.viewer.open) {
+        this.closeViewer();
+        return;
+      }
+      if (this.xhsLoginInlineOpen) {
+        this.xhsLoginInlineOpen = false;
+        return;
+      }
       if (this.sourcePreview.open) {
         this.closeSourcePreview();
         return;
@@ -1186,10 +1483,6 @@ function galleryApp(initialSettings = {}) {
       }
       if (this.taskInspector.open) {
         this.closeTaskInspector();
-        return;
-      }
-      if (this.viewer.open) {
-        this.closeViewer();
         return;
       }
       if (this.detail.open) {
@@ -1236,7 +1529,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     currentSectionHeadline() {
-      if (this.currentView === "recent-updates") return "按 B 站拉取与站点同步回看刚刚加入图库的动态";
+      if (this.currentView === "recent-updates") return "按 B 站拉取、站点同步与小红书同步回看刚刚加入图库的动态";
       if (this.currentView === "duplicates") return "把相似图片贴文放在一起集中处理";
       if (this.currentView === "review") return "把推广动态拦在相簿之前";
       if (this.currentView === "logs") return "知道每一条动态为什么被筛出去";
@@ -1267,6 +1560,11 @@ function galleryApp(initialSettings = {}) {
     showGallerySourceKindSwitch() {
       // 搜索时同样展示来源页签：搜索请求会带上当前 sourceKind（动态/站点/小红书），
       // 页签一旦隐藏就无法切换，用户会遇到“结果被悄悄过滤掉”却无从排查的情况。
+      if (this.currentView === "recent-updates") {
+        // 最近更新的请求同样携带当前 sourceKind（按任务类型过滤 B站拉取/站点同步/小红书同步），
+        // 与全部项目、搜索保持一致：页签必须常驻，可随手切换来源。
+        return true;
+      }
       return this.currentView === "gallery" && this.selectedSubscriptionUids.length === 0;
     },
 
@@ -1365,7 +1663,10 @@ function galleryApp(initialSettings = {}) {
     },
 
     syncModalAccessibility() {
-      const name = this.sourcePreview.open ? "source" : this.videoNote.open ? 'video-note' : this.taskInspector.open ? "task" : this.viewer.open ? "viewer" : this.detail.open ? "detail" : "";
+      const layer = this.topOverlayLayer(false);
+      const name = layer === "fullscreen"
+        ? this.currentFullscreenElement()?.closest?.("[data-modal-layer]")?.dataset.modalLayer || ""
+        : layer;
       const active = name ? document.querySelector(`[data-modal-layer="${name}"]`) : null;
       const stack = this.modalFocusStack;
       let restore = null;
@@ -1384,11 +1685,18 @@ function galleryApp(initialSettings = {}) {
         element.setAttribute("aria-modal", element === active ? "true" : "false");
       });
       const shell = document.querySelector(".shell");
-      if (shell) shell.inert = !!active;
+      // Dialogs live inside .shell; making their ancestor inert disables the active dialog too.
+      if (shell) {
+        shell.inert = false;
+        const main = shell.querySelector(":scope > main");
+        if (main) main.inert = !!active && !main.contains(active);
+        const sidebar = shell.querySelector(":scope > .sidebar");
+        if (sidebar) sidebar.inert = !!active || (this.compactViewport && !this.sidebarDrawerOpen);
+      }
       if (restore?.isConnected && !restore.closest("[inert]")) restore.focus({preventScroll: true});
       else if (restore && !active) document.querySelector('.sidebar-link.active')?.focus({preventScroll: true});
       if (active && !active.contains(document.activeElement)) {
-        (active.querySelector('[data-modal-close]') || active).focus({preventScroll: true});
+        (name === 'viewer' ? active : active.querySelector('[data-modal-close]') || active).focus({preventScroll: true});
       }
     },
 
@@ -1397,10 +1705,11 @@ function galleryApp(initialSettings = {}) {
       const active = this.modalFocusStack[this.modalFocusStack.length - 1]?.element;
       if (!active) return;
       const elements = [...active.querySelectorAll('button, a[href], input, select, textarea, [tabindex="0"]')]
-        .filter((element) => !element.disabled && !element.closest("[inert]") && element.getClientRects().length);
+        .filter((element) => !element.disabled && !element.closest("[inert]") && element.getClientRects().length
+          && window.getComputedStyle(element).visibility !== 'hidden');
       const first = elements[0] || active;
       const last = elements[elements.length - 1] || active;
-      if (!active.contains(document.activeElement) || (event.shiftKey ? document.activeElement === first || document.activeElement === active : document.activeElement === last || document.activeElement === active)) {
+      if (!elements.includes(document.activeElement) || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
         event.preventDefault();
         (event.shiftKey ? last : first).focus();
       }
@@ -1500,6 +1809,7 @@ function galleryApp(initialSettings = {}) {
           // another bootstrap request is still pending.
           if (this.lazyLoaded.settings || this.settingsDirty()) return;
           this.settings = settings || {};
+          this.savedGalleryDefaultRandom = settings?.gallery_default_random === true;
           this.settingsError = settings?.intranet_config_error || "";
         }),
         this.refreshStatus(),
@@ -1724,7 +2034,9 @@ function galleryApp(initialSettings = {}) {
 
     detailWindowSize() {
       const columns = Math.max(1, this.resolveDetailColumns());
-      return Math.max(columns, columns * this.detailWindowRowCount);
+      const viewportHeight = this.$refs?.detailShell?.clientHeight || 0;
+      const visibleRows = Math.ceil(viewportHeight / Math.max(1, this.detailEstimatedRowHeight));
+      return columns * Math.max(this.detailWindowRowCount, visibleRows + 6);
     },
 
     detailWindowItems() {
@@ -1740,12 +2052,12 @@ function galleryApp(initialSettings = {}) {
       const columns = Math.max(1, this.resolveDetailColumns());
       const start = Math.max(0, this.detailRenderStart || 0);
       const end = Math.min(pairs.length, Math.max(start, this.detailRenderEnd || start + this.detailWindowSize()));
-      const rowsBefore = Math.ceil(start / columns);
-      const rowsAfter = Math.ceil(Math.max(0, pairs.length - end) / columns);
+      const rowsBefore = Math.floor(start / columns);
+      const rowsAfter = Math.ceil(pairs.length / columns) - Math.ceil(end / columns);
       const rows = position === "top" ? rowsBefore : rowsAfter;
-      const rowHeight = Math.max(180, this.detailEstimatedRowHeight || 270);
+      const rowHeight = Math.max(1, this.detailEstimatedRowHeight || 270);
       const height = rows > 0 ? Math.max(0, rows * rowHeight - Math.max(0, this.detailGridGap || 0)) : 0;
-      return height > 0 ? `height: ${Math.round(height)}px;` : "display: none;";
+      return height > 0 ? `height: ${height}px;` : "display: none;";
     },
 
     resetDetailWindow() {
@@ -1760,6 +2072,12 @@ function galleryApp(initialSettings = {}) {
       }
       this.$nextTick(() => {
         this.measureDetailWindow();
+        if (!detailResizeObserver && typeof ResizeObserver === "function") {
+          detailResizeObserver = new ResizeObserver(() => this.scheduleDetailWindowShift());
+          [this.$refs?.detailGrid, this.$refs?.detailShell].filter(Boolean)
+            .forEach(element => detailResizeObserver.observe(element));
+        }
+        this.scheduleDetailWindowShift();
         this.refreshDetailTextOverflow();
       });
     },
@@ -1770,13 +2088,14 @@ function galleryApp(initialSettings = {}) {
       if (!card) {
         return;
       }
-      const height = Number(card.getBoundingClientRect().height || 0);
       const styles = window.getComputedStyle(grid);
       const gap = Number.parseFloat(styles.rowGap || styles.gap || 0) || 0;
-      const rowHeight = height + gap;
-      if (Number.isFinite(rowHeight) && rowHeight > 120) {
+      // Detail cards are square. Use the actual fractional track width, unaffected by
+      // drawer/hover transforms, instead of clamping small cards to a 180px estimate.
+      const rowHeight = Number.parseFloat(styles.gridTemplateColumns) + gap;
+      if (Number.isFinite(rowHeight) && rowHeight > gap) {
         this.detailGridGap = gap;
-        this.detailEstimatedRowHeight = Math.round(Math.max(180, Math.min(720, rowHeight)));
+        this.detailEstimatedRowHeight = rowHeight;
       }
     },
 
@@ -1788,11 +2107,12 @@ function galleryApp(initialSettings = {}) {
       if (!this.detail.open) {
         return;
       }
-      if (this.detailWindowShiftRaf || this.detailWindowShiftLock || (this.detail.pairs || []).length <= this.detailWindowSize()) {
+      if (this.detailWindowShiftRaf || this.detailWindowShiftLock) {
         return;
       }
       this.detailWindowShiftRaf = window.requestAnimationFrame(() => {
         this.detailWindowShiftRaf = null;
+        this.measureDetailWindow();
         this.shiftDetailWindowIfNeeded();
       });
     },
@@ -1807,51 +2127,34 @@ function galleryApp(initialSettings = {}) {
         return;
       }
       const pairs = this.detail.pairs || [];
+      const columns = Math.max(1, this.resolveDetailColumns());
       const size = this.detailWindowSize();
-      const step = Math.max(1, Math.round(size / 2));
       const start = Math.max(0, this.detailRenderStart || 0);
       const end = Math.min(pairs.length, Math.max(start, this.detailRenderEnd || start + size));
       const shellRect = shell.getBoundingClientRect();
-      const first = cards[0].getBoundingClientRect();
-      const last = cards[cards.length - 1].getBoundingClientRect();
-      const threshold = Math.max(240, this.detailEstimatedRowHeight * 2);
-      let nextStart = start;
-      let direction = "";
-      if (last.bottom <= shellRect.bottom + threshold && end < pairs.length) {
-        nextStart = Math.min(start + step, Math.max(0, pairs.length - size));
-        direction = "down";
-      } else if (first.top >= shellRect.top - threshold && start > 0) {
-        nextStart = Math.max(0, start - step);
-        direction = "up";
-      }
-      if (!direction || nextStart === start) {
+      const grid = this.$refs?.detailGrid || document.querySelector(".detail-grid");
+      if (!grid) return;
+      const pitch = Math.max(1, this.detailEstimatedRowHeight);
+      const offset = Math.max(0, shellRect.top + shell.clientTop - grid.getBoundingClientRect().top);
+      const firstVisibleRow = Math.floor(offset / pitch);
+      const lastVisibleRow = Math.ceil((offset + shell.clientHeight) / pitch);
+      const totalRows = Math.ceil(pairs.length / columns);
+      const windowRows = size / columns;
+      const nextRow = Math.min(Math.max(0, firstVisibleRow - 3), Math.max(0, totalRows - windowRows));
+      const nextStart = nextRow * columns;
+      const nextEnd = Math.min(pairs.length, nextStart + size);
+      const nearEdge = firstVisibleRow < start / columns + 2 || lastVisibleRow > Math.ceil(end / columns) - 2;
+      if ((!nearEdge && end - start === size && start % columns === 0) || (nextStart === start && nextEnd === end)) {
         return;
       }
-      const anchorIndex = direction === "down" ? nextStart : start;
-      const anchorPair = pairs[anchorIndex];
-      const anchorKey = this.detailPairKey(anchorPair);
-      const anchorElement = anchorKey
-        ? document.querySelector(`[data-detail-key="${this.cssEscape(anchorKey)}"]`)
-        : null;
-      const anchorTop = anchorElement ? anchorElement.getBoundingClientRect().top : null;
       this.stopDetailHoverPreviews();
       this.detailWindowShiftLock = true;
       this.detailRenderStart = nextStart;
-      this.detailRenderEnd = Math.min(pairs.length, nextStart + size);
+      this.detailRenderEnd = nextEnd;
+      // Exact row spacers keep the total height and retained card positions stable.
+      // Do not write scrollTop here: it interrupts native touch/trackpad momentum.
       this.$nextTick(() => {
-        this.measureDetailWindow();
-        const nextAnchor = anchorKey
-          ? document.querySelector(`[data-detail-key="${this.cssEscape(anchorKey)}"]`)
-          : null;
-        if (nextAnchor && anchorTop !== null) {
-          const delta = nextAnchor.getBoundingClientRect().top - anchorTop;
-          if (Math.abs(delta) > 1) {
-            shell.scrollTop += delta;
-          }
-        }
-        window.setTimeout(() => {
-          this.detailWindowShiftLock = false;
-        }, 50);
+        this.detailWindowShiftLock = false;
       });
     },
 
@@ -2028,10 +2331,16 @@ function galleryApp(initialSettings = {}) {
       });
     },
 
+    setSortGroup(random) {
+      this.setTimeSortMode(random ? "random" : this.orderedSortMode);
+    },
+
     setTimeSortMode(mode) {
       if (!["desc", "asc", "random", "imported"].includes(mode)) {
         return;
       }
+      if (this.timeSortMode === mode) return;
+      if (mode !== "random") this.orderedSortMode = mode;
       this.timeSortMode = mode;
       localStorage.setItem("gallery_time_sort_mode", mode);
       const resolvedOrder = mode === "random" ? "random" : mode;
@@ -2114,6 +2423,10 @@ function galleryApp(initialSettings = {}) {
         this.loadSubscriptions();
         this.refreshSidebarCounts(["subscriptions"]).catch(() => {});
       }
+    },
+
+    setSettingsGroup(group) {
+      this.settingsGroup = group;
     },
 
     subscriptionPanelIndex() {
@@ -2373,11 +2686,11 @@ function galleryApp(initialSettings = {}) {
       } else if (direction === "next") {
         this.gallerySkeletonCount = 0;
       }
-      if (this.randomModeActive() && (reset || !this.galleryRandomSeed)) {
+      if (this.randomModeActive() && !this.galleryRandomSeed) {
         this.galleryRandomSeed = this.newRandomSeed();
+        localStorage.setItem("gallery_random_seed", this.galleryRandomSeed);
         this.galleryRandomExpired = false;
       } else if (!this.randomModeActive()) {
-        this.galleryRandomSeed = "";
         this.galleryRandomExpired = false;
       }
       const params = new URLSearchParams({
@@ -2740,7 +3053,7 @@ function galleryApp(initialSettings = {}) {
     galleryPlaceholderStyle(item) {
       const height = Math.max(120, Number(item?.__placeholder_height || 0));
       const ratio = item?.display_ratio || "4 / 5";
-      return `min-height: ${height}px; aspect-ratio: ${ratio};`;
+      return { minHeight: `${height}px`, aspectRatio: ratio };
     },
 
     observeGalleryCards() {
@@ -2890,6 +3203,10 @@ function galleryApp(initialSettings = {}) {
     openGallery(category) {
       this.currentView = "gallery";
       this.category = category;
+      if (category === "all") {
+        this.timeSortMode = this.savedGalleryDefaultRandom ? "random" : this.orderedSortMode;
+        this.sortOrder = this.timeSortMode;
+      }
       if (category === "video") this.galleryViewMode = "folder";
       this.selectedSubscriptionUids = [];
       this.queuedCancelConfirmId = null;
@@ -2979,12 +3296,13 @@ function galleryApp(initialSettings = {}) {
     },
 
     selectSubscription(uid) {
+      const normalized = String(uid);
+      const subscription = (this.subscriptions || []).find((item) => String(item.uid) === normalized);
+      const sourceKind = subscription?.source_type === "xhs_likes" ? "xhs" : normalized.startsWith("site:") ? "site" : "up";
       this.currentView = "gallery";
       this.category = "all";
-      const normalized = String(uid);
       this.selectedSubscriptionUids = [normalized];
-      const subscription = (this.subscriptions || []).find((item) => String(item.uid) === normalized);
-      this.sourceKind = subscription?.source_type === "xhs_likes" ? "xhs" : normalized.startsWith("site:") ? "site" : "up";
+      this.sourceKind = sourceKind;
       localStorage.setItem("gallery_source_kind", this.sourceKind);
       this.queuedCancelConfirmId = null;
       this.closeSidebarDrawer();
@@ -3019,6 +3337,10 @@ function galleryApp(initialSettings = {}) {
       localStorage.setItem("gallery_source_kind", kind);
       this.closeGalleryLayers();
       this.scrollViewTop();
+      if (this.currentView === "recent-updates") {
+        this.refreshRecentUpdates();
+        return;
+      }
       this.refreshGalleryImmediately(true);
     },
 
@@ -3040,13 +3362,7 @@ function galleryApp(initialSettings = {}) {
       if (order !== "asc" && order !== "desc") {
         return;
       }
-      this.sortOrder = order;
-      this.timeSortMode = order;
-      localStorage.setItem("gallery_time_sort_mode", order);
-      localStorage.setItem("gallery_sort_order", order);
-      this.closeGalleryLayers();
-      this.scrollViewTop();
-      this.refreshGalleryImmediately(true);
+      this.setTimeSortMode(order);
     },
 
     setHoverPreviewEnabled(enabled) {
@@ -3107,6 +3423,89 @@ function galleryApp(initialSettings = {}) {
         ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     },
 
+    mobileRandomRefresh() {
+      return (this.compactViewport || this.narrowViewport) && window.matchMedia("(pointer: coarse)").matches;
+    },
+
+    async refreshRandomGallery() {
+      if (!this.randomModeActive() || this.galleryFetching || this.randomRefreshing) return;
+      this.galleryRandomSeed = this.newRandomSeed();
+      localStorage.setItem("gallery_random_seed", this.galleryRandomSeed);
+      this.galleryRandomExpired = false;
+      this.randomRefreshing = true;
+      this.scrollViewTop();
+      try {
+        await this.refreshGalleryImmediately(true);
+      } finally {
+        this.randomRefreshing = false;
+      }
+    },
+
+    randomPullAllowed() {
+      return this.mobileRandomRefresh() && this.currentView === "gallery" && this.randomModeActive()
+        && !this.topOverlayLayer() && !this.sidebarDrawerOpen && !this.timeFilterOpen
+        && !this.galleryFetching && !this.randomRefreshing && (window.scrollY || 0) <= 2;
+    },
+
+    randomPullThreshold() {
+      return 160;
+    },
+
+    randomPullVisualProgress() {
+      return this.mobileRandomRefresh() && this.randomModeActive()
+        ? (this.randomRefreshing ? 1 : this.randomPullProgress) : 0;
+    },
+
+    startRandomPull(event) {
+      this.cancelRandomPull();
+      if (!this.randomPullAllowed() || event.touches.length !== 1
+          || !event.target.closest?.(".workspace")
+          || event.target.closest?.('button:not(.card-open-button), a, input, textarea, select, video, audio, iframe, [contenteditable]:not([contenteditable="false"]), [data-gesture-ignore]')
+          || window.getSelection()?.toString()) return;
+      for (let element = event.target; element && element !== document.body; element = element.parentElement) {
+        if (element.scrollTop > 2) return;
+      }
+      const touch = event.touches[0];
+      this.randomPullGesture = { id: touch.identifier, x: touch.clientX, y: touch.clientY, locked: false,
+        location: this.touchBackContextKey() };
+    },
+
+    moveRandomPull(event) {
+      const gesture = this.randomPullGesture;
+      if (!gesture) return;
+      if (!this.randomPullAllowed() || event.touches.length !== 1
+          || gesture.location !== this.touchBackContextKey()) { this.cancelRandomPull(); return; }
+      const touch = event.touches[0];
+      if (touch.identifier !== gesture.id) { this.cancelRandomPull(); return; }
+      const dx = touch.clientX - gesture.x, dy = touch.clientY - gesture.y;
+      if (!gesture.locked) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < 12) return;
+        if (dy <= 0 || dy < Math.abs(dx) * 1.4) { this.cancelRandomPull(); return; }
+        gesture.locked = true;
+      }
+      if (event.cancelable) event.preventDefault();
+      this.randomPullProgress = Math.max(0, Math.min(1, dy / this.randomPullThreshold()));
+    },
+
+    endRandomPull(event) {
+      const gesture = this.randomPullGesture;
+      const touch = event.changedTouches?.[0];
+      const ready = gesture?.locked && !event.touches.length && this.randomPullProgress >= 1 && touch?.identifier === gesture.id
+        && touch.clientY - gesture.y >= this.randomPullThreshold() && this.randomPullAllowed()
+        && touch.clientY - gesture.y > Math.abs(touch.clientX - gesture.x) * 1.4
+        && gesture.location === this.touchBackContextKey();
+      this.cancelRandomPull();
+      if (!ready) return;
+      if (event.cancelable) event.preventDefault();
+      this.touchBackClickUntil = Date.now() + 450;
+      this.refreshRandomGallery();
+    },
+
+    cancelRandomPull() {
+      this.randomPullGesture = null;
+      this.randomPullProgress = 0;
+    },
+
     randomModeActive() {
       return this.timeSortMode === "random";
     },
@@ -3158,22 +3557,24 @@ function galleryApp(initialSettings = {}) {
       if (!this.narrowViewport || typeof ResizeObserver === "undefined") {
         masonryObserver?.disconnect();
         masonryElements.clear();
-        cards.forEach(card => card.style.removeProperty('grid-row-end'));
+        cards.forEach(card => {
+          card.style.removeProperty('grid-row-end');
+          card.removeAttribute('data-masonry-measured');
+        });
         return;
       }
-      const measure = content => {
-        const card = content.parentElement;
-        const height = content.getBoundingClientRect().height;
-        if (height > 0) card.style.gridRowEnd = `span ${Math.ceil((height + 8) / 12)}`;
+      const measure = card => {
+        // Measure the whole border box, including Live Photo borders and deletion placeholders.
+        // Hidden cards retain their last span until ResizeObserver sees them again.
+        if (!card.offsetWidth || !card.offsetHeight) return;
+        card.style.gridRowEnd = `span ${Math.ceil((card.offsetHeight + 8) / 12)}`;
+        card.setAttribute('data-masonry-measured', '');
       };
       if (!masonryObserver) masonryObserver = new ResizeObserver(entries => entries.forEach(entry => measure(entry.target)));
-      const nextElements = new Set();
+      const nextElements = new Set(cards);
       cards.forEach(card => {
-        const content = card.firstElementChild?.tagName === 'TEMPLATE' ? card.querySelector(':scope > div') : card.firstElementChild;
-        if (content) {
-          nextElements.add(content);
-          if (!masonryElements.has(content)) { measure(content); masonryObserver.observe(content); }
-        }
+        measure(card);
+        if (!masonryElements.has(card)) masonryObserver.observe(card, { box: 'border-box' });
       });
       for (const content of masonryElements) if (!nextElements.has(content)) masonryObserver.unobserve(content);
       masonryElements.clear();
@@ -3622,6 +4023,7 @@ function galleryApp(initialSettings = {}) {
       if (!entry?.pair) {
         return;
       }
+      if (!this.viewer.open) this.viewerToolbarOpen = false;
       if (this.viewerCloseTimer) {
         window.clearTimeout(this.viewerCloseTimer);
         this.viewerCloseTimer = null;
@@ -3826,6 +4228,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     closeViewer(skipAnimation = false) {
+      this.viewerToolbarOpen = false;
       this.cancelViewerPreviewRetirement();
       if (!this.viewer.open && !this.viewerClosing) {
         return;
@@ -4112,7 +4515,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     scheduleHoverPreview(event) {
-      if (!this.hoverPreviewEnabled) {
+      if (!this.hoverPreviewEnabled || this.compactViewport) {
         return;
       }
       const card = event.currentTarget;
@@ -4213,11 +4616,11 @@ function galleryApp(initialSettings = {}) {
 
     timeSortLabel() {
       return {
-        desc: "时间倒序",
-        asc: "时间正序",
+        desc: "最新发布",
+        asc: "最早发布",
         random: "随机排序",
         imported: "最近入库",
-      }[this.timeSortMode] || "时间倒序";
+      }[this.timeSortMode] || "最近入库";
     },
 
     toggleTimeFilter() {
@@ -4432,7 +4835,8 @@ function galleryApp(initialSettings = {}) {
         this.notify("error", "无法打开原始动态", "当前待审核项没有可用的动态编号。");
         return;
       }
-      if (this.settings?.review_source_open_mode === "popup") {
+      const xhsNote = /^xhs_/.test(item?.folder_name || '') || /^https:\/\/www\.xiaohongshu\.com\/(?:explore|discovery\/item)\//.test(url);
+      if (this.settings?.review_source_open_mode === "popup" && !xhsNote) {
         const reviewItem = this.currentView === "review"
           ? (this.reviewItems || []).find((entry) => Number(entry.id) === Number(item?.id))
           : null;
@@ -5030,6 +5434,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     viewerPointerDown(event) {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
       if (event.currentTarget?.setPointerCapture) {
         event.currentTarget.setPointerCapture(event.pointerId);
       }
@@ -5037,14 +5442,16 @@ function galleryApp(initialSettings = {}) {
       const pointers = { ...this.viewerGesture.pointers, [event.pointerId]: { x: event.clientX, y: event.clientY } };
       this.viewerGesture.pointers = pointers;
       const values = Object.values(pointers);
-      if (values.length === 2) {
+      if (values.length >= 2) {
         this.viewerGesture.isPinch = true;
         this.viewerGesture.startDistance = this.pointerDistance(values[0], values[1]);
         this.viewerGesture.startZoom = this.viewerZoom;
         return;
       }
       this.viewerGesture.active = true;
+      // Keep a pinch marked until every finger is released.
       this.viewerGesture.isPinch = false;
+      this.viewerGesture.dismissAxis = "";
       this.viewerGesture.startX = event.clientX;
       this.viewerGesture.startY = event.clientY;
       this.viewerGesture.startOffsetX = this.viewerOffsetX;
@@ -5084,8 +5491,12 @@ function galleryApp(initialSettings = {}) {
         this.clampViewerTransform(event.currentTarget);
         return;
       }
+      if (this.viewerGesture.isPinch) return;
+      if (!this.viewerGesture.dismissAxis && Math.max(Math.abs(deltaX), Math.abs(deltaY)) > 12) {
+        this.viewerGesture.dismissAxis = Math.abs(deltaY) > Math.abs(deltaX) * 1.4 ? "vertical" : "horizontal";
+      }
       this.viewerOffsetX = deltaX * 0.35;
-      this.viewerOffsetY = deltaY * 0.35;
+      this.viewerOffsetY = deltaY * (event.pointerType === "touch" && this.viewerGesture.dismissAxis === "vertical" && deltaY > 0 ? 0.65 : 0.35);
     },
 
     viewerPointerUp(event) {
@@ -5109,10 +5520,20 @@ function galleryApp(initialSettings = {}) {
       const deltaY = event.clientY - this.viewerGesture.startY;
       const absX = Math.abs(deltaX);
       const absY = Math.abs(deltaY);
-      if (wasPinch) {
+      if (absX > 8 || absY > 8) this.viewerGesture.moved = true;
+      if (event.type === "pointercancel") {
+        this.viewerSyntheticTapUntil = Date.now() + 450;
+      } else if (wasPinch) {
         this.setViewerZoomLevel(this.viewerZoom, null, false);
       } else if (this.viewerZoom <= 1.02) {
-        if (absX > 120 && absX > absY * 1.2) {
+        if (event.pointerType === "touch" && this.viewerGesture.dismissAxis === "vertical"
+            && deltaY >= 96 && deltaY > absX * 1.4) {
+          this.viewerSyntheticTapUntil = Date.now() + 450;
+          this.closeViewer();
+        } else if (event.pointerType === "touch" && this.viewerGesture.dismissAxis === "vertical"
+            && deltaY <= -72 && -deltaY > absX * 1.4) {
+          this.viewerToolbarOpen = true;
+        } else if (this.viewerGesture.dismissAxis !== "vertical" && absX > 120 && absX > absY * 1.2) {
           if (deltaX < 0) {
             this.showNextPair();
           } else {
@@ -5123,12 +5544,13 @@ function galleryApp(initialSettings = {}) {
           this.handleViewerTap(event.clientX, event.clientY, event.currentTarget);
         }
       }
+      if (this.viewerGesture.moved || wasPinch) this.viewerSyntheticTapUntil = Date.now() + 450;
       this.viewerGesture.active = false;
       this.viewerGesture.isPinch = false;
-      if (this.viewerZoom === 1) {
+      if (this.viewerZoom === 1 && !this.viewerClosing) {
         this.viewerOffsetX = 0;
         this.viewerOffsetY = 0;
-      } else {
+      } else if (!this.viewerClosing) {
         this.clampViewerTransform(event.currentTarget);
       }
       window.requestAnimationFrame(() => {
@@ -5450,13 +5872,20 @@ function galleryApp(initialSettings = {}) {
 
     async refreshRecentUpdates() {
       if (this.recentUpdatesLoading) {
+        // 加载中收到新的刷新请求（例如切换来源页签）时记一次待办，结束后补跑，避免停留在旧来源的数据。
+        this.recentUpdatesPendingRefresh = true;
         return;
       }
       const requestId = ++this.recentUpdatesRequestId;
+      const requestKind = ["all", "up", "site", "xhs"].includes(this.sourceKind) ? this.sourceKind : "all";
       this.recentUpdatesLoading = true;
       try {
-        const payload = await this.api("/api/gallery/recent-updates?limit=50");
-        if (requestId !== this.recentUpdatesRequestId) {
+        const params = new URLSearchParams({ limit: "50" });
+        if (requestKind !== "all") {
+          params.set("source_kind", requestKind);
+        }
+        const payload = await this.api(`/api/gallery/recent-updates?${params.toString()}`);
+        if (requestId !== this.recentUpdatesRequestId || requestKind !== this.sourceKind) {
           return;
         }
         const groups = Array.isArray(payload?.groups) ? payload.groups : [];
@@ -5472,7 +5901,20 @@ function galleryApp(initialSettings = {}) {
         if (requestId === this.recentUpdatesRequestId) {
           this.recentUpdatesLoading = false;
         }
+        if (this.recentUpdatesPendingRefresh) {
+          this.recentUpdatesPendingRefresh = false;
+          this.refreshRecentUpdates();
+        }
       }
+    },
+
+    recentUpdatesEmptyHint() {
+      // 与搜索结果的“来源限定”提示同思路：过滤后为空时把原因摆到台面上，并告诉用户怎么切回去。
+      if (this.currentView !== "recent-updates" || this.sourceKind === "all") {
+        return "";
+      }
+      const option = this.sourceKindOptions.find((item) => item.key === this.sourceKind);
+      return `仅显示「${option?.label || this.sourceKind}」来源的更新，试试切换回「所有项目」`;
     },
 
     recentUpdateGroupTime(group) {
@@ -5752,7 +6194,15 @@ function galleryApp(initialSettings = {}) {
         lines.push("", "解析诊断：", this.formatInspectorJson(stats.resolution_diagnostics));
       }
       if (Array.isArray(stats.issues) && stats.issues.length) {
-        lines.push("", "实况配对问题（最多显示 50 项）：", this.formatInspectorJson(stats.issues));
+        const title = (taskLike.mode || taskLike.task_type) === "xhs-authors" ? "作者校验问题：" : "实况配对问题（最多显示 50 项）：";
+        lines.push("", title, this.formatInspectorJson(stats.issues));
+      }
+      if ((taskLike.mode || taskLike.task_type) === "xhs-authors") {
+        lines.push("", `全库检查 ${Number(stats.checked) || 0} 篇笔记，修复 ${Number(stats.repaired) || 0} 篇，正常 ${Number(stats.unchanged) || 0} 篇，待处理 ${Number(stats.unresolved) || 0} 篇`);
+        (stats.issues || []).forEach((issue) => lines.push(this.xhsAuthText(issue.reason)));
+        if (stats.unresolved_notes?.length) {
+          lines.push("", "未能找到作者昵称的笔记：", this.formatInspectorJson(stats.unresolved_notes));
+        }
       }
       if (events.length) {
         lines.push("", "事件日志：");
@@ -5781,6 +6231,7 @@ function galleryApp(initialSettings = {}) {
         "xhs-import": "导入小红书点赞清单",
         "xhs-sync": "同步小红书本人点赞与媒体",
         "xhs-verify": "检查小红书本地归档完整性",
+        "xhs-authors": "全库校验小红书作者昵称",
         "livephoto-check": "检查实况文件配对，不改动媒体",
         "livephoto-repair": "为可确定配对的实况文件补写配对标识",
         "livephoto-repair-errors": "自动找回实况原图并确认配对",
@@ -5953,6 +6404,7 @@ function galleryApp(initialSettings = {}) {
         "xhs-import": "小红书导入",
         "xhs-sync": "小红书同步",
         "xhs-verify": "小红书归档检查",
+        "xhs-authors": "小红书作者校验",
         "livephoto-check": "实况配对检查",
         "livephoto-repair": "修复实况配对",
         "livephoto-repair-errors": "修复实况异常",
@@ -6757,7 +7209,7 @@ function galleryApp(initialSettings = {}) {
         return false;
       }
       return (item?.status === "failed" || (["partial", "cancelled"].includes(item?.status)
-        && ["xhs-sync", "xhs-verify", "livephoto-check", "livephoto-repair", "livephoto-repair-errors",
+        && ["xhs-sync", "xhs-verify", "xhs-authors", "livephoto-check", "livephoto-repair", "livephoto-repair-errors",
           "livephoto-manual"].includes(item?.task_type))) && !!item?.details?.retry_action?.kind;
     },
 
@@ -6843,6 +7295,7 @@ function galleryApp(initialSettings = {}) {
       if (this.settingsDirty()) return;
       const settings = await this.api("/api/settings");
       this.settings = settings;
+      this.savedGalleryDefaultRandom = settings.gallery_default_random === true;
       this.settingsError = settings.intranet_config_error || "";
       document.title = settings.app_title || document.title;
       this.keywordText = (settings.ad_filter_keywords || []).join("\n");
@@ -6869,7 +7322,7 @@ function galleryApp(initialSettings = {}) {
         await this.api('/api/settings/data-upgrade/start', { method: 'POST', body: JSON.stringify({ action }) });
         window.location.reload();
       } catch (error) {
-        this.notify('error', '无法开始升级', error.message);
+        this.notify('error', '无法开始数据维护', error.message);
       } finally { this.dataUpgradeSubmitting = false; }
     },
 
@@ -7012,6 +7465,7 @@ function galleryApp(initialSettings = {}) {
           ...settingsPayload,
           wide_single_cover: Boolean(settingsPayload.wide_single_cover),
           random_cover_enabled: settingsPayload.random_cover_enabled !== false,
+          gallery_default_random: settingsPayload.gallery_default_random === true,
           scheduler_enabled: Boolean(settingsPayload.scheduler_enabled),
           scheduler_interval_hours: Math.max(1, Number(settingsPayload.scheduler_interval_hours) || 12),
           site_scheduler_enabled: Boolean(settingsPayload.site_scheduler_enabled),
@@ -7040,6 +7494,7 @@ function galleryApp(initialSettings = {}) {
           body: JSON.stringify(payload),
         });
         this.settings = { ...savedSettings, auth: auth || this.settings.auth };
+        this.savedGalleryDefaultRandom = this.settings.gallery_default_random === true;
         this.keywordText = (this.settings.ad_filter_keywords || []).join("\n");
         this.settingsBaseline = this.settingsFingerprint();
         document.title = this.settings.app_title || document.title;
@@ -7137,6 +7592,31 @@ function galleryApp(initialSettings = {}) {
       if (result.repairable) parts.push(`待修复配对 ${result.repairable} 组`);
       if (result.exceptions) parts.push(`异常 ${result.exceptions} 组`);
       return `${result.label}（${result.subset ? "局部复查" : "全库检查"}）：${parts.join(" · ")}${time ? `（${time}）` : ""}`;
+    },
+
+    xhsAuthorTaskActive() {
+      return this.pullStatus?.mode === "xhs-authors"
+        || (this.pullStatus?.queue || []).some((item) => item.kind === "xhs-authors")
+        || (this.queuedTasks || []).some((item) => item.kind === "xhs-authors")
+        || (this.taskRuns || []).some((item) => item.task_type === "xhs-authors" && ["queued", "running", "paused"].includes(item.status));
+    },
+
+    xhsAuthorLatestTask() {
+      return (this.taskRuns || []).find((item) => item.task_type === "xhs-authors");
+    },
+
+    async submitXhsAuthorCheck() {
+      if (this.xhsAuthorSubmitting || this.xhsAuthorTaskActive()) return;
+      this.xhsAuthorSubmitting = true;
+      try {
+        const result = await this.api("/api/settings/xhs/authors/check", { method: "POST" });
+        await Promise.all([this.refreshStatus(), this.refreshTasks()]);
+        this.notify("info", "作者校验已提交", result.message);
+      } catch (error) {
+        this.notify("error", "作者校验提交失败", error.message);
+      } finally {
+        this.xhsAuthorSubmitting = false;
+      }
     },
 
     async submitLivephotoCheck() {
@@ -7572,6 +8052,33 @@ function galleryApp(initialSettings = {}) {
         this.recentUpdates = previousState.recentUpdates;
         this.restoreRecentUpdateDisclosure(previousState.recentUpdateDisclosure);
         this.notify("error", "清空失败", error.message || "页面内容已恢复。");
+      }
+    },
+
+    async pullAllSubscriptions() {
+      if (this.currentView !== 'subscriptions' || this.allSubscriptionsPullPending) return;
+      this.allSubscriptionsPullPending = true;
+      try {
+        const sources = [
+          ['UP 主动态', '/api/pull/run'],
+          ['站点订阅', '/api/site-sync'],
+          ['小红书', '/api/xhs/sync'],
+        ];
+        const results = await Promise.allSettled(sources.map(([, url]) => this.api(url, { method: 'POST', body: '{}' })));
+        const submitted = [], failed = [];
+        results.forEach((result, index) => {
+          const name = sources[index][0];
+          if (result.status === 'fulfilled') submitted.push(name);
+          else failed.push(`${name}：${result.reason?.message || '提交失败'}`);
+        });
+        if (submitted.length) this.clearLocalGalleryCaches();
+        this.scheduleStatusRefresh();
+        await Promise.allSettled([this.refreshStatus(), this.refreshTasks()]);
+        this.notify(submitted.length ? (failed.length ? 'info' : 'success') : 'error',
+          submitted.length ? (failed.length ? '部分订阅拉取已提交' : '全部订阅拉取已提交') : '拉取未能提交',
+          [submitted.length ? `已提交：${submitted.join('、')}` : '', ...failed].filter(Boolean).join('；'));
+      } finally {
+        this.allSubscriptionsPullPending = false;
       }
     },
 

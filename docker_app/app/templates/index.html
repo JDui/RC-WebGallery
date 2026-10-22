@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-creators-random-1' %}
+    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-pull-toolbar-links-1' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -25,6 +25,9 @@
     <script defer src="/static/vendor/alpinejs.min.js?v={{ app_version }}"></script>
 </head>
 <body x-data="galleryApp({{ initial_ui_settings | default({}) | tojson | forceescape }})" data-intranet-access="{{ intranet_access }}">
+    <div class="touch-back-hint" data-testid="touch-back-hint" x-show="touchBackProgress > 0" :class="{ ready: touchBackProgress >= 1 }" :style="{ opacity: touchBackProgress, transform: `translateX(${(touchBackProgress - 1) * 32}px)` }" aria-hidden="true" x-cloak>
+        <svg class="nav-icon"><use :href="touchBackGesture?.layer === 'open-sidebar' ? '#icon-all' : '#icon-back'"></use></svg><span x-text="touchBackGesture?.layer === 'open-sidebar' ? '菜单' : '返回'"></span>
+    </div>
     <div class="intranet-edge" aria-hidden="true"></div>
     <svg class="ui-icon-definitions" xmlns="http://www.w3.org/2000/svg" width="0" height="0" aria-hidden="true" focusable="false">
         <defs>
@@ -192,11 +195,12 @@
                         <span class="status-dot" :class="{ running: pullStatus.running }"></span>
                         <span x-text="pullStatus.message || '空闲'"></span>
                     </div>
-                    <button class="secondary-button" x-show="currentView !== 'settings'" @click="openSettings()">设置</button>
+                    <button type="button" class="secondary-button" data-testid="topbar-subscriptions" x-show="currentView !== 'subscriptions'" @click="openSubscriptions('overview')">订阅</button>
+                    <button type="button" class="secondary-button" data-testid="topbar-pull-all" x-show="currentView === 'subscriptions'" :disabled="allSubscriptionsPullPending" @click="pullAllSubscriptions()" x-text="allSubscriptionsPullPending ? '提交中…' : '拉取全部'" x-cloak></button>
                 </div>
             </header>
 
-            <section class="gallery-stage" :class="{'search-has-results': searchActive() && searchQuery}" data-testid="section-gallery" x-show="currentView === 'gallery'" x-ref="galleryStage">
+            <section class="gallery-stage" :class="{'search-has-results': searchActive() && searchQuery, 'is-pulling': !!randomPullGesture?.locked, 'is-refreshing': randomRefreshing && mobileRandomRefresh()}" :style="{ '--gallery-pull-progress': randomPullVisualProgress() }" data-testid="section-gallery" x-show="currentView === 'gallery'" x-ref="galleryStage">
                 <section class="search-panel" :class="searchQuery ? 'search-results-bar' : 'search-landing'" x-show="searchActive()" x-cloak>
                     <form class="search-engine-form" @submit.prevent="applySearch()">
                         <label class="search-engine-field">
@@ -222,20 +226,33 @@
                             <input type="range" min="1" max="8" step="1" aria-label="网格期望列数" :aria-valuetext="galleryDensityCaption()" :value="galleryColumnCount" @input="setGalleryColumnCount($event.target.value)">
                             <small class="range-caption" x-text="`${galleryColumnCount} → ${resolveGalleryColumns()} 列`"></small>
                         </label>
-                        <label class="gallery-sort-label">排序
-                            <select class="ui-field" aria-label="图库排序" :value="timeSortMode" @change="setTimeSortMode($event.target.value)">
-                                <option value="desc">来源发布：最新优先</option>
-                                <option value="asc">来源发布：最早优先</option>
-                                <option value="imported">最近入库</option>
-                                <option value="random">随机</option>
-                            </select>
-                        </label>
+                        <div class="gallery-sort-controls">
+                            <div class="segmented-pill gallery-sort-switch" role="group" aria-label="排序方式">
+                                <span class="segmented-pill-indicator" :style="{ transform: timeSortMode === 'random' ? 'translateX(0)' : 'translateX(100%)' }" aria-hidden="true"></span>
+                                <button type="button" :class="{ active: timeSortMode === 'random' }" :aria-pressed="timeSortMode === 'random'" @click="setSortGroup(true)">随机</button>
+                                <button type="button" :class="{ active: timeSortMode !== 'random' }" :aria-pressed="timeSortMode !== 'random'" @click="setSortGroup(false)">按序</button>
+                            </div>
+                            <button type="button" class="secondary-button random-refresh-button" x-show="randomModeActive() && !mobileRandomRefresh()" x-cloak :disabled="galleryFetching || randomRefreshing" @click="refreshRandomGallery()">手气不错</button>
+                            <label class="gallery-sort-label" x-show="timeSortMode !== 'random'" x-cloak>
+                                <select class="ui-field" aria-label="排序类型" :value="orderedSortMode" @change="setTimeSortMode($event.target.value)">
+                                    <option value="imported">最近入库</option>
+                                    <option value="desc">最新发布</option>
+                                    <option value="asc">最早发布</option>
+                                </select>
+                            </label>
+                        </div>
                         <button class="secondary-button time-filter-toggle" :class="{ 'is-on': timeFilterActive() }" @click="toggleTimeFilter()" :data-tooltip="timeFilterActive() ? '已限定时间范围，点击调整或清空' : '按时间范围筛选图库'" x-text="timeFilterOpen ? '收起筛选' : (timeFilterActive() ? `筛选 · ${timeFilterSummary()}` : '筛选')"></button>
                         <div class="mode-switch" x-show="!compactViewport && category !== 'video'" x-cloak>
                             <button class="chip-button" :class="{ active: galleryViewMode === 'folder' }" :aria-pressed="galleryViewMode === 'folder'" @click="setGalleryViewMode('folder')">动态视图</button>
                             <button class="chip-button" :class="{ active: galleryViewMode === 'pair' }" :aria-pressed="galleryViewMode === 'pair'" @click="setGalleryViewMode('pair')">图片视图</button>
                         </div>
                     </div>
+                </div>
+                <div class="gallery-pull-hint" role="status" :aria-hidden="randomPullVisualProgress() === 0" x-show="mobileRandomRefresh() && randomModeActive()" x-cloak>
+                    <span class="gallery-pull-symbol" aria-hidden="true">
+                        <svg viewBox="0 0 36 36"><circle class="gallery-pull-track" cx="18" cy="18" r="15"/><circle class="gallery-pull-ring" cx="18" cy="18" r="15" pathLength="100" transform="rotate(-90 18 18)"/><path class="gallery-pull-arrow" d="M18 11v14m-5-5 5 5 5-5"/></svg>
+                    </span>
+                    <span x-text="randomRefreshing ? '正在刷新随机顺序…' : (randomPullProgress >= 1 ? '松开刷新随机顺序' : '下拉刷新随机顺序')"></span>
                 </div>
                 <section class="time-filter-panel" x-show="timeFilterOpen" x-transition.opacity.duration.180ms x-cloak>
                     <div class="time-filter-copy">
@@ -265,12 +282,6 @@
                         </div>
                     </div>
                     <div class="button-row time-filter-actions">
-                        <div class="mode-switch time-filter-sort-switch">
-                            <button class="chip-button" :class="{ active: timeSortMode === 'desc' }" :aria-pressed="timeSortMode === 'desc'" @click="setTimeSortMode('desc')">时间倒序</button>
-                            <button class="chip-button" :class="{ active: timeSortMode === 'asc' }" :aria-pressed="timeSortMode === 'asc'" @click="setTimeSortMode('asc')">时间正序</button>
-                            <button class="chip-button" :class="{ active: timeSortMode === 'imported' }" :aria-pressed="timeSortMode === 'imported'" @click="setTimeSortMode('imported')">最近入库</button>
-                            <button class="chip-button" :class="{ active: timeSortMode === 'random' }" :aria-pressed="timeSortMode === 'random'" @click="setTimeSortMode('random')">随机排序</button>
-                        </div>
                         <div class="mode-switch" x-show="compactViewport" x-cloak>
                             <button class="chip-button" :class="{ active: galleryViewMode === 'folder' }" :aria-pressed="galleryViewMode === 'folder'" @click="setGalleryViewMode('folder')">动态视图</button>
                             <button class="chip-button" :class="{ active: galleryViewMode === 'pair' }" :aria-pressed="galleryViewMode === 'pair'" @click="setGalleryViewMode('pair')">图片视图</button>
@@ -300,11 +311,12 @@
                                                 class="photo-card gallery-item-card"
                                                 data-testid="photo-card"
                                                 :data-gallery-key="galleryItemKey(item)"
+                                                :data-media-menu-folder="item.__deleted_placeholder ? null : item.folder_name"
                                                 :data-gallery-index="item.__gallery_index ?? ''"
                                                 :data-year-key="item.year_key"
                                                 :data-month-key="item.month_key"
                                                 :class="{ live: item.has_livephoto, video: isStandaloneVideoFolder(item, item.folder_name), 'deleted-placeholder-card': item.__deleted_placeholder, 'is-appearing': item.__appearing, 'small-quality': galleryQualityFor(item) === 'small' }"
-                                                :style="item.__deleted_placeholder ? galleryPlaceholderStyle(item) : null"
+                                                :style="item.__deleted_placeholder ? galleryPlaceholderStyle(item) : {}"
                                                 @click="item.__deleted_placeholder ? null : openFolder(item.folder_name, item)"
                                                 >
                                                     <template x-if="item.__deleted_placeholder">
@@ -337,7 +349,7 @@
                                                         <svg class="favorite-icon" aria-hidden="true"><use href="#icon-favorites"></use></svg>
                                                     </button>
                                                     <div class="card-trash-zone" @click.stop>
-                                                        <template x-if="pendingTrashFolder !== item.folder_name">
+                                                        <template x-if="!compactViewport && pendingTrashFolder !== item.folder_name">
                                                             <button class="mini-trash-button" @click="askTrashFolder(item.folder_name)" :aria-label="item.folder_name?.startsWith('xhs_') ? '删除并取消点赞' : '移入垃圾桶'">
                                                                 <svg class="trash-icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
                                                             </button>
@@ -373,12 +385,14 @@
                                 <template x-for="item in galleryWindowItems()" :key="galleryItemKey(item)">
                                             <article
                                                 class="photo-card asset-card gallery-item-card"
+                                                :data-media-menu-folder="item.__deleted_placeholder ? null : item.folder_name"
+                                                :data-media-menu-pair="item.pair_index"
                                                 :data-gallery-key="galleryItemKey(item)"
                                                 :data-gallery-index="item.__gallery_index ?? ''"
                                                 :data-year-key="item.year_key"
                                                 :data-month-key="item.month_key"
                                                 :class="{ live: item.has_livephoto, 'deleted-placeholder-card': item.__deleted_placeholder, 'is-appearing': item.__appearing, 'small-quality': galleryQualityFor(item) === 'small' }"
-                                                :style="item.__deleted_placeholder ? galleryPlaceholderStyle(item) : null"
+                                                :style="item.__deleted_placeholder ? galleryPlaceholderStyle(item) : {}"
                                                 @click="item.__deleted_placeholder ? null : openGalleryPair(item)"
                                                 @mouseenter="item.has_livephoto ? startHoverPreview($event) : null"
                                                 @mouseleave="item.has_livephoto ? stopHoverPreview($event) : null"
@@ -416,7 +430,7 @@
                                                     </div>
                                                 </div>
                                                 <div class="card-trash-zone" @click.stop>
-                                                    <template x-if="!pairDeletePending(item.folder_name, item.pair_index)">
+                                                    <template x-if="!compactViewport && !pairDeletePending(item.folder_name, item.pair_index)">
                                                         <button class="mini-trash-button" @click="askDeletePair(item.folder_name, item.pair_index)" :aria-label="`永久删除第 ${item.pair_index} 组图片`">
                                                             <svg class="trash-icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
                                                         </button>
@@ -566,6 +580,7 @@
                 </div>
                 <div class="empty-state" x-show="!recentUpdatesLoading && recentUpdates.groups.length === 0" x-cloak>
                     <strong>还没有最近更新</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="成功拉取或同步并加入图库的动态会按任务时间显示在这里。">?</button>
+                    <p class="recent-update-empty-hint" x-show="recentUpdatesEmptyHint()" x-text="recentUpdatesEmptyHint()" x-cloak></p>
                 </div>
                 <div class="empty-state" x-show="recentUpdatesLoading && recentUpdates.groups.length === 0" x-cloak>
                     <strong>正在加载最近更新</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="正在读取近期拉取、同步任务与当前图库内容。">?</button>
@@ -916,7 +931,7 @@
                 <div class="settings-save-bar">
                     <nav class="settings-groups" aria-label="设置分组">
                         <template x-for="group in [{key:'sync',name:'同步',label:'同步与来源'},{key:'network',name:'网络',label:'网络与内网访问'},{key:'filter',name:'过滤',label:'过滤与重复'},{key:'media',name:'界面',label:'界面与媒体'},{key:'account',name:'账号',label:'账号'},{key:'maintenance',name:'维护',label:'维护与清理'}]" :key="group.key">
-                            <button class="chip-button" :aria-label="group.label" :data-tooltip="group.label" :aria-pressed="settingsGroup === group.key" :class="{active:settingsGroup === group.key}" @click="settingsGroup = group.key" x-text="group.name"></button>
+                            <button class="chip-button" :aria-label="group.label" :data-tooltip="group.label" :aria-pressed="settingsGroup === group.key" :class="{active:settingsGroup === group.key}" @click="setSettingsGroup(group.key)" x-text="group.name"></button>
                         </template>
                     </nav>
                     <span class="settings-save-state" role="status" x-text="settingsSaving ? '保存中…' : settingsDirty() ? '未保存' : '已保存'"></span>
@@ -988,6 +1003,10 @@
                         <h4 class="heading-with-help">界面与缩略图<button type="button" class="help-button" aria-label="界面与缩略图说明" data-tooltip="瀑布流与详情共用 thumb 缩略图，查看器加载原图。">?</button></h4>
                         <div class="interface-settings-grid">
                             <label>应用标题 <input class="ui-field" type="text" x-model="settings.app_title" placeholder="RC-WebGallery"></label>
+                            <div>
+                                <div class="heading-with-help">默认随机<button type="button" class="help-button" aria-label="默认随机排序说明" data-tooltip="保存后，打开或重新进入“全部项目”时生效。开启使用随机排序；关闭使用按序排序，初始为最近入库。">?</button></div>
+                                <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.gallery_default_random" data-testid="gallery-default-random"> 默认使用随机排序</label>
+                            </div>
                             <label>显示性能模式
                                 <select class="ui-field" x-model="performanceMode" @change="setPerformanceMode($event.target.value)" :data-tooltip="resolvedPerformanceMode === 'low' ? '已降低模糊和阴影，媒体功能不受影响。' : '保留完整视觉效果。'">
                                     <option value="auto">自动</option>
@@ -1148,16 +1167,28 @@
                         </template>
                     </article>
 
+                    <article class="settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance" data-testid="xhs-author-maintenance">
+                        <h4 class="heading-with-help">数据维护<button type="button" class="help-button" aria-label="小红书作者校验说明" data-tooltip="小红书作者校验：检查全库笔记，为缺失昵称或显示为 ID 的作者补回昵称。先使用本地已知昵称，再通过当前登录账号的点赞列表补全；请先完成小红书登录。按篇统计进度与修复结果，可在任务队列中查看；未找到作者的笔记会保留原值并列为待处理。仅修正作者信息，不改动笔记内容和媒体。">?</button></h4>
+                        <div class="button-row">
+                            <button type="button" class="secondary-button" data-testid="xhs-author-check" @click="submitXhsAuthorCheck()" :disabled="xhsAuthorSubmitting || xhsAuthorTaskActive()" x-text="xhsAuthorTaskActive() ? '作者校验中…' : '作者校验'"></button>
+                        </div>
+                        <p class="field-copy" role="status" x-show="xhsAuthorLatestTask()" x-text="xhsAuthorLatestTask()?.message || ''"></p>
+                    </article>
+
                     <article class="settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance" data-testid="data-upgrade-maintenance">
-                        <h4 class="heading-with-help">数据检查<button type="button" class="help-button" aria-label="数据结构升级说明" data-tooltip="检查会验证数据库与原始媒体引用，并记录缺失文件；已标为 duplicate 的站点去重记录不算缺失。修复会重新检查，优先寻找同一内容目录中的原文件，再使用已有站点原文件地址补下；不删除记录、不覆盖已有文件。过期地址、小红书或无下载地址的条目会列出原因，需重新同步来源。检查、修复与升级期间所有页面均暂停访问，完成后解封，不会自动循环修复。旧版本数据标记为脏、待升级。升级会备份数据库，拆分设置、订阅与浏览索引，建立发布时间及入库时间索引，并将 images、livephoto 迁移为 类型／来源／日期／内容。服务中断后可继续。数据库备份保留在 config/before-data-layout-v2；请先备份完整 config 与 data，并预留备份、模块副本及事务日志所需空间。">?</button></h4>
+                        <h4 class="heading-with-help">数据检查与备份<button type="button" class="help-button" aria-label="数据结构升级说明" data-tooltip="检查会验证数据库与原始媒体引用；已标为 duplicate 的去重记录不算缺失。修复会寻找原文件或补下可用原文件，不覆盖已有文件。升级会先保存完整数据库备份，按 B站动态、站点订阅、小红书笔记分库，并校验每张表；已完成 v2 的媒体目录无需再搬迁。维护期间所有页面暂停访问，中断后可继续。升级前后及手动备份保留在 config/backups；自动备份每24小时执行，保留至少最近3代完整备份。数据库备份不含媒体，请另行备份完整 config 与 data，并预留数据库副本、事务日志和主库压缩所需空间。">?</button></h4>
                         <p class="field-copy" role="status" x-text="dataUpgrade.current_version ? (dataUpgrade.dirty ? '旧版数据（脏） · 待升级' : '数据结构已是最新版本') : '正在检查数据版本…'"></p>
-                        <p class="field-copy" x-show="dataUpgrade.result" x-text="`上次检查 ${dataUpgrade.result?.checked_assets || 0} 个媒体引用，缺失 ${dataUpgrade.result?.missing_assets || 0} 个`"></p>
-                        <p class="field-copy" x-show="dataUpgrade.result && !dataUpgrade.result.check_version">旧规则结果，待重新检查</p>
+                        <p class="field-copy" x-show="dataUpgrade.result && dataUpgrade.action !== 'backup'" x-text="`上次检查 ${dataUpgrade.result?.checked_assets || 0} 个媒体引用，缺失 ${dataUpgrade.result?.missing_assets || 0} 个`"></p>
+                        <p class="field-copy" x-show="dataUpgrade.result && dataUpgrade.action !== 'backup' && !dataUpgrade.result.check_version">旧规则结果，待重新检查</p>
+                        <p class="field-copy" x-show="dataUpgrade.content_shards">内容已分为 B站动态、站点订阅、小红书笔记三库，首页使用独立浏览索引。</p>
+                        <p class="field-copy" x-text="dataUpgrade.backup?.latest ? `最近数据库备份：${dataUpgrade.backup.latest.created_at}（不含媒体）` : '尚无完整数据库备份'"></p>
+                        <p class="field-copy" role="alert" x-show="dataUpgrade.backup?.last_attempt?.ok === false" x-text="`最近备份失败：${dataUpgrade.backup?.last_attempt?.error || ''}`"></p>
                         <p class="field-copy" x-show="dataUpgrade.result?.ignored_duplicates" x-text="`已排除 ${dataUpgrade.result?.ignored_duplicates || 0} 条站点去重记录`"></p>
                         <div class="button-row">
                             <button type="button" class="secondary-button" @click="startDataUpgrade('check')" :disabled="dataUpgradeSubmitting">检查数据</button>
+                            <button type="button" class="secondary-button" @click="startDataUpgrade('backup')" :disabled="dataUpgradeSubmitting">立即备份数据库</button>
                             <button type="button" class="secondary-button" data-testid="data-repair-start" x-show="dataUpgrade.result?.missing_assets > 0" @click="startDataUpgrade('repair')" :disabled="dataUpgradeSubmitting">重新检查并修复缺失</button>
-                            <button type="button" class="secondary-button" x-show="dataUpgrade.result" @click="loadDataCheckReport()" :disabled="dataUpgradeSubmitting">查看检查明细</button>
+                            <button type="button" class="secondary-button" x-show="dataUpgrade.result && dataUpgrade.action !== 'backup'" @click="loadDataCheckReport()" :disabled="dataUpgradeSubmitting">查看检查明细</button>
                             <button type="button" class="primary-button" data-testid="data-upgrade-start" @click="startDataUpgrade()" :disabled="dataUpgradeSubmitting || !dataUpgrade.dirty" x-text="dataUpgradeSubmitting ? '准备升级…' : '升级数据结构并迁移 data'"></button>
                         </div>
                         <div x-show="dataCheckReport" style="max-height:360px;overflow:auto" x-cloak>
@@ -1445,10 +1476,10 @@
                                 </div>
                             </div>
                             <template x-if="xhsLoginInlineOpen && xhsLoginSession?.viewer_url">
-                                <div class="xhs-login-backdrop" @click.self="xhsLoginInlineOpen = false" @keydown.escape.stop="xhsLoginInlineOpen = false">
+                                <div class="xhs-login-backdrop" data-modal-layer="xhs-login" tabindex="-1" @click.self="xhsLoginInlineOpen = false" @keydown.escape.stop="handleEscape()">
                                     <section class="xhs-login-dialog" role="dialog" aria-modal="true" aria-label="小红书 Chromium 登录">
                                         <div class="panel-card-actions"><strong>小红书 Chromium 登录</strong>
-                                            <button type="button" class="secondary-button" @click="xhsLoginInlineOpen = false">收起登录窗口</button>
+                                            <button type="button" class="secondary-button" data-modal-close @click="xhsLoginInlineOpen = false">收起登录窗口</button>
                                         </div>
                                         <iframe class="xhs-login-frame" :src="xhsLoginSession.viewer_url" title="小红书扫码登录窗口" referrerpolicy="no-referrer"></iframe>
                                         <button type="button" class="primary-button" @click="xhsLogin('finish')" :disabled="xhsBusy">完成扫码</button>
@@ -1778,7 +1809,7 @@
         </main>
 
         <div class="detail-backdrop" data-testid="detail-backdrop" data-modal-layer="detail" role="dialog" :aria-label="detail.folder?.title || '动态详情'" tabindex="-1" x-show="detail.open || detailClosing" :class="{ open: detail.open && !detailClosing, closing: detailClosing }" @click.self="closeDetail()" @wheel.prevent.stop @touchmove.prevent.self x-cloak>
-            <section class="detail-shell" x-ref="detailShell" x-show="detail.open || detailClosing" :class="{ open: detail.open && !detailClosing, closing: detailClosing }" @wheel.stop @touchmove.stop @scroll.passive="updateDetailHeader($event); scheduleDetailWindowShift()">
+            <section class="detail-shell" :data-media-menu-folder="detail.folder?.folder_name" x-ref="detailShell" x-show="detail.open || detailClosing" :class="{ open: detail.open && !detailClosing, closing: detailClosing }" @wheel.stop @touchmove.stop @scroll.passive="updateDetailHeader($event); scheduleDetailWindowShift()">
                 <div class="detail-sticky-bar">
                     <div class="detail-compact-bar" role="toolbar" aria-label="动态详情操作" x-show="detailHeaderCompact" x-transition.opacity.duration.160ms x-cloak>
                         <strong class="detail-compact-title" :title="detail.folder?.title" x-text="detail.folder?.title || '动态详情'"></strong>
@@ -1838,6 +1869,8 @@
                             class="detail-card"
                             data-testid="detail-card"
                             :data-detail-key="detailPairKey(pair)"
+                            :data-media-menu-folder="pair.placeholder ? null : detail.folder?.folder_name"
+                            :data-media-menu-pair="pair.pair_index"
                             :class="{ live: pair.livephoto, placeholder: pair.placeholder, 'is-appearing': pair.__appearing, 'small-quality': !pair.promote_preview, 'thumb-quality': pair.promote_preview }"
                             @click="pair.placeholder ? null : openPair(pair.pair_index)"
                             @mouseenter="pair.livephoto ? startHoverPreview($event) : null"
@@ -1865,7 +1898,7 @@
                                     ></video>
                                 </template>
                                 <div class="card-trash-zone detail-card-trash" @click.stop>
-                                    <template x-if="!pairDeletePending(detail.folder?.folder_name, pair.pair_index)">
+                                    <template x-if="!compactViewport && !pairDeletePending(detail.folder?.folder_name, pair.pair_index)">
                                         <button class="mini-trash-button" @click="askDeletePair(detail.folder?.folder_name, pair.pair_index)" :aria-label="`永久删除第 ${pair.pair_index} 组图片`">
                                             <svg class="trash-icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
                                         </button>
@@ -1893,7 +1926,7 @@
         </div>
 
         <div class="xhs-video-backdrop" data-testid="xhs-video-backdrop" data-modal-layer="video-note" role="dialog" aria-modal="true" aria-label="视频播放器" tabindex="-1" x-show="videoNote.open" :class="{ 'video-feed-active': narrowViewport }" @click.self="closeVideoNote()" @touchstart.passive="startVideoFeedGesture($event)" @touchmove="moveVideoFeedGesture($event)" @touchend="endVideoFeedGesture($event)" @touchcancel="videoFeedGesture = null" x-cloak>
-            <section class="xhs-video-shell" :style="`--feed-direction: ${videoFeedDirection}`">
+            <section class="xhs-video-shell" :data-media-menu-folder="videoNote.folder?.folder_name" :style="`--feed-direction: ${videoFeedDirection}`">
                 <header class="xhs-video-head">
                     <div><h3 x-text="videoNote.folder?.title || '视频笔记'"></h3>
                         <p class="viewer-kicker"><span x-text="displayDate(videoNote.folder?.pub_time)"></span><span> - </span><a class="creator-link" x-show="creatorProfileUrl(videoNote.folder)" :href="creatorProfileUrl(videoNote.folder) || null" target="_blank" rel="noopener noreferrer" x-text="creatorName(videoNote.folder)"></a><span x-show="!creatorProfileUrl(videoNote.folder)" x-text="creatorName(videoNote.folder)"></span></p>
@@ -1903,8 +1936,8 @@
                             <svg class="favorite-icon" aria-hidden="true"><use href="#icon-favorites"></use></svg>
                         </button>
                         <button type="button" class="secondary-button" @click="openReviewSource(videoNote.folder)" :disabled="!reviewSourceUrl(videoNote.folder)">原贴</button>
-                        <div class="video-delete-slot">
-                            <template x-if="pendingTrashFolder !== videoNote.folder?.folder_name">
+                        <div class="video-delete-slot" x-show="!compactViewport || pendingTrashFolder === videoNote.folder?.folder_name">
+                            <template x-if="!compactViewport && pendingTrashFolder !== videoNote.folder?.folder_name">
                                 <button type="button" class="secondary-button danger-button" data-testid="video-delete" @click="askTrashFolder(videoNote.folder?.folder_name)" :aria-label="videoNote.folder?.folder_name?.startsWith('xhs_') ? '删除视频并取消点赞' : '删除视频（移入垃圾桶）'" :title="videoNote.folder?.folder_name?.startsWith('xhs_') ? '删除视频并取消点赞' : '移入垃圾桶并清理本地文件'">删除</button>
                             </template>
                             <template x-if="pendingTrashFolder === videoNote.folder?.folder_name">
@@ -1968,7 +2001,9 @@
 
         <div class="viewer-backdrop" data-testid="viewer-backdrop" data-modal-layer="viewer" role="dialog" aria-label="图片查看器" tabindex="-1" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @click.self="closeViewer()" @wheel.prevent.stop @touchmove.prevent.stop x-cloak>
             <div class="viewer-shell viewer-shell-full" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @click="viewerShellClick($event)" @wheel.prevent.stop @touchmove.prevent.stop>
-                <div class="viewer-floating viewer-floating-right" role="toolbar" aria-label="图片操作" @click.stop @wheel.prevent.stop @touchmove.prevent.stop>
+                <div class="viewer-floating viewer-floating-right" :class="{ 'toolbar-open': viewerToolbarOpen }" role="toolbar" aria-label="图片操作" @pointerenter="if ($event.pointerType === 'mouse') viewerToolbarOpen = true" @pointerleave="if ($event.pointerType === 'mouse' && !$el.querySelector(':focus-visible')) viewerToolbarOpen = false" @focusin="viewerToolbarOpen = true" @focusout="$nextTick(() => { if (!$el.matches(':hover') && !$el.contains(document.activeElement)) viewerToolbarOpen = false })" @click.stop @wheel.prevent.stop @touchmove.prevent.stop>
+                    <button type="button" class="secondary-button viewer-icon-button viewer-toolbar-toggle" :aria-expanded="viewerToolbarOpen" aria-label="图片工具栏" data-tooltip="图片工具栏，悬停或点击展开" @click="viewerToolbarOpen = !viewerToolbarOpen"><svg class="viewer-control-icon" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
+                    <div class="viewer-toolbar-actions">
                     <button type="button" class="secondary-button viewer-action-button" x-show="viewer.pair?.livephoto" @click="cyclePlayback()" :aria-label="`播放模式：${playbackModeLabel()}`" :data-tooltip="`播放模式：${playbackModeLabel()}，点击切换`" x-text="playbackModeLabel()"></button>
                     <button type="button" class="secondary-button viewer-icon-button" x-show="viewer.folder?.folder_name" @click="openViewerFolder()" aria-label="返回动态" data-tooltip="返回动态"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-back"></use></svg></button>
                     <div class="viewer-pagination" role="group" aria-label="图片翻页">
@@ -1985,6 +2020,8 @@
                         </div>
                     </template>
                     <button type="button" class="secondary-button viewer-icon-button" data-modal-close @click="closeViewer()" aria-label="关闭" title="关闭（Esc）"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
+                    <button type="button" class="secondary-button viewer-icon-button viewer-toolbar-hide" @click="viewerToolbarOpen = false; $el.blur()" aria-label="收起工具栏" data-tooltip="收起工具栏，上滑图片可再次展开"><svg class="viewer-control-icon" aria-hidden="true"><path d="m5 9 7 7 7-7"/></svg></button>
+                    </div>
                 </div>
                 <article class="viewer-stage-wrap" :class="{ live: viewer.pair?.livephoto, closing: viewerClosing, 'switch-left': viewerSwitchDirection === 'left', 'switch-right': viewerSwitchDirection === 'right', 'is-swapping': viewerSwapPending }" x-show="viewer.pair || viewerClosing" x-cloak>
                     <div
@@ -2022,6 +2059,16 @@
                         </template>
                     </div>
                 </article>
+            </div>
+        </div>
+
+        <div class="media-context-menu" data-modal-layer="media-menu" data-testid="media-context-menu" role="dialog" aria-label="内容操作" tabindex="-1" x-show="mediaContextMenu.open" @click.self="closeMediaContextMenu()" @wheel.prevent.stop @touchmove.prevent.stop x-cloak>
+            <div class="media-context-menu-panel" role="menu" :style="{ left: `${mediaContextMenu.x}px`, top: `${mediaContextMenu.y}px` }" @click.stop>
+                <small x-text="mediaContextMenu.pairIndex ? '图片操作' : '动态操作'"></small>
+                <button type="button" role="menuitem" x-ref="mediaContextDelete" data-testid="media-menu-delete" @click="chooseMediaContextDelete()">
+                    <svg class="trash-icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
+                    <span x-text="mediaContextMenu.pairIndex ? '删除这组图片' : mediaContextMenu.folderName?.startsWith('xhs_') ? '删除并取消点赞' : '移入垃圾桶'"></span>
+                </button>
             </div>
         </div>
 

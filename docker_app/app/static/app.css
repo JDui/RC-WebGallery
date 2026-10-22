@@ -2277,6 +2277,11 @@ html.is-interacting .detail-card {
     margin-top: 14px;
 }
 
+.recent-update-empty-hint {
+    margin: 2px 0 0;
+    font-size: 13px;
+}
+
 .recent-update-collapse-button {
     position: sticky;
     top: calc(var(--layout-topbar-top) + 76px);
@@ -2858,7 +2863,7 @@ html.is-interacting .detail-card {
     background: rgba(4, 8, 14, 0.96);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-    z-index: 80;
+    z-index: 1700;
     overflow: hidden;
     overscroll-behavior: contain;
     touch-action: none;
@@ -5569,3 +5574,72 @@ details.settings-card[open] > summary::after { content: "⌃"; }
 
 .video-creator-meta { margin: 0; font-size: 12px; }
 .video-feed-caption .creator-link { pointer-events: auto; }
+.touch-back-hint {
+    position: fixed;
+    left: max(12px, env(safe-area-inset-left));
+    top: 48%;
+    z-index: 20000;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 16px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface-strong, #fff);
+    color: var(--text);
+    box-shadow: 0 4px 24px #0002;
+    pointer-events: none;
+}
+
+.touch-back-hint.ready {
+    color: var(--accent);
+    border-color: currentColor;
+}
+
+.media-context-menu {
+    position: fixed;
+    inset: 0;
+    z-index: 19000;
+    touch-action: none;
+}
+
+.media-context-menu-panel {
+    position: absolute;
+    width: min(220px, calc(100vw - 24px));
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-control);
+    background: var(--surface-strong);
+    box-shadow: var(--shadow-lift);
+}
+
+.media-context-menu-panel small { display: block; padding: 4px 10px 6px; color: var(--muted); }
+.media-context-menu-panel button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px;
+    border: 0;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--danger);
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+}
+.media-context-menu-panel button:hover { background: var(--accent-soft); }
+
+@media (max-width: 1100px), (max-aspect-ratio: 11/10) {
+    html, body { overscroll-behavior-x: contain; }
+    [data-media-menu-folder] {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+    }
+    [data-media-menu-folder] :is(input, textarea, [contenteditable="true"]) {
+        -webkit-user-select: text;
+        user-select: text;
+    }
+}

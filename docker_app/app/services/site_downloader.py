@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.database_safety import durable_replace
 
 from pathlib import Path
 from urllib.parse import urlparse
@@ -29,7 +30,7 @@ class MediaDownloader:
         if url.startswith("file://"):
             source = Path(urlparse(url).path)
             temp_target.write_bytes(source.read_bytes())
-            temp_target.replace(target)
+            durable_replace(temp_target, target)
             return
         try:
             with self.session.get(url, timeout=self.timeout, stream=True) as response:
@@ -38,7 +39,7 @@ class MediaDownloader:
                     for chunk in response.iter_content(chunk_size=1024 * 128):
                         if chunk:
                             handle.write(chunk)
-            temp_target.replace(target)
+            durable_replace(temp_target, target)
         except Exception:
             temp_target.unlink(missing_ok=True)
             raise

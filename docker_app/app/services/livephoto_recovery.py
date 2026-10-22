@@ -7,6 +7,7 @@ from uuid import uuid4
 from PIL import Image
 
 from app.services.livephoto import IMAGES, VIDEOS, PREFIX, LivePhotoError
+from app.services.database_safety import durable_replace
 
 
 class LivePhotoRecovery:
@@ -189,7 +190,7 @@ class LivePhotoRecovery:
                         staged = root / f'.livephoto-restore-{uuid4().hex}'
                         try:
                             shutil.copy2(original, staged)
-                            os.replace(staged, image)
+                            durable_replace(staged, image)
                         finally:
                             staged.unlink(missing_ok=True)
                     if image is not None:

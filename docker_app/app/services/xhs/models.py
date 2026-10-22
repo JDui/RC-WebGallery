@@ -5,7 +5,7 @@ from datetime import datetime
 import json
 import re
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 from uuid import UUID
 
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
@@ -60,17 +60,27 @@ def timestamp(value: Any) -> str:
 
 
 def note_url(value: Any, note_id: str) -> str:
-    value = text(value, 512)
+    # Public note access parameters belong to the web link, not to account authentication.
+    # Keep the strict credential filter for all other manifest fields.
+    if not isinstance(value, str) or len(value) > 2048 or any(ord(ch) < 32 for ch in value):
+        raise XhsValidationError("小红书笔记链接格式无效")
     try:
         parsed = urlsplit(value)
         valid = (parsed.scheme == "https" and parsed.netloc == "www.xiaohongshu.com"
-                 and not parsed.query and not parsed.fragment
+                 and not parsed.fragment
                  and parsed.path in {f"/explore/{note_id}", f"/discovery/item/{note_id}"})
+        pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True, max_num_fields=2)
+        query = dict(pairs)
+        valid = valid and len(query) == len(pairs) and not query.keys() - {'xsec_token', 'xsec_source'}
+        if query:
+            valid = valid and bool(re.fullmatch(r'[A-Za-z0-9_+/=-]{1,1024}', query.get('xsec_token', '')))
+            if 'xsec_source' in query:
+                valid = valid and bool(re.fullmatch(r'[A-Za-z0-9_-]{1,64}', query['xsec_source']))
     except ValueError:
         valid = False
     if not valid:
-        raise XhsValidationError("仅允许与笔记 ID 一致、无查询参数的小红书 HTTPS 笔记链接")
-    return f"https://www.xiaohongshu.com/explore/{note_id}"
+        raise XhsValidationError("仅允许与笔记 ID 一致的小红书 HTTPS 笔记链接及公开访问参数")
+    return f"https://www.xiaohongshu.com/explore/{note_id}" + ('?' + urlencode(query) if query else '')
 
 
 @dataclass(frozen=True)

@@ -10,13 +10,41 @@ from typing import Callable, Iterable
 from uuid import uuid4
 
 from app.db import Database
-from app.services.utils import dumps_json, now_iso
+from app.services.utils import dumps_json, loads_json, now_iso
 from app.services.xhs.adapter import XhsLikesAdapter
 from app.services.xhs.models import MAX_ASSETS, MAX_NOTES, XhsManifest, XhsNote, XhsValidationError, identifier, integer, text
 
 
 class XhsConflict(RuntimeError):
     pass
+
+
+def update_note_web_url(conn, source_id, post_id, note_id, url):
+    """Refresh public links in the post and already archived browse rows together."""
+    from app.services.xhs.models import note_url
+    url = note_url(url, note_id)
+    row = conn.execute('select url from site_posts where id=? and source_id=?', (post_id, source_id)).fetchone()
+    if not row:
+        return url
+    previous = row['url'] or ''
+    if '?' not in url and 'xsec_token=' in previous:
+        url = note_url(previous, note_id)
+    if url == previous:
+        return url
+    conn.execute('update site_posts set url=? where id=? and source_id=?', (url, post_id, source_id))
+    folder = f'xhs_{source_id}_{note_id}'
+    stored = conn.execute('select metadata_json from folders where folder_name=?', (folder,)).fetchone()
+    if stored:
+        metadata = loads_json(stored[0], {})
+        metadata = metadata if isinstance(metadata, dict) else {}
+        metadata['site_post_url'] = url
+        if 'original_url' in metadata:
+            metadata['original_url'] = url
+        conn.execute('update folders set metadata_json=? where folder_name=?', (dumps_json(metadata), folder))
+    for table in ('folder_index', 'pair_index'):
+        conn.execute(f'update {table} set original_url=? where folder_name=?', (url, folder))
+    conn.execute('delete from gallery_page_cache')
+    return url
 
 
 # 锚点扑空止损：增量扫描最多翻到 2 倍基数仍未命中锚点即止损；
@@ -386,6 +414,7 @@ class XhsSyncService:
                         title = existing_post["title"]
                     conn.execute("update site_posts set title = ?, pub_date = coalesce(?, pub_date), updated_at = ? where id = ?",
                                  (title, parsed.pub_date, now, post_id))
+                    update_note_web_url(conn, source_id, post_id, note.note_id, parsed.url)
                 else:
                     new_count += 1
                     cursor = conn.execute(

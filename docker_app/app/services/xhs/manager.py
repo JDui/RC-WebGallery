@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.database_safety import durable_replace
 
 from datetime import datetime
 from contextlib import contextmanager
@@ -14,7 +15,7 @@ from PIL import Image
 from app.services.utils import TIMEZONE, dumps_json, loads_json, now_iso, parse_date
 from app.services.livephoto import LivePhotoError
 from app.services.xhs.models import XhsAsset, XhsNote, XhsValidationError, fields
-from app.services.xhs.sync import XhsConflict, XhsSyncService
+from app.services.xhs.sync import XhsConflict, XhsSyncService, update_note_web_url
 from app.services.xhs.worker_client import WorkerError, XhsWorkerClient
 
 
@@ -260,6 +261,8 @@ class XhsManager:
 
     def recover(self):
         with self.db.connect() as conn:
+            conn.execute("""update task_runs set status='failed',message='应用重启，作者校验已中断，可重试',finished_at=?
+                where task_type='xhs-authors' and status in ('queued','running','paused')""", (now_iso(),))
             conn.execute("""update task_runs set status='failed',message='本地已删除，原帖取消点赞因重启中断',finished_at=?
                 where task_type='xhs-unlike' and status in ('queued','running')""", (now_iso(),))
             interrupted = conn.execute("select * from xhs_jobs where state in ('queued','running')").fetchall()
@@ -442,6 +445,7 @@ class XhsManager:
                 if note.published_at:
                     post['pub_date'] = datetime.fromisoformat(note.published_at).astimezone(TIMEZONE).date().isoformat()
                 with self.db.connect() as conn:
+                    post['url'] = update_note_web_url(conn, source['source_id'], post['id'], note.note_id, note.url)
                     conn.execute('update site_posts set title=?,pub_date=?,updated_at=? where id=?',
                                  (post['title'], post['pub_date'], now_iso(), post['id']))
                     conn.execute('update xhs_like_state set note_type=?,author_id=?,author_name=? where site_post_id=?',
@@ -560,7 +564,7 @@ class XhsManager:
                     with Image.open(part) as image:
                         width, height = image.size
                         image.verify()
-                part.replace(target)
+                durable_replace(part, target)
                 with self.db.connect() as conn:
                     conn.execute('''update site_assets set status='ready',filename=?,rel_path=?,error=null,updated_at=? where id=?''',
                                  (target.name, self.storage.relative_to_storage(target), now_iso(), row['id']))

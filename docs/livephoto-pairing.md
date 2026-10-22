@@ -21,3 +21,24 @@ B 站动态和小红书笔记新下载的实况，在归档后自动为图片和
 新镜像包含 Debian `libimage-exiftool-perl`。已有镜像需要重新构建/升级后才具备写入能力，仅替换 Python 文件不够。开发环境需安装 ExifTool，或通过 `APP_EXIFTOOL_BIN` 指定工具路径；工具缺失会明确报错，不会伪报配对完成。
 
 旧目录为 `data/images/<贴文>` 与 `data/livephoto/<贴文>`，数据结构升级后为 `data/<类型>/<来源>/<日期>/<贴文>`，检查与修复统一通过 `folder_locations` 读取实际目录，无需另行同步一份 Live Photo 数据库。提供给 Immich 时需同时覆盖图片与视频，排除 `.thumbs`、`.covers`、`.source_covers`、`.reverse` 和 `.livephoto-*` 临时目录。小红书原始下载缓存也不应重复纳入扫描。尚未手动修复的旧数据继续保持原格式，在 Immich 中可能显示为分开的图片与视频。
+
+## v3 分库后的兼容测试
+
+`docker_app/checks/test_livephoto_immich_shards.py` 使用临时库、本地生成的 PNG/JPEG 图片及真实 MP4 视频，在 B站、站点、小红书三类内容完成实际升级和数据库重开后验证：
+
+- 既有文件全部字节和持久配对标识保持不变，配对记录落入对应物理分库，视频仍可解码且画面数据不变。
+- 无项目配置的 ExifTool 能从两份媒体读出相同非空标识；仅数据库标为 `ready` 不算成功。
+- 历史缺标识不会因升级或只读检查而被改写；显式修复后可回读且重复修复不再改写。
+- 错标识、缺原图、多候选都能报告；替换第二份媒体失败会恢复原件，并可重试成功。
+- 不同来源相同组编号使用不同永久标识，新下载配对不会顺带修改未触达的历史组，全库与局部检查范围分别核对。
+- 外部导入媒体复用其他分库已有的标识时，显式规范化为新组分配独立标识，原组文件保持不变。
+
+在包含 ExifTool、FFmpeg 和应用依赖的 Linux 环境中执行：
+
+```bash
+PYTHONPATH=docker_app:docker_app/checks:. python -m pytest -q docker_app/checks/test_livephoto_immich_shards.py::ImmichShardTests
+```
+
+2026-10-22：GPT-6-Luna / max 在 Linux 容器只读挂载源码后执行，专项 **10/10 通过**（31.46 秒）；既有 `checks.test_livephoto_layout` 与 `checks.test_xhs_livephoto` 合计 **23/23 通过**（20.028 秒），无失败或跳过。环境为 Python 3.12.15、ExifTool 12.57、FFmpeg 7.0.2-static；测试执行当前工作区源码，容器运行时来自 `zzs-bili-gallery:11.4.1-amd64`。
+
+这些是文件元数据和应用迁移集成测试，不连接 NAS 或真实来源网站，也不运行 Immich 服务；不能代替目标 Immich 版本的实际导入、合并与播放验证。

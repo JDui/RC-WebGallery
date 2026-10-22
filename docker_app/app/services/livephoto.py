@@ -14,6 +14,7 @@ from uuid import uuid4
 from PIL import Image
 
 from app.services.utils import loads_json, now_iso
+from app.services.database_safety import sync_file, sync_directory, durable_replace
 
 IMAGES = {'.jpg', '.jpeg', '.png', '.webp', '.avif', '.heic', '.heif'}
 VIDEOS = {'.mp4', '.mov', '.m4v'}
@@ -167,6 +168,8 @@ class LivePhotoService:
         for entry in journal:
             backup, target = Path(entry['backup']), Path(entry['target'])
             shutil.copy2(backup, target)
+            sync_file(target)
+            sync_directory(target.parent)
         self._save(row['folder_name'], row['pair_index'], status='pending', transaction_json=None)
         for entry in journal:
             shutil.rmtree(Path(entry['backup']).parent, ignore_errors=True)
@@ -217,9 +220,13 @@ class LivePhotoService:
                 for entry in journal:
                     original_stat = Path(entry['backup']).stat()
                     os.utime(entry['staged'], ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+                    sync_file(entry['backup'])
+                    sync_file(entry['staged'])
+                    sync_directory(Path(entry['backup']).parent)
+                    sync_directory(Path(entry['target']).parent)
                 self._save(folder_name, index, status='writing', transaction_json=json.dumps(journal))
                 for entry in journal:
-                    os.replace(entry['staged'], entry['target'])
+                    durable_replace(entry['staged'], entry['target'])
             # XHS downloads carry checksums; retain their archive integrity check.
             checksums = {'image_checksum': None, 'video_checksum': None}
             if folder_name.startswith('xhs_'):

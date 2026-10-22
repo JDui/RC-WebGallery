@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 from uuid import uuid4
 
 from app.services.utils import human_interval
-from app.services.xhs.models import XhsNote, identifier
+from app.services.xhs.models import XhsNote, identifier, note_url
 from app.services.xhs.browser_errors import launch_diagnostic
 from xhs_worker.media import MediaRejected, download_public_media
 from xhs_worker.parser import extract_detail_note, normalize_note, response_page, media_url, extract_video_candidates, extract_live_candidates, live_photo_seen, video_diagnostic
@@ -577,7 +577,6 @@ class BrowserRuntime:
                         self._register_assets(note['note_id'], raw.get('note_card') or raw.get('noteCard') or raw, candidates)
                         safe_note = XhsNote.parse(note)
                         from dataclasses import asdict
-                        result.append(asdict(safe_note))
                         self.seen.add(safe_note.note_id)
                         card = raw.get('note_card') or raw.get('noteCard') or raw
                         token = raw.get('xsec_token') or raw.get('xsecToken') or card.get('xsec_token') or card.get('xsecToken')
@@ -587,6 +586,10 @@ class BrowserRuntime:
                             self.note_links[safe_note.note_id] = safe_note.url + '?' + urlencode({'xsec_token': token, 'xsec_source': source})
                         if safe_note.note_id in observed_links:
                             self.note_links[safe_note.note_id] = observed_links[safe_note.note_id]
+                        public_note = asdict(safe_note)
+                        public_note['url'] = note_url(self.note_links.get(safe_note.note_id, safe_note.url), safe_note.note_id)
+                        public_note['assets'] = [asdict(asset) for asset in safe_note.assets]
+                        result.append(public_note)
                     return {'notes': result, 'end_of_feed': end, 'integrity_ok': reliable}
                 # 拟人化滚动：随机步幅 + 250~880ms 随机间隔，避免固定 1100px/0.5s 的机器特征。
                 await self.page.mouse.wheel(0, random.randint(650, 1300))
@@ -733,6 +736,7 @@ class BrowserRuntime:
                         'livephoto_seen': sum(1 for image in images if live_photo_seen(image)),
                         'livephoto_assets': motion_count})
                 from dataclasses import asdict
+                note['url'] = self.note_links[note_id]
                 parsed_note = XhsNote.parse(note)
                 safe_note = asdict(parsed_note)
                 safe_note['assets'] = [asdict(asset) for asset in parsed_note.assets]

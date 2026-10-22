@@ -247,6 +247,7 @@ def index(request: Request) -> HTMLResponse:
             "intranet_access": "local" if is_local_host(request.url.hostname or "") else "external",
             "initial_ui_settings": {
                 "wide_single_cover": bool(settings.get("wide_single_cover", False)),
+                "gallery_default_random": settings.get("gallery_default_random", False),
                 "random_cover_enabled": bool(settings.get("random_cover_enabled", True)),
                 "auto_load_enabled": bool(settings.get("auto_load_enabled", True)),
             },
@@ -341,8 +342,8 @@ def get_gallery_meta() -> dict[str, Any]:
 
 
 @app.get("/api/gallery/recent-updates")
-def get_recent_updates(limit: int = 50) -> dict[str, Any]:
-    return gallery.get_recent_updates(limit=max(1, min(50, int(limit))))
+def get_recent_updates(limit: int = 50, source_kind: str = "all") -> dict[str, Any]:
+    return gallery.get_recent_updates(limit=max(1, min(50, int(limit))), source_kind=source_kind)
 
 
 @app.get("/api/gallery/folders/{folder_name}")
@@ -1313,6 +1314,8 @@ def get_settings() -> dict[str, Any]:
 @app.put("/api/settings")
 def update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     payload = {key: value for key, value in payload.items() if key not in {"auth", "intranet_config_error"}}
+    if "gallery_default_random" in payload and not isinstance(payload["gallery_default_random"], bool):
+        raise HTTPException(status_code=400, detail="默认随机必须为布尔值")
     if "ui_theme" in payload:
         try:
             payload["ui_theme"] = normalize_ui_theme(payload["ui_theme"])
@@ -1371,7 +1374,7 @@ def start_data_upgrade(payload: dict[str, Any] = Body(default={})):
         raise HTTPException(status_code=409, detail='请等待图标任务完成')
     try:
         action = payload.get('action', data_upgrade.state.get('action', 'upgrade') if data_upgrade.blocked else 'upgrade')
-        if action not in ('check', 'upgrade', 'repair'):
+        if action not in ('check', 'upgrade', 'repair', 'backup'):
             raise HTTPException(status_code=400, detail='无效的数据维护操作')
         if data_upgrade.blocked and action != data_upgrade.state.get('action', 'upgrade'):
             raise HTTPException(status_code=409, detail='请先继续上一次数据维护')
@@ -1423,6 +1426,14 @@ def validate_content() -> dict[str, Any]:
 def rebuild_gallery_index() -> dict[str, Any]:
     try:
         return pull_manager.start_gallery_index_rebuild()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post('/api/settings/xhs/authors/check')
+def check_xhs_authors() -> dict[str, Any]:
+    try:
+        return pull_manager.start_xhs_author_check()
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

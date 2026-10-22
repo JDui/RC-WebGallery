@@ -12,6 +12,15 @@ from app.services.utils import dumps_json, loads_json
 
 
 class GalleryService:
+    # 最近更新按任务类型区分来源，与图库/搜索的来源页签（source_kind）一一对应：
+    # B站拉取→UP订阅、站点同步→站点订阅、小红书同步→小红书。
+    RECENT_UPDATES_ALL_TASK_TYPES = {"pull", "site-sync", "xhs-sync"}
+    RECENT_UPDATES_TASK_TYPES_BY_SOURCE_KIND = {
+        "up": {"pull"},
+        "site": {"site-sync"},
+        "xhs": {"xhs-sync"},
+    }
+
     def __init__(self, db: Database, storage: StorageService) -> None:
         self.db = db
         self.storage = storage
@@ -60,7 +69,8 @@ class GalleryService:
                 if payload.get("items") is not None:
                     payload["cache_hit"] = True
                     payload["cache_updated_at"] = cached.get("updated_at")
-                    attach_creators(self.db, payload.get("items", []))
+                    if not self.db.shards_enabled:
+                        attach_creators(self.db, payload.get("items", []))
                     return payload
         if not self.db.gallery_index_ready():
             payload = self._fallback_gallery_items(
@@ -165,7 +175,8 @@ class GalleryService:
         cache_signature: str,
         payload: dict,
     ) -> dict:
-        attach_creators(self.db, payload.get("items", []))
+        if not self.db.shards_enabled or any('creator_name' not in item for item in payload.get('items', [])):
+            attach_creators(self.db, payload.get("items", []))
         payload = {
             **payload,
             "cache_hit": False,
@@ -186,8 +197,13 @@ class GalleryService:
         self.db.set_gallery_page_cache('gallery-meta-v1', signature, result)
         return result
 
-    def get_recent_updates(self, limit: int = 50) -> dict:
+    def get_recent_updates(self, limit: int = 50, source_kind: str = "all") -> dict:
         normalized_limit = max(1, min(50, int(limit or 50)))
+        # 来源页签（全部项目/UP订阅/站点订阅/小红书）过滤任务类型；未知取值回退为全部来源。
+        allowed_task_types = self.RECENT_UPDATES_TASK_TYPES_BY_SOURCE_KIND.get(
+            self._normalize_source_kind(source_kind),
+            self.RECENT_UPDATES_ALL_TASK_TYPES,
+        )
         scan_limit = max(200, normalized_limit * 5)
         task_runs = self.db.list_task_runs(limit=scan_limit)
         task_runs.sort(
@@ -200,7 +216,7 @@ class GalleryService:
         candidates: list[tuple[dict, list[dict]]] = []
         dynamic_pairs: list[tuple[str, str]] = []
         for task in task_runs:
-            if task.get("task_type") not in {"pull", "site-sync", "xhs-sync"} or task.get("status") not in {"success", "partial"}:
+            if task.get("task_type") not in allowed_task_types or task.get("status") not in {"success", "partial"}:
                 continue
             details = loads_json(task.get("details_json"), {})
             added_items = details.get("added_items") if isinstance(details, dict) else None
@@ -272,11 +288,11 @@ class GalleryService:
             "total_items": sum(len(group["items"]) for group in groups),
         }
 
-    def get_folder_detail(self, folder_name: str) -> dict | None:
-        folder = self.db.get_folder(folder_name)
+    def get_folder_detail(self, folder_name: str, *, folder=None, assets=None, enrich=True) -> dict | None:
+        folder = self.db.get_folder(folder_name) if folder is None else folder
         if not folder:
             return None
-        assets = self.db.list_assets_for_folder(folder_name)
+        assets = self.db.list_assets_for_folder(folder_name) if assets is None else assets
         images = [self._asset_json(asset) for asset in assets if asset["media_type"] == "image"]
         livephotos = [self._asset_json(asset) for asset in assets if asset["media_type"] == "livephoto"]
         videos = [self._asset_json(asset) for asset in assets if asset["media_type"] == "video"]
@@ -302,8 +318,9 @@ class GalleryService:
                     "display_ratio": self._display_ratio(preview_asset),
                 }
             )
-        folder_card = self._folder_card_from_folder(folder)
-        attach_creators(self.db, [folder_card])
+        folder_card = self._folder_card_from_folder(folder, assets)
+        if enrich:
+            attach_creators(self.db, [folder_card])
         return {
             "folder": folder_card,
             "pairs": pairs,
@@ -318,6 +335,7 @@ class GalleryService:
         video_count = max(0, int(item.get('asset_count') or 0) - image_count - livephoto_count)
         previews = loads_json(item.get("preview_assets_json"), [])
         return {
+            **{key: item.get(key, '') for key in ('author_id', 'author_name', 'creator_name', 'creator_url', 'source_kind')},
             "folder_name": item["folder_name"],
             "title": item.get("title") or item["folder_name"],
             "text_prefix": item.get("text_prefix") or "",
@@ -385,6 +403,7 @@ class GalleryService:
         image = loads_json(item.get("image_json"), None)
         livephoto = loads_json(item.get("livephoto_json"), None)
         return {
+            **{key: item.get(key, '') for key in ('author_id', 'author_name', 'creator_name', 'creator_url', 'source_kind')},
             "item_key": item["item_key"],
             "folder_name": item["folder_name"],
             "pair_index": int(item.get("pair_index") or 0),
@@ -438,6 +457,8 @@ class GalleryService:
         return f"{ratio:.4f} / 1"
 
     def _original_url(self, item: dict) -> str:
+        if 'original_url' in item and (getattr(self.db, 'shards_enabled', False) or item.get('original_url')):
+            return item.get('original_url') or ''
         metadata = loads_json(item.get("metadata_json"), {})
         url = str(metadata.get("site_post_url") or metadata.get("original_url") or "").strip()
         if url:
@@ -460,53 +481,63 @@ class GalleryService:
         sort_order: str,
         random_seed: str | None = None,
     ) -> dict:
-        folders = self.db.list_folders()
-        xhs_uids = self.db.xhs_subscription_uids() if source_kind in {"site", "xhs"} else set()
-        filtered = [
-            folder
-            for folder in folders
-            if self._match(folder, category, year, month, start_month, end_month, subscription_uids, source_kind, xhs_uids)
-        ]
-        terms = [term.strip().lower() for term in str(search_query or "").split() if term.strip()]
-        if terms:
-            filtered = [
-                folder
-                for folder in filtered
-                if all(
-                    term in " ".join(
-                        str(folder.get(key) or "").lower()
-                        for key in ("folder_name", "title", "text_prefix", "subscription_name")
-                    )
-                    for term in terms
-                )
-            ]
-        if view_mode == "pair":
-            items = self._fallback_pair_items(filtered, category, sort_order="desc" if sort_order == "random" else sort_order)
+        # Paginate rows in SQL before loading any media. A missing index row
+        # must never turn a 24-card request into thousands of folder queries.
+        pair_mode = view_mode == 'pair'
+        where_sql, params = self.db._gallery_index_where(
+            category=category, year=year, month=month, start_month=start_month, end_month=end_month,
+            subscription_uids=subscription_uids, source_kind=source_kind, search_query=search_query,
+            table_alias='folders', pair_mode=pair_mode)
+        where_sql = where_sql.replace('folders.year_key', 'substr(folders.pub_time,1,4)').replace('folders.month_key', 'substr(folders.pub_time,1,7)')
+        where_sql = where_sql.replace('folders.source_kind', "(select case shard when 'xiaohongshu' then 'xhs' when 'sites' then 'site' else 'up' end from content_catalog where folder_name=folders.folder_name)")
+        where_sql = where_sql.replace('folders.video_count', "(select count(*) from assets a where a.folder_name=folders.folder_name and a.media_type='video')")
+        source = 'folders'
+        key = 'folders.folder_name'
+        if pair_mode:
+            source += " join (select folder_name,pair_index,max(media_type='image') as has_image,max(media_type='livephoto') as has_livephoto from assets where media_type in ('image','livephoto') group by folder_name,pair_index) p on p.folder_name=folders.folder_name"
+            where_sql = where_sql.replace('folders.has_image ', 'p.has_image ').replace('folders.has_livephoto', 'p.has_livephoto')
+            key = "folders.folder_name || '::' || p.pair_index"
         else:
-            items = [item for item in (self._folder_card_from_folder(folder) for folder in filtered) if item]
-            reverse = sort_order != "asc"
-            items.sort(
-                key=lambda item: (
-                    str(item.get("imported_at") or "") if sort_order == "imported" else int(item.get("pub_ts") or 0),
-                    str(item.get("folder_name") or item.get("item_key") or ""),
-                    int(item.get("pair_index") or 0),
-                ),
-                reverse=reverse,
-            )
-        if sort_order == "random":
-            table = "pair_index" if view_mode == "pair" else "folder_index"
-            where_sql, params = self.db._gallery_index_where(
+            where_sql += ' and exists(select 1 from assets a where a.folder_name=folders.folder_name)'
+        direction = 'asc' if sort_order == 'asc' else 'desc'
+        column = 'created_at' if sort_order == 'imported' else 'pub_ts'
+        order = f'folders.{column} {direction},folders.folder_name {direction}' + (',p.pair_index asc' if pair_mode else '')
+        select = 'folders.*' + (',p.pair_index as selected_pair' if pair_mode else '')
+        if sort_order == 'random':
+            with self.db.connect() as conn:
+                keys = [r[0] for r in conn.execute(f'select {key} from {source} where {where_sql}', params)]
+            table = 'pair_index' if pair_mode else 'folder_index'
+            canonical_where, canonical_params = self.db._gallery_index_where(
                 category=category, year=year, month=month, start_month=start_month, end_month=end_month,
                 subscription_uids=subscription_uids, source_kind=source_kind, search_query=search_query,
-                table_alias=table, pair_mode=view_mode == "pair")
-            by_key = {item.get("item_key") or item["folder_name"]: item for item in items}
-            snapshot = page_keys(self.db, table, where_sql, params, random_seed, page, page_size, fallback_keys=by_key)
-            total = snapshot["total"]
-            page_items = [by_key[key] for key in snapshot["keys"] if key in by_key]
+                table_alias=table, pair_mode=pair_mode)
+            snapshot = page_keys(self.db, table, canonical_where, canonical_params,
+                                 random_seed, page, page_size, fallback_keys=keys)
+            total, keys = snapshot['total'], snapshot['keys']
+            if keys:
+                with self.db.connect() as conn:
+                    rows = [dict(r) for r in conn.execute(f"select {select} from {source} where ({where_sql}) and ({key}) in ({','.join('?' for _ in keys)})", [*params, *keys])]
+                positions = {k: i for i, k in enumerate(keys)}
+                rows.sort(key=lambda r: positions[f"{r['folder_name']}::{r['selected_pair']}" if pair_mode else r['folder_name']])
+            else:
+                rows = []
         else:
-            total = len(items)
-            start = max(page - 1, 0) * page_size
-            page_items = items[start:start + page_size]
+            with self.db.connect() as conn:
+                total = conn.execute(f'select count(*) from {source} where {where_sql}', params).fetchone()[0]
+                rows = [dict(r) for r in conn.execute(f'select {select} from {source} where {where_sql} order by {order} limit ? offset ?',
+                                                     [*params, page_size, max(page-1, 0)*page_size])]
+        assets_by_folder = {}
+        for asset in self.db.list_assets_for_folders(list(dict.fromkeys(r['folder_name'] for r in rows))):
+            assets_by_folder.setdefault(asset['folder_name'], []).append(asset)
+        page_items = []
+        for folder in rows:
+            if pair_mode:
+                candidates = self._fallback_pair_items([folder], category, assets_by_folder=assets_by_folder)
+                page_items.extend(item for item in candidates if item['pair_index'] == folder['selected_pair'])
+            else:
+                item = self._folder_card_from_folder(folder, assets_by_folder.get(folder['folder_name'], []))
+                if item:
+                    page_items.append(item)
         return {
             "items": page_items,
             "page": page,
@@ -519,7 +550,9 @@ class GalleryService:
         }
 
     def _fallback_gallery_meta(self) -> dict:
-        folders = self.db.list_folders()
+        with self.db.connect() as conn:
+            folders = [dict(row) for row in conn.execute('select folder_name,pub_time,has_images,has_livephoto,is_favorite,subscription_uid,subscription_name from folders')]
+            video_folders = {row[0] for row in conn.execute("select distinct folder_name from assets where media_type='video'")}
         years: dict[str, list[str]] = {}
         counts = {"all": 0, "images": 0, "video": 0, "livephoto": 0, "paired": 0, "unpaired": 0, "favorites": 0}
         subscriptions: dict[str, dict] = {}
@@ -528,7 +561,7 @@ class GalleryService:
             year = pub_time[:4] if pub_time else "未知"
             month = pub_time[:7] if pub_time else "未知"
             counts["all"] += 1
-            if any(asset["media_type"] == "video" for asset in self.db.list_assets_for_folder(folder["folder_name"])):
+            if folder['folder_name'] in video_folders:
                 counts["video"] += 1
             if folder["has_images"]:
                 counts["images"] += 1
@@ -560,7 +593,7 @@ class GalleryService:
             "subscriptions": sorted(subscriptions.values(), key=lambda item: item["name"]),
         }
 
-    def _fallback_pair_items(self, folders: list[dict], category: str, sort_order: str = "desc") -> list[dict]:
+    def _fallback_pair_items(self, folders: list[dict], category: str, sort_order: str = "desc", assets_by_folder=None) -> list[dict]:
         output: list[dict] = []
         reverse = sort_order != "asc"
         sorted_folders = sorted(
@@ -569,7 +602,8 @@ class GalleryService:
             reverse=reverse,
         )
         for folder in sorted_folders:
-            detail = self.get_folder_detail(folder["folder_name"])
+            detail = self.get_folder_detail(folder['folder_name'], folder=folder,
+                                           assets=None if assets_by_folder is None else assets_by_folder.get(folder['folder_name'], []), enrich=False)
             if not detail:
                 continue
             for pair in detail["pairs"]:

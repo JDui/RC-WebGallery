@@ -151,11 +151,13 @@ class MediaIndexer:
 
     def rebuild_gallery_indexes(
         self,
-        clear_derivatives: bool = True,
+        clear_derivatives: bool = False,
         progress: ProgressCallback | None = None,
         cooperate: CooperateCallback | None = None,
         thumbnail_workers: int | None = None,
     ) -> None:
+        # Page-index repair reuses valid files. Only an explicit thumbnail
+        # rebuild should discard derivatives and force every image to re-encode.
         folders = {folder["folder_name"]: folder for folder in self.db.list_folders()}
         assets_by_folder: dict[str, list[dict]] = {}
         for asset in self.db.list_all_assets():

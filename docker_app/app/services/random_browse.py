@@ -35,7 +35,7 @@ def page_keys(db, table, where_sql, params, seed, page, page_size, fallback_keys
     seed_key = blake2b(seed.encode(), digest_size=32).digest()
     def rank(key):
         return blake2b(str(key).encode(), key=seed_key, digest_size=16).hexdigest()
-    with db.connect() as conn:
+    with (db.browse_connect() if db.shards_enabled else db.connect()) as conn:
         conn.execute('begin immediate')
         session = conn.execute('select id,total from random_browse_sessions where session_key=?', (session_key,)).fetchone()
         if not session:

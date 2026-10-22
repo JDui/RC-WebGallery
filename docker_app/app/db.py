@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -12,6 +12,8 @@ from app.services.xhs.schema import migrate as migrate_xhs
 from app.theme import DEFAULT_THEME as DEFAULT_UI_THEME
 from app.services.database_layout import module_ddl, install_hot_indexes
 from app.services.random_browse import page_keys
+from app.services.content_shards import SHARDS, ShardConnection, attach, checked_path, install_views, check_database, check_catalog, verify_identity
+from app.services.database_safety import DatabaseBackups
 
 
 DEFAULT_SETTINGS = {
@@ -26,6 +28,7 @@ DEFAULT_SETTINGS = {
     "reload_all_once": False,
     "auto_load_enabled": True,
     "wide_single_cover": False,
+    "gallery_default_random": False,
     "random_cover_enabled": True,
     "single_thumbnail_migrated": True,
     "download_sleep": 0.2,
@@ -100,28 +103,51 @@ DEFAULT_SITE_RULES = {
 class Database:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
+        self._allow_create = not db_path.exists()
         self.modules_enabled = False
+        self.shards_enabled = False
+        self.layout_version = 0
+        self._dataset_id = None
+        self._shard_columns = {}
+        self._write_lock = threading.RLock()
+        self.backups = DatabaseBackups(self)
         self.exclusive_maintenance = False
         self._anchors: list[sqlite3.Connection] = []
         self._stats_lock = threading.RLock()
         self._stats_cache: dict[str, tuple[tuple, dict]] = {}
+        if not db_path.exists() and (any(db_path.parent.glob('*.db')) or
+                (db_path.parent / 'backups').exists() or (db_path.parent / 'data-upgrade.json').exists()):
+            raise RuntimeError('app.db 缺失，拒绝新建空库；请恢复同一份完整 config 备份')
         if db_path.exists():
-            with closing(sqlite3.connect(db_path)) as conn:
+            checked_path(db_path.parent, db_path.stem)
+            with closing(sqlite3.connect(db_path.resolve().as_uri() + '?mode=rw', uri=True)) as conn:
                 if conn.execute("select 1 from sqlite_master where name='data_layout'").fetchone():
                     layout = conn.execute('select version from data_layout where id=1').fetchone()
                     self.modules_enabled = bool(layout and layout[0] >= 1)
+                    self.layout_version = int(layout[0]) if layout else 0
+                    self.shards_enabled = self.layout_version >= 3
+                    if self.shards_enabled:
+                        row = conn.execute('select dataset_id,columns_json from shard_manifest where id=1').fetchone()
+                        if not row:
+                            raise RuntimeError('分库清单缺失，已阻止写入')
+                        self._dataset_id, self._shard_columns = row[0], loads_json(row[1], {})
+                        verify_identity(conn, 'main', self._dataset_id, 'app')
+
+    def database_names(self):
+        return ('app', *(('control', 'browse') if self.modules_enabled else ()), *(SHARDS if self.shards_enabled else ()))
 
     def keep_hot(self) -> None:
-        """Keep WALs open between requests instead of checkpointing on every close.
+        """Retain idle connections for maintenance lifecycle compatibility.
 
         These idle connections never own transactions; request connections remain
         thread-local. Exclusive maintenance closes them before changing schemas.
         """
         self.close()
-        for name in ('app', 'control', 'browse') if self.modules_enabled else ('app',):
+        for name in self.database_names():
             path = self.db_path if name == 'app' else self.db_path.with_name(f'{name}.db')
-            conn = sqlite3.connect(path, check_same_thread=False)
-            conn.execute('pragma journal_mode=wal')
+            checked_path(path.parent, path.stem)
+            conn = sqlite3.connect(path.resolve().as_uri() + '?mode=rw', uri=True, check_same_thread=False)
+            conn.execute('pragma journal_mode=delete')
             conn.execute('pragma query_only=on')
             self._anchors.append(conn)
 
@@ -134,30 +160,53 @@ class Database:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.db_path, timeout=30)
+        with self._write_lock:
+            with self._connect_locked() as conn:
+                yield conn
+
+    @contextmanager
+    def _connect_locked(self):
+        if not self._allow_create:
+            checked_path(self.db_path.parent, self.db_path.stem)
+        uri = self.db_path.resolve().as_uri() + ('?mode=rwc' if self._allow_create else '?mode=rw')
+        conn = sqlite3.connect(uri, timeout=30, uri=True, factory=ShardConnection if self.shards_enabled else sqlite3.Connection)
+        self._allow_create = False
         try:
             conn.row_factory = sqlite3.Row
+            if self.shards_enabled:
+                verify_identity(conn, 'main', self._dataset_id, 'app')
             conn.execute("pragma foreign_keys = on")
-            mode = 'delete' if self.exclusive_maintenance else 'wal'
-            sync = 'full' if self.exclusive_maintenance else 'normal'
+            # A single super-journal covers core, control, browse and content.
+            # EXTRA also syncs deletion of the rollback journal's directory entry.
+            mode, sync = 'delete', 'extra'
             conn.execute(f'pragma journal_mode={mode}')
             conn.execute(f'pragma synchronous={sync}')
             conn.execute("pragma temp_store = memory")
             conn.execute("pragma cache_size = -12000")
             if self.modules_enabled:
                 for module in ('control', 'browse'):
-                    path = self.db_path.with_name(f'{module}.db')
-                    if not path.is_file():
-                        raise RuntimeError(f'缺少数据库模块：{path.name}，请恢复完整 config 备份')
-                    conn.execute(f'attach database ? as {module}', (str(path),))
-                    conn.execute(f'pragma {module}.journal_mode={mode}')
-                    conn.execute(f'pragma {module}.synchronous={sync}')
+                    attach(conn, self.db_path.parent, module, dataset_id=self._dataset_id)
+            if self.shards_enabled:
+                for shard in SHARDS:
+                    attach(conn, self.db_path.parent, shard, dataset_id=self._dataset_id)
+                install_views(conn, self._shard_columns)
             yield conn
             conn.commit()
         finally:
             conn.close()
 
     def init(self) -> None:
+        if self.shards_enabled:
+            with self.connect() as conn:
+                check_database(conn, ('main', 'control', 'browse', *SHARDS))
+                check_catalog(conn)
+                for table, columns in self._shard_columns.items():
+                    schemas = SHARDS if table in ('folders', 'assets', 'livephoto_pairs') else (('sites', 'xiaohongshu') if table.startswith('site_') else ('xiaohongshu',))
+                    for schema in schemas:
+                        found = [r['name'] for r in conn.execute(f'pragma {schema}.table_info("{table}")')]
+                        if found != columns:
+                            raise RuntimeError(f'{schema}.{table} 结构不完整，已阻止写入')
+            return
         with self.connect() as conn:
             conn.executescript(module_ddl(
                 """
@@ -540,17 +589,49 @@ class Database:
         path = self.db_path.with_name('control.db')
         if not path.is_file():
             raise RuntimeError('缺少 control.db，请恢复完整 config 备份')
-        conn = sqlite3.connect(path, timeout=30)
-        conn.row_factory = sqlite3.Row
-        try:
-            yield conn
-            conn.commit()
-        finally:
-            conn.close()
+        with self._write_lock:
+            conn = sqlite3.connect(checked_path(path.parent, 'control').resolve().as_uri() + '?mode=rw', uri=True, timeout=30)
+            conn.row_factory = sqlite3.Row
+            try:
+                if self.shards_enabled:
+                    verify_identity(conn, 'main', self._dataset_id, 'control')
+                conn.execute('pragma journal_mode=delete')
+                conn.execute('pragma synchronous=extra')
+                yield conn
+                conn.commit()
+            finally:
+                conn.close()
+
+    @contextmanager
+    def browse_connect(self):
+        if not self.modules_enabled:
+            with self.connect() as conn:
+                yield conn
+            return
+        with self._write_lock:
+            path = checked_path(self.db_path.parent, 'browse')
+            conn = sqlite3.connect(path.resolve().as_uri() + '?mode=rw', uri=True, timeout=30)
+            conn.row_factory = sqlite3.Row
+            try:
+                if self.shards_enabled:
+                    verify_identity(conn, 'main', self._dataset_id, 'browse')
+                conn.execute('pragma journal_mode=delete')
+                conn.execute('pragma synchronous=extra')
+                yield conn
+                conn.commit()
+            finally:
+                conn.close()
 
     def _ensure_default_settings(self, conn: sqlite3.Connection) -> None:
         existing_rows = conn.execute("select key, value from settings").fetchall()
         existing_settings = {row["key"]: row["value"] for row in existing_rows}
+        if "gallery_default_random" not in existing_settings:
+            legacy_sort = loads_json(existing_settings.get("gallery_default_sort"), "imported")
+            conn.execute(
+                "insert into settings(key, value) values (?, ?)",
+                ("gallery_default_random", dumps_json(legacy_sort == "random")),
+            )
+        conn.execute("delete from settings where key = 'gallery_default_sort'")
         missing_site_scheduler_enabled = "site_scheduler_enabled" not in existing_settings
         missing_site_scheduler_interval = "site_scheduler_interval_hours" not in existing_settings
         legacy_scheduler_enabled = bool(
@@ -657,7 +738,7 @@ class Database:
                 uid, uname, status, pull_images, image_min_count, pull_livephoto, include_forwarded, created_at, updated_at
             )
             values (?, ?, 'active', ?, ?, ?, ?, ?, ?)
-            on conflict(uid) do update set updated_at = excluded.updated_at
+            on conflict(uid) do nothing
             """,
             (uid, None, defaults["pull_images"], defaults["image_min_count"], defaults["pull_livephoto"], defaults["include_forwarded"], now, now),
         )
@@ -780,7 +861,7 @@ class Database:
 
     def save_settings(self, updates: dict[str, Any]) -> dict[str, Any]:
         current = self.get_settings()
-        updates = {key: value for key, value in updates.items() if key not in {"thumb_edge", "thumb_quality"}}
+        updates = {key: value for key, value in updates.items() if key not in {"thumb_edge", "thumb_quality", "gallery_default_sort"}}
         current.update(updates)
         with self.control_connect() as conn:
             for key, value in updates.items():
@@ -1359,7 +1440,7 @@ class Database:
             ).fetchall()
         return [self._site_post_row(row) for row in rows]
 
-    def site_post_url_from_dynamic_id(self, source_dynamic_id: str | None) -> str:
+    def site_post_url_from_dynamic_id(self, source_dynamic_id: str | None, *, conn=None) -> str:
         parts = str(source_dynamic_id or "").split(":")
         if len(parts) != 3 or parts[0] != "site":
             return ""
@@ -1368,7 +1449,7 @@ class Database:
             post_id = int(parts[2])
         except ValueError:
             return ""
-        with self.connect() as conn:
+        with (nullcontext(conn) if conn is not None else self.connect()) as conn:
             row = conn.execute(
                 "select url from site_posts where id = ? and source_id = ?",
                 (post_id, source_id),
@@ -2429,11 +2510,14 @@ class Database:
             conn.execute("delete from folder_index")
 
     def gallery_page_cache_signature(self) -> str:
+        if self.modules_enabled:
+            with self.browse_connect() as conn:
+                return str(conn.execute('select revision from content_revision where id=1').fetchone()[0])
         with self.connect() as conn:
             return self._content_revision(conn)
 
     def _content_revision(self, conn) -> str:
-        schemas = ('main', 'browse', 'control') if self.modules_enabled else ('main',)
+        schemas = ('main', 'browse', 'control', *(SHARDS if self.shards_enabled else ())) if self.modules_enabled else ('main',)
         return ':'.join(str(conn.execute(f'select revision from {schema}.content_revision where id=1').fetchone()[0]) for schema in schemas)
 
     def _cached_content_stats(self, key, compute, extra=()) -> dict:
@@ -2452,7 +2536,7 @@ class Database:
             return result
 
     def get_gallery_page_cache(self, cache_key: str, signature: str) -> dict[str, Any] | None:
-        with self.connect() as conn:
+        with self.browse_connect() as conn:
             row = conn.execute(
                 "select * from gallery_page_cache where cache_key = ? limit 1",
                 (str(cache_key),),
@@ -2465,7 +2549,7 @@ class Database:
         return dict(row)
 
     def set_gallery_page_cache(self, cache_key: str, signature: str, payload: dict[str, Any]) -> None:
-        with self.connect() as conn:
+        with self.browse_connect() as conn:
             conn.execute(
                 """
                 insert into gallery_page_cache(cache_key, signature, payload_json, updated_at)
@@ -2585,6 +2669,26 @@ class Database:
                 )
 
             conn.execute("update pair_index set imported_at=coalesce((select created_at from folders where folder_name=?),'') where folder_name=?", (folder_name, folder_name))
+            # Store everything cards need once, when indexing. No content-shard
+            # enrichment or per-card lookups are needed on a browse request.
+            from app.services.creators import attach_creators
+            raw_folder = conn.execute('select metadata_json from folders where folder_name=?', (folder_name,)).fetchone()
+            metadata_json = raw_folder[0] if raw_folder else '{}'
+            extra = {'folder_name': folder_name, **folder_payload, 'metadata_json': metadata_json}
+            attach_creators(self, [extra], conn=conn)
+            metadata = loads_json(metadata_json, {})
+            original = metadata.get('site_post_url') or metadata.get('original_url') or self.site_post_url_from_dynamic_id(folder_payload['source_dynamic_id'], conn=conn)
+            uid = folder_payload['subscription_uid']
+            source_kind = 'xhs' if folder_name.startswith('xhs_') or metadata.get('source') == 'xhs' else ('site' if uid.startswith('site:') else 'up')
+            if self.shards_enabled:
+                route = conn.execute('select shard from content_catalog where folder_name=?', (folder_name,)).fetchone()
+                if route:
+                    source_kind = {'bilibili': 'up', 'sites': 'site', 'xiaohongshu': 'xhs'}[route[0]]
+            fields = (source_kind, max(0, folder_payload['asset_count'] - folder_payload['image_count'] - folder_payload['livephoto_count']),
+                      extra.get('author_id', ''), extra.get('author_name', ''), original,
+                      extra.get('creator_name', ''), extra.get('creator_url', ''))
+            for table in ('folder_index', 'pair_index'):
+                conn.execute(f'update {table} set source_kind=?,video_count=?,author_id=?,author_name=?,original_url=?,creator_name=?,creator_url=? where folder_name=?', (*fields, folder_name))
 
     def gallery_index_status(self) -> dict[str, Any]:
         settings = self.get_settings()
@@ -2600,6 +2704,7 @@ class Database:
                         from (
                             select folder_name, pair_index
                             from assets
+                            where media_type in ('image', 'livephoto')
                             group by folder_name, pair_index
                         )
                     ) as asset_pair_rows
@@ -2632,6 +2737,12 @@ class Database:
         return bool(self.gallery_index_status().get("stale"))
 
     def gallery_index_ready(self) -> bool:
+        if self.shards_enabled:
+            with self.browse_connect() as conn:
+                counts = conn.execute("select expected_folders,(select rows from table_counts where name='folder_index') from gallery_state where id=1").fetchone()
+            if not counts or counts[0] != counts[1]:
+                return False
+            return counts[0] == 0 or int(self.get_settings().get('gallery_index_version') or 0) == GALLERY_INDEX_VERSION
         with self.connect() as conn:
             counts = conn.execute(
                 """
@@ -2656,7 +2767,7 @@ class Database:
             keys = snapshot["keys"]
             if not keys:
                 return {"total": snapshot["total"], "items": []}
-            with self.connect() as conn:
+            with (self.browse_connect() if self.shards_enabled else self.connect()) as conn:
                 marks = ",".join("?" for _ in keys)
                 rows = {row[key_column]: dict(row) for row in conn.execute(
                     f"select * from {table} where {key_column} in ({marks}) and ({where_sql})", [*keys, *params])}
@@ -2665,7 +2776,7 @@ class Database:
         key = dumps_json([table, where_sql, params, page_size, column, direction])
         pair = table == 'pair_index'
         order = f"{column} {direction}, folder_name {direction}" + (", pair_index asc" if pair else "")
-        with self.connect() as conn:
+        with (self.browse_connect() if self.shards_enabled else self.connect()) as conn:
             cached = conn.execute('select * from browse_queries where query_key=?', (key,)).fetchone()
             if not cached or cached['revision'] != revision:
                 total = conn.execute(f'select count(*) from {table} where {where_sql}', params).fetchone()[0]
@@ -2765,12 +2876,12 @@ class Database:
         return self._query_browse_page("pair_index", where_sql, params, page, page_size, order_column, order_direction, random_order, random_seed)
 
     def gallery_meta_from_index(self) -> dict[str, Any]:
-        with self.connect() as conn:
+        with self.browse_connect() as conn:
             counts_row = conn.execute(
                 """
                 select
                     count(*) as all_count,
-                    sum(case when exists (select 1 from assets a where a.folder_name = folder_index.folder_name and a.media_type = 'video') then 1 else 0 end) as video_count,
+                    sum(case when video_count > 0 then 1 else 0 end) as video_count,
                     sum(case when has_images = 1 then 1 else 0 end) as images_count,
                     sum(case when has_livephoto = 1 then 1 else 0 end) as livephoto_count,
                     sum(case when has_images = 1 and has_livephoto = 1 then 1 else 0 end) as paired_count,
@@ -2875,6 +2986,9 @@ class Database:
                 placeholders = ", ".join("?" for _ in normalized)
                 clauses.append(f"{column('subscription_uid')} in ({placeholders})")
                 params.extend(normalized)
+        elif self.shards_enabled and source_kind in {'up', 'site', 'xhs'}:
+            clauses.append(f"{column('source_kind')} = ?")
+            params.append(source_kind)
         elif source_kind in {"site", "xhs"}:
             clauses.append(f"{column('subscription_uid')} like 'site:%'")
             operator = "in" if source_kind == "xhs" else "not in"
@@ -2896,7 +3010,7 @@ class Database:
         if category == "images":
             clauses.append(f"{column('has_images' if not pair_mode else 'has_image')} = 1")
         elif category == "video":
-            clauses.append(f"exists (select 1 from assets a where a.folder_name = {column('folder_name')} and a.media_type = 'video')")
+            clauses.append(f"{column('video_count')} > 0")
         elif category == "livephoto":
             clauses.append(f"{column('has_livephoto')} = 1")
         elif category == "paired":

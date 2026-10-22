@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -25,6 +26,9 @@ class SchedulerService:
     def reload(self) -> None:
         settings = self.db.get_settings()
         self.scheduler.remove_all_jobs()
+        self.scheduler.add_job(self.database_backup, IntervalTrigger(hours=24),
+                               next_run_time=datetime.now(timezone.utc) + timedelta(minutes=5),
+                               id='database-backup', replace_existing=True, max_instances=1)
         if settings.get("scheduler_enabled"):
             interval_hours = self._interval_hours(settings.get("scheduler_interval_hours", 12))
             self.scheduler.add_job(
@@ -45,6 +49,12 @@ class SchedulerService:
 
     def reload_xhs(self) -> None:
         self.xhs.reload()
+
+    def database_backup(self):
+        upgrade = getattr(self.pull_manager, 'data_upgrade', None)
+        if upgrade and upgrade.blocked:
+            return
+        self.db.backups.create()
 
     def start_scheduled_pull(self) -> None:
         self.pull_manager.start_pull()

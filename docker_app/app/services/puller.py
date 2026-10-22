@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import requests
 
 from app.db import Database
+from app.services.database_safety import durable_replace
 from app.services.bilibili import BilibiliAuthService
 from app.services.cleanup import CleanupService
 from app.services.filtering import FilterEngine
@@ -238,6 +239,35 @@ class PullManager:
         XhsSyncService(self.db).get_source(source_id)
         queued = self._queue_or_start('xhs-verify', '检查小红书本地归档', self._run_xhs_validation, source_id)
         return {'ok': True, 'queued': queued, 'message': '已提交本地归档检查，不会访问小红书'}
+
+    def start_xhs_author_check(self) -> dict[str, Any]:
+        if self.xhs_manager is None:
+            raise RuntimeError('小红书同步器未初始化')
+        queued = self._queue_or_start('xhs-authors', '小红书作者校验', self._run_xhs_author_check)
+        return {'ok': True, 'queued': queued, 'message': '作者校验已提交，可在任务队列中查看进度和未修复笔记'}
+
+    def _run_xhs_author_check(self) -> None:
+        from app.services.xhs.authors import XhsAuthorMaintenance
+        details = {'retry_action': {'kind': 'xhs-authors'}}
+        stats: dict[str, Any] = {}
+        task_id = self.db.create_task_run('xhs-authors', 'running', '全库检查小红书作者', details)
+        try:
+            def progress(done, total, counters):
+                self._set_progress('xhs-authors', '正在校验小红书作者', processed=done, total=total,
+                                   target='全库小红书笔记', stats=dict(counters))
+            XhsAuthorMaintenance(self.db, self.xhs_manager.worker).run(self._cooperate, progress, stats)
+            message = (f"小红书作者全库检查完成：检查 {stats['checked']} 篇笔记，"
+                       f"修复 {stats['repaired']} 篇，正常 {stats['unchanged']} 篇，待处理 {stats['unresolved']} 篇")
+            self.db.finish_task_run(task_id, 'partial' if stats['unresolved'] else 'success', message, {**stats, **details})
+            self._status = {'running': False, 'message': message, 'mode': 'idle', 'stats': stats}
+        except Exception:
+            message = '作者校验已取消' if self._cancel_requested else '作者校验中断，已修复的昵称已保存，可重试'
+            self.db.finish_task_run(task_id, 'cancelled' if self._cancel_requested else 'failed', message,
+                                    {**stats, **details, 'completed': False})
+            self._status = {'running': False, 'message': message, 'mode': 'idle', 'stats': stats}
+        finally:
+            self._release()
+            self._run_next_queued_task()
 
     def _run_xhs_validation(self, source_id: int) -> None:
         details = {'retry_action': {'kind': 'xhs-verify', 'source_id': source_id}}
@@ -604,7 +634,7 @@ class PullManager:
             "pull", "review", "validate", "startup", "index", "thumbnail-rebuild", "site-sync",
             "storage-cleanup", "icons", "subscription-icons", "site-icons", "duplicate-trash",
             "duplicate-resolve", "duplicate-cleanup",
-            'xhs-sync', 'xhs-import', 'xhs-verify',
+            'xhs-sync', 'xhs-import', 'xhs-verify', 'xhs-authors',
         ])
         status = dict(self._status)
         if str(status.get("mode") or "").startswith("site") and self.site_syncer is not None:
@@ -718,6 +748,8 @@ class PullManager:
                 force_full=bool(retry_action.get('force_full')), media_only=bool(retry_action.get('media_only')))
         if kind == 'xhs-verify':
             return self.start_xhs_validation(int(retry_action.get('source_id') or 0))
+        if kind == 'xhs-authors':
+            return self.start_xhs_author_check()
         if kind == "site-validate":
             return self.start_site_validation(
                 int(retry_action.get("source_id") or 0),
@@ -2567,7 +2599,7 @@ class PullManager:
                         if not chunk:
                             continue
                         handle.write(chunk)
-                temp_target.replace(target)
+                durable_replace(temp_target, target)
                 return True
             except (requests.RequestException, IncompleteRead, OSError) as exc:
                 last_error = exc
@@ -2740,6 +2772,8 @@ class PullManager:
             elif next_task.kind == 'xhs-verify':
                 source_id = int(next_task.payload.get('args', [0])[0])
                 thread = threading.Thread(target=self._run_xhs_validation, args=(source_id,), daemon=True)
+            elif next_task.kind == 'xhs-authors':
+                thread = threading.Thread(target=self._run_xhs_author_check, daemon=True)
             elif next_task.kind == "site-validate":
                 source_id = int(next_task.payload.get("args", [0])[0])
                 args = next_task.payload.get("args", [])

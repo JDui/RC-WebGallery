@@ -9,7 +9,10 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 
 from app.services.database_layout import split_modules
+from app.services.content_shards import VERSION, SHARDS, split_content, check_database, check_catalog
 from app.services.media_repair import MediaRepair
+from app.services.database_safety import atomic_json, durable_replace
+from uuid import uuid4
 from app.services.utils import now_iso
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -91,7 +94,7 @@ class DataUpgrade:
         self.media_repair = MediaRepair(db, storage)
         self.condition = threading.Condition(threading.RLock())
         self.requests = 0
-        self.version = 0
+        self.version = db.layout_version
         self.before_run = lambda: None
         self.after_run = lambda: None
         self.external_busy = lambda: False
@@ -146,7 +149,7 @@ class DataUpgrade:
         running = state.get('status') == 'running'
         progress = state.get('progress', 0)
         completed = [message] if state.get('status') == 'completed' else []
-        target = {'check': '检查数据', 'repair': '修复缺失原文件'}.get(state.get('action'), '升级数据结构')
+        target = {'check': '检查数据', 'repair': '修复缺失原文件', 'backup': '备份数据库'}.get(state.get('action'), '升级数据结构')
         next_step = '等待当前步骤完成' if running else ('任务完成' if state.get('status') == 'completed' else '修正问题后继续')
         self.manager._status = {
             **previous, 'mode': 'data-upgrade', 'running': running,
@@ -166,14 +169,17 @@ class DataUpgrade:
     def status(self):
         with self.condition:
             result = {**self.state, 'blocked': self.blocked}
-        return {**result, 'version': self.version, 'current_version': 2, 'dirty': self.version < 2,
-                'modules': self.db.modules_enabled}
+        return {**result, 'version': self.version, 'current_version': VERSION, 'dirty': self.version < VERSION,
+                'modules': self.db.modules_enabled, 'content_shards': self.db.shards_enabled,
+                'backup': self.db.backups.status()}
 
     def start(self, action='upgrade'):
         with self.condition, self.manager._queue_lock:
             if self.state['status'] == 'running':
                 return self.status()
-            label = {'check': '检查数据', 'repair': '修复缺失原文件'}.get(action, '升级数据结构')
+            if action not in ('check', 'repair', 'upgrade', 'backup'):
+                raise ValueError('无效的数据维护操作')
+            label = {'check': '检查数据', 'repair': '修复缺失原文件', 'backup': '备份数据库'}.get(action, '升级数据结构')
             if self.manager._queue or not self.manager._acquire('data-upgrade', label):
                 raise RuntimeError('请先等待后台任务完成，再开始数据升级')
             try:
@@ -204,19 +210,26 @@ class DataUpgrade:
             self.db.exclusive_maintenance = True
             upgrading = self.state.get('action', 'upgrade') == 'upgrade'
             repairing = self.state.get('action') == 'repair'
+            backing_up = self.state.get('action') == 'backup'
+            if backing_up:
+                self.report('正在校验并保存完整数据库备份', progress=5)
+                result = self.db.backups.create('manual', force=True)
             if upgrading:
+                self.report('正在校验并保存一致的升级前备份', progress=1)
+                self.db.backups.create('before-v3-upgrade', force=True)
+            if upgrading and not self.db.shards_enabled:
                 self.report('正在备份数据库', progress=2)
                 backup = self.path.parent / 'before-data-layout-v2'
+                if backup.is_symlink() or (hasattr(backup, 'is_junction') and backup.is_junction()):
+                    raise RuntimeError('旧版快照目录不能是符号链接')
                 backup.mkdir(exist_ok=True)
                 manifest = backup / 'snapshot.json'
+                if manifest.is_symlink():
+                    raise RuntimeError('旧版快照清单不能是符号链接')
                 if not manifest.exists():
                     if any((backup / f'{name}.db').exists() for name in ('app', 'control', 'browse')):
                         raise RuntimeError('已有数据库备份但缺少快照清单，请保留备份并检查，避免混合不同时间的数据库')
-                    with manifest.with_suffix('.tmp').open('w', encoding='utf-8') as stream:
-                        json.dump({'modules': self.db.modules_enabled}, stream)
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    manifest.with_suffix('.tmp').replace(manifest)
+                    atomic_json(manifest, {'modules': self.db.modules_enabled})
                     sync_directory(backup)
                     sync_directory(backup.parent)
                 snapshot_modules = json.loads(manifest.read_text(encoding='utf-8'))['modules']
@@ -224,36 +237,41 @@ class DataUpgrade:
                 for name in ('app', 'control', 'browse') if snapshot_modules else ('app',):
                     source = self.db.db_path if name == 'app' else self.path.parent / f'{name}.db'
                     target = backup / f'{name}.db'
+                    if target.is_symlink():
+                        raise RuntimeError('旧版快照数据库不能是符号链接')
                     if source.exists() and not target.exists():
-                        temp = target.with_suffix('.tmp')
-                        with closing(sqlite3.connect(source)) as src, closing(sqlite3.connect(temp)) as dst:
+                        temp = target.with_suffix(f'.{uuid4().hex}.tmp')
+                        with closing(sqlite3.connect(source.resolve().as_uri() + '?mode=ro', uri=True)) as src, closing(sqlite3.connect(temp)) as dst:
                             src.backup(dst)
                             if dst.execute('pragma quick_check').fetchone()[0] != 'ok':
                                 raise RuntimeError(f'备份校验失败：{name}.db')
-                        temp.replace(target)
+                        durable_replace(temp, target)
                         sync_directory(backup)
                     if not target.is_file():
                         raise RuntimeError(f'数据库备份缺失：{name}.db')
-                    with closing(sqlite3.connect(target)) as saved:
+                    with closing(sqlite3.connect(target.resolve().as_uri() + '?mode=ro', uri=True)) as saved:
                         if saved.execute('pragma quick_check').fetchone()[0] != 'ok':
                             raise RuntimeError(f'数据库备份损坏：{name}.db')
                 self.report('正在拆分设置、订阅与浏览数据库', progress=8)
                 split_modules(self.db, lambda message: self.report(message))
                 self.version = 1
-                self.report('正在迁移媒体目录', progress=20)
+            if upgrading:
+                # Already mapped v2 directories are skipped. Explicit retries
+                # still discover legacy directories imported after that upgrade.
+                self.report('正在核对媒体目录映射', progress=20)
                 self._migrate_directories()
+            if upgrading and not self.db.shards_enabled:
+                self.report('正在分块并逐表校验 B站、站点、小红书数据库', progress=85)
+                split_content(self.db, lambda message: self.report(message))
             if repairing:
                 self.report('正在重新检查缺失原文件，排除已去重记录', progress=5)
                 result = self.media_repair.repair(lambda done, total, current: self.report(
                     f'正在修复缺失原文件 {done}/{total}', progress=10 + int(75 * done / max(1, total)), current=current))
             self.report('正在验证数据库与媒体引用', progress=90)
             with self.db.connect() as conn:
-                for schema in ('main', 'control', 'browse') if self.db.modules_enabled else ('main',):
-                    check = conn.execute(f'pragma {schema}.quick_check').fetchone()[0]
-                    if check != 'ok':
-                        raise RuntimeError(f'{schema}: {check}')
-                if conn.execute('pragma foreign_key_check').fetchone():
-                    raise RuntimeError('数据外键检查失败')
+                check_database(conn, ('main', *self.db.database_names()[1:]))
+                if self.db.shards_enabled:
+                    check_catalog(conn)
                 if upgrading:
                     conn.execute('delete from gallery_page_cache')
                     conn.execute('delete from browse_queries')
@@ -264,19 +282,26 @@ class DataUpgrade:
                     conn.execute('delete from gallery_page_cache')
             if upgrading and getattr(self.manager, 'duplicate_service', None):
                 self.manager.duplicate_service.invalidate_cache()
-            if not repairing:
+            if not repairing and not backing_up:
                 result = self._check_media()
             if upgrading:
                 with self.db.connect() as conn:
-                    conn.execute('update data_layout set version=2 where id=1')
+                    conn.execute('update data_layout set version=3 where id=1')
                 self.db.set_storage_stats_cache({**self.db.get_storage_stats_cache(), 'updated_at': None})
-                self.version = 2
+                self.version = VERSION
+                self.db.layout_version = VERSION
+                self.report('正在回收主库空闲页并优化索引', progress=96)
+                with self.db.connect() as conn:
+                    conn.execute('vacuum main')
+                    for schema in ('main', 'control', 'browse', *SHARDS):
+                        conn.execute(f'analyze {schema}')
+                self.db.backups.create('after-v3-upgrade', force=True)
             elif repairing:
                 self.db.set_storage_stats_cache({**self.db.get_storage_stats_cache(), 'updated_at': None})
             self.db.exclusive_maintenance = False
             self.db.keep_hot()
             self.after_run()
-            message = ('数据结构升级与目录迁移完成' if upgrading else
+            message = ('完整数据库备份已校验并保存' if backing_up else '数据结构升级与目录迁移完成' if upgrading else
                        (f'修复完成，仍有 {result["missing_assets"]} 条引用需要处理' if repairing else '数据检查完成'))
             self.report(message, status='completed', progress=100, processed=self.state.get('total', 0), current=None, result=result)
         except Exception as exc:
@@ -304,7 +329,8 @@ class DataUpgrade:
             conn.execute('''create table if not exists storage_moves (
                 old_dir text primary key, new_dir text not null, folder_name text not null,
                 media_type text not null, done integer not null default 0)''')
-            conn.execute('create index if not exists idx_site_assets_rel_path on site_assets(rel_path)')
+            for schema in ('sites', 'xiaohongshu') if self.db.shards_enabled else ('main',):
+                conn.execute(f'create index if not exists {schema}.idx_site_assets_rel_path on site_assets(rel_path)')
         # Recover a rename that succeeded before its reference transaction committed.
         with self.db.connect() as conn:
             pending = [dict(row) for row in conn.execute('select * from storage_moves where done=0')]

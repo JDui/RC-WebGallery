@@ -16,8 +16,9 @@
         const running = state.status === 'running';
         const checking = state.action === 'check';
         const repairing = state.action === 'repair';
-        document.getElementById('upgrade-title').textContent = running ? (repairing ? '正在修复缺失原文件' : (checking ? '正在检查数据' : '正在升级数据')) : (repairing ? '修复需要继续' : (checking ? '检查需要继续' : '升级需要继续'));
-        resume.textContent = repairing ? '继续修复' : (checking ? '继续检查' : '继续升级');
+        const backingUp = state.action === 'backup';
+        document.getElementById('upgrade-title').textContent = backingUp ? (running ? '正在备份数据库' : '备份需要继续') : running ? (repairing ? '正在修复缺失原文件' : (checking ? '正在检查数据' : '正在升级数据')) : (repairing ? '修复需要继续' : (checking ? '检查需要继续' : '升级需要继续'));
+        resume.textContent = backingUp ? '继续备份' : repairing ? '继续修复' : (checking ? '继续检查' : '继续升级');
         message.textContent = state.message;
         document.getElementById('upgrade-progress').value = state.progress || 0;
         document.getElementById('upgrade-percent').textContent = `${state.progress || 0}%`;

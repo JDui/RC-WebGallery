@@ -1,8 +1,7 @@
 """Versioned database modules and small, indexed browse records.
 
-SQLite's B trees already divide tables into disk pages. Keep large media metadata
-in app.db and move the hot control/browse tables to separate page caches instead
-of splitting the same logical table into arbitrary files.
+The first stage moves hot control/browse tables to separate page caches before
+the explicit v3 content partition migration.
 """
 from __future__ import annotations
 
@@ -35,6 +34,19 @@ def module_ddl(sql: str, enabled: bool) -> str:
 
 def install_hot_indexes(db, conn: sqlite3.Connection) -> None:
     for table in ('folder_index', 'pair_index'):
+        previous_columns = {row['name'] for row in conn.execute(f'pragma table_info({table})')}
+        for name, definition in (
+            ('source_kind', "text not null default 'up'"),
+            ('video_count', 'integer not null default 0'),
+            ('author_id', "text not null default ''"),
+            ('author_name', "text not null default ''"),
+            ('original_url', "text not null default ''"),
+            ('creator_name', "text not null default ''"),
+            ('creator_url', "text not null default ''"),
+        ):
+            db._ensure_column(conn, table, name, definition)
+        if 'video_count' not in previous_columns:
+            conn.execute(f"update {table} set video_count=(select count(*) from assets a where a.folder_name={table}.folder_name and a.media_type='video')")
         columns = {row['name'] for row in conn.execute(f'pragma table_info({table})')}
         if 'imported_at' not in columns:
             db._ensure_column(conn, table, 'imported_at', "text not null default ''")
@@ -42,7 +54,8 @@ def install_hot_indexes(db, conn: sqlite3.Connection) -> None:
         schema = schema_for(table, db.modules_enabled)
         tail = ', pair_index asc' if table == 'pair_index' else ''
         for prefix, columns in (('imported', 'imported_at desc, folder_name desc'),
-                                ('subscription_imported', 'subscription_uid, imported_at desc, folder_name desc')):
+                                ('subscription_imported', 'subscription_uid, imported_at desc, folder_name desc'),
+                                ('source_pub', 'source_kind, pub_ts desc, folder_name desc')):
             conn.execute(f'create index if not exists {schema}.idx_{table}_{prefix} on {table}({columns}{tail})')
         if table == 'pair_index':
             for prefix, columns in (('pub_asc', 'pub_ts asc, folder_name asc'),
@@ -55,6 +68,13 @@ def install_hot_indexes(db, conn: sqlite3.Connection) -> None:
     conn.execute('''create table if not exists data_layout (id integer primary key check(id=1), version integer not null)''')
     conn.execute('insert or ignore into data_layout values(1,0)')
     schema = schema_for('folder_index', db.modules_enabled)
+    conn.execute(f'create table if not exists {schema}.table_counts(name text primary key,rows integer not null)')
+    for table in ('folder_index', 'pair_index'):
+        if not conn.execute(f'select 1 from {schema}.table_counts where name=?', (table,)).fetchone():
+            conn.execute(f'insert into {schema}.table_counts select ?,count(*) from {table}', (table,))
+        for action, delta in (('insert', 1), ('delete', -1)):
+            conn.execute(f'''create trigger if not exists {schema}.count_{table}_{action} after {action} on {table} begin
+                update table_counts set rows=rows+({delta}) where name='{table}'; end''')
     conn.execute(f'''create table if not exists {schema}.browse_queries (
         query_key text primary key, revision text not null, total integer not null)''')
     conn.execute(f'''create table if not exists {schema}.browse_boundaries (
@@ -91,8 +111,8 @@ def split_modules(db, progress) -> None:
         for module in MODULES:
             conn.execute(f'attach database ? as {module}', (str(db.db_path.with_name(f'{module}.db')),))
             conn.execute(f'pragma {module}.journal_mode=delete')
-            conn.execute(f'pragma {module}.synchronous=full')
-        conn.execute('pragma synchronous=full')
+            conn.execute(f'pragma {module}.synchronous=extra')
+        conn.execute('pragma synchronous=extra')
         conn.execute('begin immediate')
         for table in ('gallery_page_cache', 'browse_queries', 'browse_boundaries', 'random_browse_entries', 'random_browse_sessions'):
             conn.execute(f'delete from main.{table}')
@@ -113,6 +133,7 @@ def split_modules(db, progress) -> None:
         conn.execute('update data_layout set version=1 where id=1')
         conn.commit()
         db.modules_enabled = True
+        db.layout_version = 1
     except BaseException:
         conn.rollback()
         raise
