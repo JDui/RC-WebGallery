@@ -207,6 +207,7 @@ function galleryApp(initialSettings = {}) {
   const masonryElements = new Set();
   let detailResizeObserver = null;
   let galleryFetchController = null;
+  let detailFetchController = null;
   let webkitFullscreenVideo = null;
   let mediaLongPressTimer = null;
   let mediaLongPressStart = null;
@@ -285,8 +286,8 @@ function galleryApp(initialSettings = {}) {
     randomPullProgress: 0,
     randomRefreshing: false,
     galleryMinHeight: 0,
-    galleryViewMode: localStorage.getItem("gallery_view_mode") || "folder",
-    displayedGalleryViewMode: localStorage.getItem("gallery_view_mode") || "folder",
+    galleryViewMode: "folder",
+    displayedGalleryViewMode: "folder",
     sortOrder: defaultSortMode,
     timeSortMode: defaultSortMode,
     orderedSortMode: "imported",
@@ -349,6 +350,7 @@ function galleryApp(initialSettings = {}) {
     detailWindowShiftLock: false,
     detailHeaderCompact: false,
     detailLoading: false,
+    detailError: "",
     detailRequestId: 0,
     detailClosing: false,
     detailCloseTimer: null,
@@ -472,6 +474,7 @@ function galleryApp(initialSettings = {}) {
     viewerIndex: 0,
     viewerToken: 0,
     viewerImageReady: false,
+    viewerImageLoading: false,
     viewerImageRevealTimer: null,
     viewerImageRevealAfter: 0,
     viewerSwapPending: false,
@@ -479,6 +482,8 @@ function galleryApp(initialSettings = {}) {
     viewerZoom: 1,
     viewerToolbarOpen: false,
     viewerToolbarHideTimer: null,
+    viewerPositionHintVisible: false,
+    viewerPositionHintTimer: null,
     viewerOffsetX: 0,
     viewerOffsetY: 0,
     viewerTransitionEnabled: true,
@@ -1053,7 +1058,7 @@ function galleryApp(initialSettings = {}) {
       if (layer) return layer;
       if (this.sidebarDrawerOpen) return "sidebar";
       if (this.compactViewport) return "open-sidebar";
-      return keyboard && this.sidebarCollapsed ? "expand-sidebar" : "";
+      return this.sidebarCollapsed ? "expand-sidebar" : "";
     },
 
     navigateTouchBack(options = {}) {
@@ -1125,7 +1130,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     compactTrackpadWheel(event) {
-      if (!(this.compactViewport || this.narrowViewport) || event.ctrlKey || event.metaKey) return;
+      if (event.ctrlKey || event.metaKey) return;
       const layer = this.topOverlayLayer();
       if (layer === "viewer") return;
       const target = event.target;
@@ -1172,8 +1177,7 @@ function galleryApp(initialSettings = {}) {
 
     startTouchBack(event) {
       this.cancelTouchBack();
-      if (!(this.compactViewport || this.narrowViewport || window.matchMedia("(any-pointer: coarse)").matches)
-          || event.touches.length !== 1) return;
+      if (event.touches.length !== 1) return;
       const layer = this.touchBackLayer();
       const target = event.target;
       if (!layer || target.closest?.('input, textarea, select, audio, iframe, [contenteditable]:not([contenteditable="false"]), [role="slider"], [data-gesture-ignore]')
@@ -3411,20 +3415,6 @@ function galleryApp(initialSettings = {}) {
       this.refreshGalleryImmediately(true);
     },
 
-    setGalleryViewMode(mode) {
-      if (mode !== "folder" && mode !== "pair") {
-        return;
-      }
-      if (this.category === "video") mode = "folder";
-      this.galleryViewMode = mode;
-      localStorage.setItem("gallery_view_mode", mode);
-      this.closeGalleryLayers();
-      this.timeFilterOpen = false;
-      this.scrollViewTop();
-      this.galleryColumnCache = null;
-      this.refreshGalleryImmediately(true);
-    },
-
     setSortOrder(order) {
       if (order !== "asc" && order !== "desc") {
         return;
@@ -3747,6 +3737,9 @@ function galleryApp(initialSettings = {}) {
     },
 
     async openFolder(folderName, previewOverride = null) {
+      detailFetchController?.abort();
+      detailFetchController = null;
+      this.detailError = "";
       this.closeVideoNote();
       if (this.detailCloseTimer) {
         window.clearTimeout(this.detailCloseTimer);
@@ -3763,11 +3756,13 @@ function galleryApp(initialSettings = {}) {
       const requestId = this.detailRequestId;
       const previewFolder = previewOverride
         || (this.gallery.items || []).find((item) => item.folder_name === folderName)
-        || (this.duplicateGroups || []).flatMap((group) => group.items || []).find((item) => item.folder_name === folderName);
+        || (this.recentUpdates.groups || []).flatMap((group) => group.items || []).find((item) => item.folder_name === folderName)
+        || (this.duplicateGroups || []).flatMap((group) => group.items || []).find((item) => item.folder_name === folderName)
+        || (this.detail.folder?.folder_name === folderName ? this.detail.folder : null);
       const likelyVideo = this.isStandaloneVideoFolder(previewFolder, folderName);
       if (likelyVideo) this.prepareVideoFeed(previewFolder);
       const cached = this.cachedDetail(folderName);
-      if (cached) {
+      if (cached && (cached.pairs?.length || cached.videos?.length)) {
         if (this.openVideoNote(cached)) return;
         if (!likelyVideo) {
           this.detailLoading = false;
@@ -3783,15 +3778,15 @@ function galleryApp(initialSettings = {}) {
         }
       }
 
-      this.detailLoading = false;
+      this.detailLoading = true;
       if (likelyVideo) {
         this.openVideoNoteLoading(previewFolder || cached?.folder || { folder_name: folderName, title: folderName });
       } else {
         const previewPairs = this.detailPreviewPairs(folderName, previewFolder);
         this.detail = {
           open: true,
-          pairs: this.detail.folder?.folder_name === folderName ? this.detail.pairs : previewPairs,
-          folder: previewFolder || this.detail.folder || { folder_name: folderName, title: folderName },
+          pairs: this.detail.folder?.folder_name === folderName && this.detail.pairs?.length ? this.detail.pairs : previewPairs,
+          folder: previewFolder || { folder_name: folderName, title: folderName },
           videos: this.detail.folder?.folder_name === folderName ? (this.detail.videos || []) : [],
         };
         this.resetDetailWindow();
@@ -3801,8 +3796,11 @@ function galleryApp(initialSettings = {}) {
       if (requestId !== this.detailRequestId) {
         return;
       }
+      const controller = new AbortController();
+      detailFetchController = controller;
+      const timeout = window.setTimeout(() => controller.abort(), 20000);
       try {
-        const payload = await this.api(`/api/gallery/folders/${encodeURIComponent(folderName)}`);
+        const payload = await this.api(`/api/gallery/folders/${encodeURIComponent(folderName)}`, { signal: controller.signal });
         if (requestId !== this.detailRequestId) {
           return;
         }
@@ -3825,6 +3823,7 @@ function galleryApp(initialSettings = {}) {
           this.closeVideoNote();
         }
         const detailPairs = this.normalizeDetailPairs(payload.pairs || [], false, this.detail.pairs || []);
+        if (!detailPairs.length) this.detailError = "当前动态没有可显示的图片。";
         const applyDetailPayload = () => {
           this.detail = {
             open: true,
@@ -3852,7 +3851,10 @@ function galleryApp(initialSettings = {}) {
           this.videoNote.error = "读取视频详情失败，请检查归档文件或重试媒体。";
           return;
         }
-        this.closeDetail(true);
+        this.detailError = controller.signal.aborted ? "详情加载超时，请重试。" : "详情加载失败，请重试。";
+      } finally {
+        window.clearTimeout(timeout);
+        if (detailFetchController === controller) detailFetchController = null;
       }
     },
 
@@ -4010,6 +4012,7 @@ function galleryApp(initialSettings = {}) {
             promote_preview: false,
           }));
       }
+      const seenIndices = new Set();
       const tiles = (previewFolder?.preview_tiles || []).map((tile, index) => ({
         pair_index: Number(tile.pair_index) || index + 1,
         image: {
@@ -4022,17 +4025,29 @@ function galleryApp(initialSettings = {}) {
         complete: false,
         display_ratio: this.assetRatio(tile),
         promote_preview: false,
-      }));
+        placeholder: !this.galleryTileUrl(tile),
+      })).filter(tile => {
+        if (seenIndices.has(tile.pair_index)) return false;
+        seenIndices.add(tile.pair_index);
+        return true;
+      });
       const fallbackRatios = tiles.map((tile) => tile.display_ratio).filter(Boolean);
       const fallbackRatio = fallbackRatios[0] || "1 / 1";
       const expectedCount = Math.max(
         tiles.length,
-        Number(previewFolder?.image_count || previewFolder?.asset_count || 0) || 0,
+        Number(previewFolder?.image_count || 0) || 0,
+        Number(previewFolder?.livephoto_count || 0) || 0,
+        Number(previewFolder?.asset_count || 0) || 0,
+        previewFolder ? 0 : this.resolveDetailColumns(),
       );
+      let nextIndex = 1;
       for (let index = tiles.length; index < expectedCount; index += 1) {
+        while (seenIndices.has(nextIndex)) nextIndex += 1;
+        const pairIndex = nextIndex++;
+        seenIndices.add(pairIndex);
         const displayRatio = fallbackRatios[index % Math.max(1, fallbackRatios.length)] || fallbackRatio;
         tiles.push({
-          pair_index: index + 1,
+          pair_index: pairIndex,
           image: null,
           livephoto: null,
           preview_url: "",
@@ -4103,6 +4118,7 @@ function galleryApp(initialSettings = {}) {
       this.cancelViewerPreviewRetirement();
       this.viewerPreviewRetired = false;
       this.viewerImageReady = !pair.image;
+      this.viewerImageLoading = !!pair.image?.url;
       this.viewerImageRevealAfter = Date.now() + (switchDirection ? 420 : 260);
       if (this.viewerImageRevealTimer) {
         window.clearTimeout(this.viewerImageRevealTimer);
@@ -4112,6 +4128,8 @@ function galleryApp(initialSettings = {}) {
       this.viewerPendingDirection = switchDirection || "";
       this.viewerNavigationLockedUntil = switchDirection ? Date.now() + 260 : 0;
       this.viewer = { open: true, pair, folder: entry.folder, showVideo: false };
+      if (switchDirection) this.showViewerPositionHint();
+      else this.hideViewerPositionHint();
       this.cancelDeleteViewerPair();
       if (!preservePlayback) {
         this.playbackMode = "once";
@@ -4121,6 +4139,11 @@ function galleryApp(initialSettings = {}) {
       this.setInteracting(320);
       this.syncBodyLock();
       this.$nextTick(() => {
+        const image = document.querySelector(".viewer-stage-image");
+        if (pair.image && image?.complete && image.naturalWidth > 0
+            && image.dataset.viewerToken === String(this.viewerToken)) {
+          this.viewerMediaLoaded("image", { target: image });
+        }
         if (shouldShowVideo) {
           this.scheduleViewerPlaybackStart(260, true);
         } else if (pair.livephoto && pair.image && !this.viewerSwapPending && startImmediately) {
@@ -4257,6 +4280,8 @@ function galleryApp(initialSettings = {}) {
     },
 
     closeDetail(skipAnimation = false) {
+      detailFetchController?.abort();
+      detailFetchController = null;
       if (this.viewer.open) {
         this.closeViewer(skipAnimation);
       }
@@ -4295,6 +4320,8 @@ function galleryApp(initialSettings = {}) {
     },
 
     closeViewer(skipAnimation = false) {
+      this.viewerImageLoading = false;
+      this.hideViewerPositionHint();
       if (this.viewerToolbarHideTimer) window.clearTimeout(this.viewerToolbarHideTimer);
       this.viewerToolbarHideTimer = null;
       this.viewerToolbarOpen = false;
@@ -5257,11 +5284,13 @@ function galleryApp(initialSettings = {}) {
         return;
       }
       if (kind === "image") {
+        const imageToken = this.viewerToken;
         const reveal = () => {
-          if (!this.viewer.open || target.dataset.viewerToken !== String(this.viewerToken)) {
+          if (!this.viewer.open || imageToken !== this.viewerToken || target.dataset.viewerToken !== String(this.viewerToken)) {
             return;
           }
           this.viewerImageReady = true;
+          this.viewerImageLoading = false;
           this.viewerImageRevealTimer = null;
           this.cancelViewerPreviewRetirement();
           const token = this.viewerToken;
@@ -5289,6 +5318,7 @@ function galleryApp(initialSettings = {}) {
       }
       if (kind === "image") {
         this.viewerImageReady = false;
+        this.viewerImageLoading = false;
         if (this.viewerImageRevealTimer) {
           window.clearTimeout(this.viewerImageRevealTimer);
           this.viewerImageRevealTimer = null;
@@ -5314,6 +5344,11 @@ function galleryApp(initialSettings = {}) {
 
     viewerShouldShowImageWash() {
       return !!(this.viewer.pair?.image && !this.viewerImageReady && !(this.viewer.showVideo && this.viewer.pair?.livephoto));
+    },
+
+    viewerShouldShowOriginalLoading() {
+      return !!(this.viewer.open && this.viewerImageLoading && this.viewer.pair?.image
+        && !(this.viewer.showVideo && this.viewer.pair?.livephoto));
     },
 
     viewerPreviewUrl() {
@@ -5366,9 +5401,26 @@ function galleryApp(initialSettings = {}) {
     },
 
     revealViewerToolbar() {
+      this.hideViewerPositionHint();
       if (this.viewerToolbarHideTimer) window.clearTimeout(this.viewerToolbarHideTimer);
       this.viewerToolbarHideTimer = null;
       this.viewerToolbarOpen = true;
+    },
+
+    hideViewerPositionHint() {
+      if (this.viewerPositionHintTimer !== null) window.clearTimeout(this.viewerPositionHintTimer);
+      this.viewerPositionHintTimer = null;
+      this.viewerPositionHintVisible = false;
+    },
+
+    showViewerPositionHint() {
+      this.hideViewerPositionHint();
+      if (!this.viewer.open || this.viewerToolbarOpen) return;
+      this.viewerPositionHintVisible = true;
+      this.viewerPositionHintTimer = window.setTimeout(() => {
+        this.viewerPositionHintTimer = null;
+        this.viewerPositionHintVisible = false;
+      }, 1200);
     },
 
     scheduleViewerToolbarHide() {

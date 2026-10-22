@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2' %}
+    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-2-detail-preload-1' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -242,10 +242,6 @@
                             </label>
                         </div>
                         <button class="secondary-button time-filter-toggle" :class="{ 'is-on': timeFilterActive() }" @click="toggleTimeFilter()" :data-tooltip="timeFilterActive() ? '已限定时间范围，点击调整或清空' : '按时间范围筛选图库'" x-text="timeFilterOpen ? '收起筛选' : (timeFilterActive() ? `筛选 · ${timeFilterSummary()}` : '筛选')"></button>
-                        <div class="mode-switch" x-show="!compactViewport && category !== 'video'" x-cloak>
-                            <button class="chip-button" :class="{ active: galleryViewMode === 'folder' }" :aria-pressed="galleryViewMode === 'folder'" @click="setGalleryViewMode('folder')">动态视图</button>
-                            <button class="chip-button" :class="{ active: galleryViewMode === 'pair' }" :aria-pressed="galleryViewMode === 'pair'" @click="setGalleryViewMode('pair')">图片视图</button>
-                        </div>
                     </div>
                 </div>
                 <div class="gallery-pull-hint" role="status" :aria-hidden="randomPullVisualProgress() === 0" x-show="mobileRandomRefresh() && randomModeActive()" x-cloak>
@@ -282,10 +278,6 @@
                         </div>
                     </div>
                     <div class="button-row time-filter-actions">
-                        <div class="mode-switch" x-show="compactViewport" x-cloak>
-                            <button class="chip-button" :class="{ active: galleryViewMode === 'folder' }" :aria-pressed="galleryViewMode === 'folder'" @click="setGalleryViewMode('folder')">动态视图</button>
-                            <button class="chip-button" :class="{ active: galleryViewMode === 'pair' }" :aria-pressed="galleryViewMode === 'pair'" @click="setGalleryViewMode('pair')">图片视图</button>
-                        </div>
                         <div class="filter-subscriptions" x-show="subscriptions.length" x-cloak>
                             <template x-for="item in subscriptions" :key="`filter-${item.uid}`">
                                 <label class="filter-check">
@@ -372,85 +364,6 @@
                                                 </div>
                                                         </div>
                                                     </template>
-                                            </article>
-                                        </template>
-                                </div>
-                                <div class="gallery-virtual-spacer" data-gallery-virtual-bottom :style="galleryVirtualSpacerStyle('bottom')"></div>
-                            </div>
-                        </template>
-                        <template x-if="displayedGalleryViewMode === 'pair'">
-                            <div class="gallery-virtual-page">
-                                <div class="gallery-virtual-spacer" data-gallery-virtual-top :style="galleryVirtualSpacerStyle('top')"></div>
-                                <div class="masonry asset-masonry gallery-page" :style="galleryMasonryStyle()">
-                                <template x-for="item in galleryWindowItems()" :key="galleryItemKey(item)">
-                                            <article
-                                                class="photo-card asset-card gallery-item-card"
-                                                :data-media-menu-folder="item.__deleted_placeholder ? null : item.folder_name"
-                                                :data-media-menu-pair="item.pair_index"
-                                                :data-gallery-key="galleryItemKey(item)"
-                                                :data-gallery-index="item.__gallery_index ?? ''"
-                                                :data-year-key="item.year_key"
-                                                :data-month-key="item.month_key"
-                                                :class="{ live: item.has_livephoto, 'deleted-placeholder-card': item.__deleted_placeholder, 'is-appearing': item.__appearing, 'small-quality': galleryQualityFor(item) === 'small' }"
-                                                :style="item.__deleted_placeholder ? galleryPlaceholderStyle(item) : {}"
-                                                @click="item.__deleted_placeholder ? null : openGalleryPair(item)"
-                                                @mouseenter="item.has_livephoto ? startHoverPreview($event) : null"
-                                                @mouseleave="item.has_livephoto ? stopHoverPreview($event) : null"
-                                                @touchstart.passive="item.has_livephoto ? scheduleHoverPreview($event) : null"
-                                                @touchend="item.has_livephoto ? cancelScheduledHoverPreview($event) : null"
-                                                @touchcancel="item.has_livephoto ? cancelScheduledHoverPreview($event) : null"
-                                            >
-                                                <template x-if="item.__deleted_placeholder">
-                                                    <div class="deleted-placeholder-content">
-                                                        <span></span>
-                                                        <strong>已删除</strong>
-                                                    </div>
-                                                </template>
-                                                <template x-if="!item.__deleted_placeholder">
-                                                    <div>
-                                                <button type="button" class="card-open-button" :aria-label="`查看图片：${item.title || item.folder_name}，第 ${item.pair_index} 组`" @click.stop="openGalleryPair(item)"></button>
-                                                <div class="photo-visual asset-visual" :style="assetVisualStyle(item)">
-                                                    <template x-if="galleryQualityFor(item) === 'small' && galleryPairImageUrl(item)">
-                                                        <img class="hover-preview-image" loading="lazy" decoding="async" x-progressive-src="galleryPairImageUrl(item)" :alt="item.title" :width="item.width || null" :height="item.height || null">
-                                                    </template>
-                                                    <template x-if="item.has_livephoto">
-                                                        <video
-                                                            x-retire-video class="hover-preview-video hidden"
-                                                            playsinline
-                                                            muted
-                                                            preload="none"
-                                                            :poster="galleryQualityFor(item) === 'small' ? galleryPairImageUrl(item) : ''"
-                                                            :data-src="item.livephoto?.url"
-                                                        ></video>
-                                                    </template>
-                                                    <div class="photo-badges">
-                                                        <span class="photo-badge" :title="item.pub_time" x-text="displayDate(item.pub_time, true)"></span>
-                                                        <span class="photo-badge date-warning" x-show="futureDate(item.pub_time)" title="来源日期晚于当前时间，请核对原帖">来源日期待核实</span>
-                                                        <span class="photo-badge live" x-show="item.has_livephoto">Live Photo</span>
-                                                    </div>
-                                                </div>
-                                                <div class="card-trash-zone" @click.stop>
-                                                    <template x-if="!compactViewport && !pairDeletePending(item.folder_name, item.pair_index)">
-                                                        <button class="mini-trash-button" @click="askDeletePair(item.folder_name, item.pair_index)" :aria-label="`永久删除第 ${item.pair_index} 组图片`">
-                                                            <svg class="trash-icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
-                                                        </button>
-                                                    </template>
-                                                    <template x-if="pairDeletePending(item.folder_name, item.pair_index)">
-                                                        <div class="mini-confirm-row single-confirm">
-                                                            <button class="mini-confirm-button danger" :disabled="pairDeletingKey === pairDeleteKey(item.folder_name, item.pair_index)" @click="confirmDeletePair(item.folder_name, item.pair_index)">确认</button>
-                                                        </div>
-                                                    </template>
-                                                </div>
-                                                <div class="photo-meta asset-meta">
-                                                    <h4 x-text="item.title"></h4>
-                                                    <p x-text="`${item.folder_name} · 第 ${item.pair_index} 组`"></p>
-                                                    <div class="photo-stats">
-                                                        <span x-text="item.has_images ? '原图可查看' : '仅动态视频'"></span>
-                                                        <span x-show="item.has_livephoto">支持播放</span>
-                                                    </div>
-                                                </div>
-                                                    </div>
-                                                </template>
                                             </article>
                                         </template>
                                 </div>
@@ -544,7 +457,7 @@
                                         <article class="photo-card recent-update-card" @click="openFolder(item.folder_name)">
                                             <div class="photo-visual">
                                                 <div class="photo-collage" :class="`tiles-${Math.min(galleryPreviewTiles(item).length, 4) || 1}`" :style="galleryCoverStyle(item)">
-                                                    <template x-for="tile in (item.preview_tiles || []).slice(0, 4)" :key="tile.id">
+                                                    <template x-for="tile in galleryPreviewTiles(item)" :key="tile.id">
                                                         <div class="photo-collage-tile">
                                                             <img loading="lazy" decoding="async" :src="galleryTileUrl(tile)" :alt="cardPrimaryText(item)" @load="fadeLoadedImage($event); scheduleRecentUpdatesMeasure()">
                                                         </div>
@@ -604,7 +517,10 @@
                         <header class="duplicate-group-head">
                             <div>
                                 <p x-text="`重复内容 ${groupIndex + 1}`"></p>
-                                <h3 x-text="`${group.post_count} 条贴文拥有相似图片`"></h3>
+                                <div class="heading-with-help">
+                                    <h3 x-text="`${group.post_count} 条贴文拥有相似图片`"></h3>
+                                    <button type="button" class="help-button" aria-label="仅保留贴文的条件说明" data-tooltip="仅当所选贴文直接覆盖其余贴文的全部图片，且其余贴文不含实况或视频时，才能仅保留该贴文。链式相似不代表所有内容重复；不满足条件时，可使用仅清理重复或逐条处理。结果过期时请先重新检测。">?</button>
+                                </div>
                                 <div class="inline-tags">
                                     <span class="inline-tag accent" x-text="`${group.matched_image_count} 组相似图片`"></span>
                                     <span class="inline-tag" x-text="`平均相似度 ${group.similarity}%`"></span>
@@ -658,7 +574,7 @@
                                         </div>
                                     </div>
                                     <div class="duplicate-post-actions" @click.stop>
-                                        <button class="primary-button" @click="selectDuplicateKeep(group, item)" x-text="duplicateKeepSelection(group.signature) === item.folder_name ? '已选择仅保留' : '仅保留此贴文'"></button>
+                                        <button class="primary-button" @click="selectDuplicateKeep(group, item)" :disabled="!item.can_keep_only || duplicateCacheStale" x-text="duplicateKeepSelection(group.signature) === item.folder_name ? '已选择仅保留' : '仅保留此贴文'"></button>
                                         <button class="secondary-button danger-button" @click="deleteDuplicateFolder(group, item)" :disabled="duplicateActionPending('trash', group.signature, item.folder_name)">删除此贴文</button>
                                     </div>
                                 </article>
@@ -677,7 +593,7 @@
                         <section class="duplicate-match-detail">
                             <div class="duplicate-detail-copy">
                                 <p>重复内容详情</p>
-                                <button type="button" class="help-button" aria-label="相似图片对说明" data-tooltip="展示用于判定的相似图片对，最多显示 12 组。">?</button>
+                                <button type="button" class="help-button" aria-label="相似图片对说明" data-tooltip="展示用于判定的相似图片对，最多显示 12 组。相似度由感知哈希距离换算，不是重复概率。清理时为每张待删除图片保留一张直接匹配图片，并复核原图；带实况或视频的图片组不自动清理。">?</button>
                             </div>
                             <div class="duplicate-match-list">
                                 <template x-for="(match, matchIndex) in group.matches" :key="`${group.signature}-${matchIndex}`">
@@ -946,7 +862,7 @@
                         </div>
                         <label>下载间隔(秒) <input class="ui-field" type="number" min="0" step="0.1" x-model="settings.download_sleep"></label>
                         <label>UP 主定时拉取间隔(小时) <input class="ui-field" type="number" min="1" x-model.number="settings.scheduler_interval_hours"></label>
-                        <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.auto_load_enabled"> 图片视图滑到底部自动继续加载</label>
+                        <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.auto_load_enabled"> 图库滑到底部自动继续加载</label>
                         <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.scheduler_enabled"> 启用 UP 主定时拉取</label>
                     </article>
 
@@ -1000,7 +916,7 @@
                     </article>
 
                     <article class="settings-card thumbnail-settings-card" x-show="settingsGroup === 'media'" data-settings-group="media">
-                        <h4 class="heading-with-help">界面与缩略图<button type="button" class="help-button" aria-label="界面与缩略图说明" data-tooltip="瀑布流与详情共用 thumb 缩略图，查看器加载原图。">?</button></h4>
+                        <h4 class="heading-with-help">界面与缩略图<button type="button" class="help-button" aria-label="界面与缩略图说明" data-tooltip="瀑布流与详情共用 thumb 缩略图，查看器加载原图。全部项目与最近更新共用封面设置：宽屏默认取前四张拼图，不足四张按实际数量展示；开启单张封面后使用一张，窄屏始终使用单张。">?</button></h4>
                         <div class="interface-settings-grid">
                             <label>应用标题 <input class="ui-field" type="text" x-model="settings.app_title" placeholder="RC-WebGallery"></label>
                             <div>
@@ -1862,7 +1778,12 @@
                         <button class="secondary-button detail-close-button" data-modal-close @click="closeDetail()">关闭</button>
                     </div>
                 </header>
-                <div class="detail-grid" x-ref="detailGrid" :style="detailGridStyle()">
+                <div class="detail-load-status" role="status" x-show="detailLoading" x-cloak>正在加载图片详情…</div>
+                <div class="detail-load-status" role="alert" x-show="detailError" x-cloak>
+                    <span x-text="detailError"></span>
+                    <button type="button" class="secondary-button" @click="openFolder(detail.folder?.folder_name, detail.folder)">重试</button>
+                </div>
+                <div class="detail-grid" x-ref="detailGrid" :style="detailGridStyle()" :aria-busy="detailLoading">
                     <div class="detail-virtual-spacer" :style="detailVirtualSpacerStyle('top')" aria-hidden="true"></div>
                     <template x-for="pair in detailWindowItems()" :key="detailPairKey(pair)">
                         <article
@@ -1898,7 +1819,7 @@
                                     ></video>
                                 </template>
                                 <div class="card-trash-zone detail-card-trash" @click.stop>
-                                    <template x-if="!compactViewport && !pairDeletePending(detail.folder?.folder_name, pair.pair_index)">
+                                    <template x-if="!pair.placeholder && !compactViewport && !pairDeletePending(detail.folder?.folder_name, pair.pair_index)">
                                         <button class="mini-trash-button" @click="askDeletePair(detail.folder?.folder_name, pair.pair_index)" :aria-label="`永久删除第 ${pair.pair_index} 组图片`">
                                             <svg class="trash-icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
                                         </button>
@@ -2008,7 +1929,7 @@
                         </template>
                         <template x-if="deletePairConfirmStep >= 1">
                             <div class="button-row confirm-row viewer-action-row viewer-action-confirm">
-                                <button type="button" class="primary-button danger-confirm confirm-anchor" @click="confirmDeleteViewerPair()">确认永久删除，不可恢复</button>
+                                <button type="button" class="primary-button danger-confirm confirm-anchor" @click="confirmDeleteViewerPair()">确认删除</button>
                             </div>
                         </template>
                         <span class="viewer-toolbar-spacer" aria-hidden="true"></span>
@@ -2020,6 +1941,10 @@
                         <span class="viewer-toolbar-spacer" aria-hidden="true"></span>
                         <button type="button" class="secondary-button viewer-icon-button" data-modal-close @click="closeViewer()" aria-label="关闭" title="关闭（Esc）"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
                     </div>
+                </div>
+                <div class="viewer-position-hint" data-testid="viewer-position-hint" role="status" aria-label="当前图片序号" x-show="viewer.open && viewerPositionHintVisible && !viewerToolbarOpen" x-transition.opacity.duration.220ms x-text="viewerPositionText()" x-cloak></div>
+                <div class="viewer-original-loading" data-testid="viewer-original-loading" role="status" aria-label="正在加载原图" x-show="viewerShouldShowOriginalLoading()" x-transition.opacity.duration.280ms x-cloak>
+                    <span class="viewer-original-loading-ring" aria-hidden="true"></span>
                 </div>
                 <article class="viewer-stage-wrap" :class="{ live: viewer.pair?.livephoto, closing: viewerClosing, 'switch-up': viewerSwitchDirection === 'up', 'switch-down': viewerSwitchDirection === 'down', 'is-swapping': viewerSwapPending }" x-show="viewer.pair || viewerClosing" x-cloak>
                     <div
@@ -2034,11 +1959,11 @@
                         @pointercancel="viewerPointerUp($event)"
                     >
                         <template x-if="viewer.pair?.image && !viewerPreviewRetired">
-                            <img x-retire-image class="viewer-stage-preview" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) }" :src="viewerPreviewUrl()" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片预览'" decoding="async" loading="eager" draggable="false" @load="fadeLoadedImage($event)">
+                            <img x-retire-image class="viewer-stage-preview" fetchpriority="high" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) }" :src="viewerPreviewUrl()" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片预览'" decoding="async" loading="eager" draggable="false" @load="fadeLoadedImage($event)">
                         </template>
                         <div class="viewer-stage-loading-wash" x-show="viewerShouldShowImageWash()" x-transition:enter="wash-fade" x-transition:enter-start="wash-transparent" x-transition:enter-end="wash-visible" x-transition:leave="wash-fade" x-transition:leave-start="wash-visible" x-transition:leave-end="wash-transparent" :style="viewerMediaStyle()"></div>
                         <template x-if="viewer.pair?.image">
-                            <img x-retire-image class="viewer-stage-image" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) || !viewerImageReady }" :src="viewer.pair?.image?.url" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片'" :data-viewer-token="viewerToken" decoding="async" loading="eager" fetchpriority="high" draggable="false" @load="viewerMediaLoaded('image', $event)" @error="viewerMediaFailed('image', $event)">
+                            <img x-retire-image class="viewer-stage-image" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) || !viewerImageReady }" :src="viewer.pair?.image?.url" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片'" :data-viewer-token="viewerToken" decoding="async" loading="eager" fetchpriority="auto" draggable="false" @load="viewerMediaLoaded('image', $event)" @error="viewerMediaFailed('image', $event)">
                         </template>
                         <template x-if="viewer.pair?.livephoto">
                             <video

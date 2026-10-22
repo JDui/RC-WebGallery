@@ -1,13 +1,6 @@
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-import bili_9pics_downloader as legacy_9pics  # noqa: E402
+from app.services import legacy_downloader as legacy_9pics
 
 API_DETAIL = legacy_9pics.API_DETAIL
 API_FEED = legacy_9pics.API_FEED

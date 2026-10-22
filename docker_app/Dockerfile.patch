@@ -1,7 +1,5 @@
-# Patch package: reuse the installed browser/media runtime from v11.3.
+# Patch package: reuse the installed browser/media runtime from v12.0.
 # The resulting docker-save archive includes its base layers and loads alone.
-ARG PATCH_BASE_IMAGE=zzs-bili-gallery:11.3-amd64
+ARG PATCH_BASE_IMAGE=zzs-bili-gallery:12.0-amd64
 FROM ${PATCH_BASE_IMAGE}
 COPY docker_app /opt/zzs/docker_app
-COPY bili_9pics_downloader.py /workspace/bili_9pics_downloader.py
-COPY LivePhoto /workspace/LivePhoto

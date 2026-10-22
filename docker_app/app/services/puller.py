@@ -987,6 +987,9 @@ class PullManager:
         )
         removed = []
         try:
+            current_folders = self.duplicate_service.resolve_plan(signature, keep_folder_name)
+            if set(folder_names) != set(current_folders) - {keep_folder_name}:
+                raise RuntimeError("仅保留贴文的处理范围已变化，请重新检测后再处理")
             for folder_name in folder_names:
                 try:
                     self.move_to_trash(folder_name, reason=f"重复内容，保留 {keep_folder_name}")
@@ -1020,6 +1023,7 @@ class PullManager:
             "开始清理重复图片",
         )
         try:
+            self.duplicate_service.validate_cleanup_targets(signature, targets)
             result = self.cleanup_duplicate_pairs(targets)
             duplicate_payload = self.duplicate_service.complete_cleanup(signature)
             details = {

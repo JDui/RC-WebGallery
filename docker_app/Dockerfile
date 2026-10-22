@@ -99,8 +99,6 @@ RUN mkdir -p /opt/zzs/bin \
     && printf '#!/bin/sh\nexec python -m app.sidecars.media_worker "$@"\n' > /opt/zzs/bin/media-worker \
     && printf '#!/bin/sh\nexec python -m app.sidecars.indexer "$@"\n' > /opt/zzs/bin/indexer \
     && chmod +x /opt/zzs/bin/media-worker /opt/zzs/bin/indexer
-COPY bili_9pics_downloader.py /workspace/bili_9pics_downloader.py
-COPY LivePhoto /workspace/LivePhoto
 
 EXPOSE 7860
 

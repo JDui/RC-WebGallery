@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import sqlite3
 import threading
@@ -1810,10 +1811,11 @@ class Database:
             rows = conn.execute("select * from folders order by pub_ts desc, folder_name desc").fetchall()
         return [dict(row) for row in rows]
 
-    def list_all_assets(self) -> list[dict[str, Any]]:
+    def list_all_assets(self, *, images_only: bool = False) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
-                "select * from assets order by folder_name asc, pair_index asc, media_type asc, filename asc"
+                "select * from assets " + ("where media_type = 'image' " if images_only else "")
+                + "order by folder_name asc, pair_index asc, media_type asc, filename asc"
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -1917,25 +1919,19 @@ class Database:
         with self.connect() as conn:
             conn.execute("delete from duplicate_group_cache")
 
-    def duplicate_content_signature(self) -> str:
+    def duplicate_content_signature(self, *, include_fingerprints: bool = True) -> str:
+        digest = hashlib.sha256()
         with self.connect() as conn:
-            row = conn.execute(
-                """
-                select
-                    count(*) as image_rows,
-                    coalesce(max(id), 0) as max_image_id,
-                    coalesce(sum(id), 0) as image_id_sum,
-                    count(distinct folder_name) as folder_rows,
-                    coalesce(sum(pair_index), 0) as pair_index_sum,
-                    coalesce(sum(width), 0) as width_sum,
-                    coalesce(sum(height), 0) as height_sum,
-                    sum(case when coalesce(duplicate_fingerprint, '') != '' then 1 else 0 end) as fingerprint_rows,
-                    coalesce(max(created_at), '') as newest_created_at
-                from assets
-                where media_type = 'image'
-                """
-            ).fetchone()
-        return dumps_json(dict(row))
+            # 流式摘要包含媒体及贴文元数据，避免数量不变时替换图片仍命中旧缓存。
+            for table, order in (("assets", "id"), ("folders", "folder_name")):
+                digest.update(table.encode("utf-8"))
+                for row in conn.execute(f"select * from {table} order by {order}"):
+                    values = dict(row)
+                    if not include_fingerprints and table == "assets":
+                        values.pop("duplicate_fingerprint", None)
+                    digest.update(dumps_json(values).encode("utf-8"))
+                    digest.update(b"\n")
+        return digest.hexdigest()
 
     def set_folder_favorite(self, folder_name: str, is_favorite: bool) -> None:
         with self.connect() as conn:

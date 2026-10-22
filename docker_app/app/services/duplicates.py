@@ -4,8 +4,9 @@ import hashlib
 import json
 import math
 import threading
-from collections import defaultdict
-from dataclasses import dataclass, field
+from collections import defaultdict, deque
+from dataclasses import dataclass, field, replace
+from functools import cmp_to_key
 from typing import Any
 
 from app.db import Database
@@ -20,7 +21,7 @@ MAX_HASH_DISTANCE = 32
 MAX_ASPECT_LOG_DISTANCE = 0.24
 LOW_CONTRAST_LIMIT = 12
 LOW_CONTRAST_COLOR_DISTANCE = 36
-DUPLICATE_CACHE_VERSION = 5
+DUPLICATE_CACHE_VERSION = 6
 
 
 @dataclass
@@ -103,15 +104,20 @@ class DuplicateService:
         threshold = self._image_threshold()
         cache_key = self._cache_key(threshold)
         if force:
+            source_signature = self.db.duplicate_content_signature(include_fingerprints=False)
             rebuilt_groups = self._build_groups(threshold)
+            rebuilt_key = self._cache_key(threshold)
+            cache_key = rebuilt_key
+            if source_signature != self.db.duplicate_content_signature(include_fingerprints=False):
+                rebuilt_key += ":stale"
             with self._cache_lock:
                 self._signature_aliases = {}
                 self._cached_groups = rebuilt_groups
-                self.db.set_duplicate_group_cache(cache_key, self._cached_groups)
-                self._cache_signature = cache_key
+                self.db.set_duplicate_group_cache(rebuilt_key, self._cached_groups)
+                self._cache_signature = rebuilt_key
                 self._cache_updated_at = now_iso()
                 self._has_cache = True
-                self._cache_stale = False
+                self._cache_stale = cache_key != rebuilt_key
 
         with self._cache_lock:
             if not self._cache_signature:
@@ -190,18 +196,18 @@ class DuplicateService:
                 if not any(str(item["folder_name"]) in removed for item in group["items"]):
                     groups.append(group)
                     continue
-                updated = self._group_without_folders(group, removed)
-                if updated is not None:
-                    groups.append(updated)
-                    self._signature_aliases[str(group["signature"])] = str(updated["signature"])
-                else:
-                    self._signature_aliases[str(group["signature"])] = ""
+                remaining = {str(item["folder_name"]) for item in group["items"]} - removed
+                rebuilt = self._build_groups(self._image_threshold(), remaining) if len(remaining) >= 2 else []
+                groups.extend(rebuilt)
+                self._signature_aliases[str(group["signature"])] = (
+                    str(rebuilt[0]["signature"]) if len(rebuilt) == 1 else ""
+                )
             self._cached_groups = groups
             self._persist_incremental_cache()
             return self.list_groups()
 
     def cleanup_plan(self, signature: str) -> dict[str, Any]:
-        self._ensure_operation_cache()
+        self._require_fresh_cache()
         with self._cache_lock:
             resolved = self._resolve_signature(signature)
             group = next(
@@ -214,6 +220,82 @@ class DuplicateService:
                 "folder_names": [str(item["folder_name"]) for item in group.get("items", [])],
                 "targets": [dict(target) for target in group.get("_cleanup_targets", [])],
             }
+
+    def _require_fresh_cache(self) -> None:
+        self._ensure_operation_cache()
+        current_key = self._cache_key(self._image_threshold())
+        with self._cache_lock:
+            self._cache_stale = not self._has_cache or self._cache_signature != current_key
+            if self._cache_stale:
+                raise RuntimeError("图库或检测设置已变化，请重新检测重复内容后再处理")
+
+    def resolve_plan(self, signature: str, keep_folder_name: str) -> list[str]:
+        self._require_fresh_cache()
+        group = self.get_group(signature)
+        if not group:
+            raise RuntimeError("重复内容项不存在或已经处理")
+        keep = next((item for item in group["items"] if item["folder_name"] == keep_folder_name), None)
+        if not keep or not keep.get("can_keep_only"):
+            raise RuntimeError("所选贴文未覆盖其余贴文的全部图片，或其余贴文含实况、视频；请使用仅清理重复或逐条处理")
+        with self._cache_lock:
+            internal = next(item for item in self._cached_groups if item["signature"] == group["signature"])
+            links = list(internal["_image_links"])
+        rows = self.db.list_assets_for_folders([str(item["folder_name"]) for item in group["items"]])
+        by_id = {int(row["id"]): row for row in rows}
+        if not any(row["folder_name"] == keep_folder_name for row in rows):
+            raise RuntimeError("所选保留贴文的图片已缺失，请重新检测后再处理")
+        fingerprints = {}
+        covered = set()
+        for left_id, right_id in links:
+            left, right = by_id.get(left_id), by_id.get(right_id)
+            if not left or not right:
+                continue
+            if left["folder_name"] != keep_folder_name and right["folder_name"] != keep_folder_name:
+                continue
+            for row in (left, right):
+                if row["id"] not in fingerprints:
+                    path = self.storage.resolve_storage_path(row.get("rel_path"))
+                    fingerprints[row["id"]] = parse_fingerprint(image_fingerprint(path) if path else None)
+            left_fp, right_fp = fingerprints[left_id], fingerprints[right_id]
+            if left_fp is None or right_fp is None:
+                continue
+            if hamming_distance(left_fp[0], right_fp[0]) > MAX_HASH_DISTANCE:
+                continue
+            if max(left_fp[2], right_fp[2]) <= LOW_CONTRAST_LIMIT and color_distance(left_fp[1], right_fp[1]) > LOW_CONTRAST_COLOR_DISTANCE:
+                continue
+            covered.add(right_id if left["folder_name"] == keep_folder_name else left_id)
+        if any(row["id"] not in covered for row in rows if row["folder_name"] != keep_folder_name):
+            raise RuntimeError("原图复核未能覆盖其余贴文的全部图片，请重新检测或使用仅清理重复")
+        self._require_fresh_cache()
+        return [str(item["folder_name"]) for item in group["items"]]
+
+    def validate_cleanup_targets(self, signature: str, targets: list[dict[str, Any]]) -> None:
+        plan = self.cleanup_plan(signature)
+        if targets != plan["targets"]:
+            raise RuntimeError("重复图片清理计划已变化，请重新检测后再处理")
+        # 后台排队期间文件可能被替换；清理前直接回读文件，不能只信任数据库指纹。
+        rows = self.db.list_assets_for_folders(plan["folder_names"])
+        images = {int(row["id"]): row for row in rows if row.get("media_type") == "image"}
+        checked: set[int] = set()
+        for target in targets:
+            for key, fingerprint_key in (("asset_id", "fingerprint"), ("keep_asset_id", "keep_fingerprint")):
+                asset_id = int(target[key])
+                if asset_id in checked:
+                    continue
+                row = images.get(asset_id)
+                path = self.storage.resolve_storage_path(row.get("rel_path")) if row else None
+                if not path or not path.is_file():
+                    raise RuntimeError("待清理图片或对应保留图片已缺失，请重新检测后再处理")
+                source_key = "source_fingerprint" if key == "asset_id" else "keep_source_fingerprint"
+                if image_fingerprint(path) != target[source_key]:
+                    raise RuntimeError("待清理原图或对应保留原图已变化，请重新检测后再处理")
+                fingerprint_path = self.storage.resolve_storage_path(
+                    row.get("small_thumb_rel_path") or row.get("thumb_rel_path") or row.get("rel_path")
+                )
+                if not fingerprint_path or image_fingerprint(fingerprint_path) != target[fingerprint_key]:
+                    raise RuntimeError("待清理图片或对应保留图片已变化，请重新检测后再处理")
+                checked.add(asset_id)
+        self._require_fresh_cache()
 
     def complete_cleanup(self, signature: str) -> dict[str, Any]:
         self._ensure_operation_cache()
@@ -230,8 +312,7 @@ class DuplicateService:
             return self.list_groups()
 
     def _persist_incremental_cache(self) -> None:
-        if not self._cache_stale:
-            self._cache_signature = self._cache_key(self._image_threshold())
+        # 局部处理不能替尚未重新检测的其它图库变化背书。
         self.db.set_duplicate_group_cache(self._cache_signature, self._cached_groups)
         self._cache_updated_at = now_iso()
         self._has_cache = True
@@ -271,8 +352,10 @@ class DuplicateService:
                 other = assets[other_index]
                 if other.folder_name == asset.folder_name or not self._assets_similar(asset, other):
                     continue
-                left_index, right_index = sorted((other_index, index))
                 folder_pair = tuple(sorted((other.folder_name, asset.folder_name)))
+                left_index, right_index = (
+                    (other_index, index) if other.folder_name == folder_pair[0] else (index, other_index)
+                )
                 distance = hamming_distance(asset.hash_bits, other.hash_bits)
                 candidates[folder_pair].append((distance, left_index, right_index))
             if root is None:
@@ -283,7 +366,7 @@ class DuplicateService:
         accepted_links: dict[tuple[str, str], list[tuple[int, int, int]]] = {}
         for folder_pair, pair_matches in candidates.items():
             self._background_checkpoint()
-            selected = self._greedy_matches(pair_matches)
+            selected = self._maximum_matches(pair_matches)
             if len(selected) >= threshold:
                 accepted_links[folder_pair] = selected
         if not accepted_links:
@@ -334,12 +417,14 @@ class DuplicateService:
             return 2
 
     def _cache_key(self, threshold: int) -> str:
-        return f"v{DUPLICATE_CACHE_VERSION}:{threshold}"
+        return f"v{DUPLICATE_CACHE_VERSION}:{threshold}:{self.db.duplicate_content_signature()}"
 
     def _duplicate_assets(self, folders: dict[str, dict[str, Any]]) -> list[DuplicateAsset]:
         output = []
         fingerprint_updates: dict[int, str] = {}
-        for row in self.db.list_all_assets():
+        rows = (self.db.list_assets_for_folders(sorted(folders))
+                if len(folders) < 100 else self.db.list_all_assets(images_only=True))
+        for row in rows:
             self._background_checkpoint()
             if row.get("media_type") != "image" or row.get("folder_name") not in folders:
                 continue
@@ -397,17 +482,41 @@ class DuplicateService:
         if self.priority is not None:
             self.priority.background_checkpoint()
 
-    def _greedy_matches(self, matches: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
-        selected = []
-        used_left: set[int] = set()
-        used_right: set[int] = set()
-        for distance, left_index, right_index in sorted(matches):
-            if left_index in used_left or right_index in used_right:
-                continue
-            used_left.add(left_index)
-            used_right.add(right_index)
-            selected.append((distance, left_index, right_index))
-        return selected
+    def _maximum_matches(self, matches: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
+        adjacency: dict[int, list[int]] = defaultdict(list)
+        distances = {}
+        for distance, left, right in sorted(set(matches)):
+            adjacency[left].append(right)
+            distances[left, right] = distance
+        left_match: dict[int, int] = {}
+        right_match: dict[int, int] = {}
+        # 用增广路径求最大数量一对一匹配，近距离优先遍历；不依赖递归深度。
+        for start in sorted(adjacency):
+            self._background_checkpoint()
+            queue = deque([start])
+            seen_left = {start}
+            previous: dict[int, int] = {}
+            free_right = None
+            while queue and free_right is None:
+                left = queue.popleft()
+                for right in adjacency[left]:
+                    if right in previous:
+                        continue
+                    previous[right] = left
+                    if right not in right_match:
+                        free_right = right
+                        break
+                    next_left = right_match[right]
+                    if next_left not in seen_left:
+                        seen_left.add(next_left)
+                        queue.append(next_left)
+            while free_right is not None:
+                left = previous[free_right]
+                old_right = left_match.get(left)
+                left_match[left] = free_right
+                right_match[free_right] = left
+                free_right = old_right
+        return sorted((distances[left, right], left, right) for left, right in left_match.items())
 
     def _group_payload(
         self,
@@ -425,7 +534,9 @@ class DuplicateService:
             json.dumps(signature_source, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         matched_by_folder: dict[str, set[int]] = defaultdict(set)
-        cleanup_targets: dict[tuple[str, int], dict[str, Any]] = {}
+        media_by_folder: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in self.db.list_assets_for_folders(sorted(member_names)):
+            media_by_folder[str(row["folder_name"])].append(row)
         match_rows = []
         link_summaries = []
         total_distance = 0
@@ -444,16 +555,6 @@ class DuplicateService:
                 total_matches += 1
                 similarity = round((1 - distance / 256) * 100)
                 link_similarity_total += similarity
-                cleanup_asset, cleanup_reason = self._cleanup_asset(left, right, folders)
-                cleanup_targets[(cleanup_asset.folder_name, cleanup_asset.pair_index)] = {
-                    "folder_name": cleanup_asset.folder_name,
-                    "pair_index": cleanup_asset.pair_index,
-                    "width": cleanup_asset.width,
-                    "height": cleanup_asset.height,
-                    "pixels": cleanup_asset.width * cleanup_asset.height,
-                    "file_size_bytes": cleanup_asset.file_size_bytes,
-                    "reason": cleanup_reason,
-                }
                 match_rows.append(
                     {
                         "left_folder_name": left.folder_name,
@@ -476,6 +577,7 @@ class DuplicateService:
                     },
                 }
             )
+        cleanup_targets = self._safe_cleanup_targets(links, assets, folders, media_by_folder)
         items = []
         for name in sorted(member_names, key=lambda item: int(folders[item].get("pub_ts") or 0), reverse=True):
             folder = folders[name]
@@ -495,6 +597,15 @@ class DuplicateService:
                     "preview_tiles": [asset.tile for asset in folder_assets[:4]],
                     "image_count": len(folder_assets),
                     "asset_count": len(folder_assets),
+                    "can_keep_only": all(
+                        all(row.get("media_type") == "image" for row in media_by_folder[other])
+                        and any(
+                            set(summary["folders"]) == {name, other}
+                            and summary["match_count"] == len(media_by_folder[other])
+                            for summary in link_summaries
+                        )
+                        for other in member_names if other != name
+                    ),
                     "max_resolution_pixels": max(
                         (asset.width * asset.height for asset in folder_assets),
                         default=0,
@@ -513,8 +624,9 @@ class DuplicateService:
             "group_key": signature,
             "_signature_source": signature_source,
             "_link_summaries": link_summaries,
+            "_image_links": [(assets[left].id, assets[right].id) for matches in links.values() for _, left, right in matches],
             "_cleanup_targets": sorted(
-                cleanup_targets.values(),
+                cleanup_targets,
                 key=lambda item: (item["folder_name"], item["pair_index"]),
             ),
             "cleanup_candidate_count": len(cleanup_targets),
@@ -525,6 +637,87 @@ class DuplicateService:
             "latest_pub_ts": max((int(item["pub_ts"]) for item in items), default=0),
             "matches": match_rows[:64],
         }
+
+    def _safe_cleanup_targets(
+        self,
+        links: dict[tuple[str, str], list[tuple[int, int, int]]],
+        assets: list[DuplicateAsset],
+        folders: dict[str, dict[str, Any]],
+        media_by_folder: dict[str, list[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
+        neighbors: dict[int, set[int]] = defaultdict(set)
+        for matches in links.values():
+            for _, left, right in matches:
+                neighbors[left].add(right)
+                neighbors[right].add(left)
+        protected = {
+            (name, int(row.get("pair_index") or 0))
+            for name, rows in media_by_folder.items()
+            for row in rows if row.get("media_type") != "image"
+        }
+        pair_counts: dict[tuple[str, int], int] = defaultdict(int)
+        for name, rows in media_by_folder.items():
+            for row in rows:
+                pair_counts[name, int(row.get("pair_index") or 0)] += 1
+        protected.update(pair for pair, count in pair_counts.items() if count != 1)
+
+        def compare(left: int, right: int) -> int:
+            discarded, _ = self._cleanup_asset(assets[left], assets[right], folders)
+            return 1 if discarded is assets[left] else -1
+
+        removed: set[int] = set()
+        retained: set[int] = set()
+        targets = []
+        rows_by_id = {int(row["id"]): row for rows in media_by_folder.values() for row in rows}
+        source_fingerprints: dict[int, str | None] = {}
+
+        def original(asset: DuplicateAsset) -> DuplicateAsset | None:
+            if asset.id not in source_fingerprints:
+                row = rows_by_id.get(asset.id, {})
+                path = self.storage.resolve_storage_path(row.get("rel_path"))
+                source_fingerprints[asset.id] = image_fingerprint(path) if path else None
+            fingerprint = source_fingerprints[asset.id]
+            parsed = parse_fingerprint(fingerprint)
+            if parsed is None:
+                return None
+            bits, color, contrast = parsed
+            return replace(asset, fingerprint=fingerprint, hash_bits=bits, color=color, contrast=contrast)
+
+        for keep_index in sorted(neighbors, key=cmp_to_key(compare)):
+            self._background_checkpoint()
+            if keep_index in removed:
+                continue
+            retained.add(keep_index)
+            keep = assets[keep_index]
+            for index in sorted(neighbors[keep_index]):
+                asset = assets[index]
+                if index in removed or index in retained or (asset.folder_name, asset.pair_index) in protected:
+                    continue
+                discarded, reason = self._cleanup_asset(asset, keep, folders)
+                if discarded is not asset:
+                    continue
+                original_asset, original_keep = original(asset), original(keep)
+                if not original_asset or not original_keep or not self._assets_similar(original_asset, original_keep):
+                    continue
+                removed.add(index)
+                targets.append({
+                    "folder_name": asset.folder_name,
+                    "pair_index": asset.pair_index,
+                    "asset_id": asset.id,
+                    "fingerprint": asset.fingerprint,
+                    "keep_asset_id": keep.id,
+                    "keep_folder_name": keep.folder_name,
+                    "keep_pair_index": keep.pair_index,
+                    "keep_fingerprint": keep.fingerprint,
+                    "source_fingerprint": original_asset.fingerprint,
+                    "keep_source_fingerprint": original_keep.fingerprint,
+                    "width": asset.width,
+                    "height": asset.height,
+                    "pixels": asset.width * asset.height,
+                    "file_size_bytes": asset.file_size_bytes,
+                    "reason": reason,
+                })
+        return targets
 
     def _cleanup_asset(
         self,
@@ -548,64 +741,6 @@ class DuplicateService:
         left_key = (left.folder_name, left.pair_index, left.id)
         right_key = (right.folder_name, right.pair_index, right.id)
         return (left if left_key > right_key else right), "stable_tiebreak"
-
-    def _group_without_folders(self, group: dict[str, Any], removed: set[str]) -> dict[str, Any] | None:
-        items = [dict(item) for item in group["items"] if str(item["folder_name"]) not in removed]
-        if len(items) < 2:
-            return None
-        matches = [
-            dict(match)
-            for match in group.get("matches", [])
-            if str(match.get("left_folder_name")) not in removed
-            and str(match.get("right_folder_name")) not in removed
-        ]
-        link_summaries = [
-            dict(summary)
-            for summary in group.get("_link_summaries", [])
-            if not any(str(name) in removed for name in summary.get("folders", []))
-        ]
-        matched_by_folder: dict[str, set[int]] = defaultdict(set)
-        for summary in link_summaries:
-            for name, pair_indexes in summary.get("pair_indexes", {}).items():
-                matched_by_folder[str(name)].update(int(index) for index in pair_indexes)
-        for item in items:
-            item["duplicate_match_count"] = len(matched_by_folder[str(item["folder_name"])])
-            item["duplicate_ratio"] = round(
-                item["duplicate_match_count"] / max(int(item.get("image_count") or 0), 1) * 100
-            )
-        self._apply_feature_tags(items)
-        signature_source = [
-            entry
-            for entry in group.get("_signature_source", [])
-            if str(entry[0]) not in removed
-        ]
-        signature = hashlib.sha256(
-            json.dumps(signature_source, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
-        total_matches = sum(int(summary.get("match_count") or 0) for summary in link_summaries)
-        similarity_total = sum(int(summary.get("similarity_total") or 0) for summary in link_summaries)
-        return {
-            **group,
-            "signature": signature,
-            "_signature_source": signature_source,
-            "_link_summaries": link_summaries,
-            "_cleanup_targets": [
-                dict(target)
-                for target in group.get("_cleanup_targets", [])
-                if str(target.get("folder_name")) not in removed
-            ],
-            "cleanup_candidate_count": sum(
-                1
-                for target in group.get("_cleanup_targets", [])
-                if str(target.get("folder_name")) not in removed
-            ),
-            "items": items,
-            "post_count": len(items),
-            "matched_image_count": total_matches,
-            "similarity": round(similarity_total / total_matches) if total_matches else 0,
-            "latest_pub_ts": max((int(item.get("pub_ts") or 0) for item in items), default=0),
-            "matches": matches,
-        }
 
     def _apply_feature_tags(self, items: list[dict[str, Any]]) -> None:
         if not items:

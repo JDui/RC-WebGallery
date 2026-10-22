@@ -375,13 +375,11 @@ def ignore_duplicate(signature: str, payload: dict[str, Any] = Body(default={}))
 def resolve_duplicate(signature: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if payload.get("confirmed") is not True:
         raise HTTPException(status_code=400, detail="仅保留贴文并删除其余内容需要二次确认")
-    group = duplicates.get_group(signature)
-    if not group:
-        raise HTTPException(status_code=404, detail="重复内容项不存在或已经处理")
     keep_folder_name = str(payload.get("keep_folder_name") or "")
-    folder_names = [str(item["folder_name"]) for item in group["items"]]
-    if keep_folder_name not in folder_names:
-        raise HTTPException(status_code=400, detail="请选择当前重复组中的贴文")
+    try:
+        folder_names = duplicates.resolve_plan(signature, keep_folder_name)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return pull_manager.start_duplicate_resolve(signature, keep_folder_name, folder_names)
 
 
@@ -392,7 +390,7 @@ def cleanup_duplicate_images(signature: str, payload: dict[str, Any] = Body(...)
     try:
         plan = duplicates.cleanup_plan(signature)
     except RuntimeError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not plan["targets"]:
         raise HTTPException(status_code=400, detail="此分组没有可清理的重复图片")
     return pull_manager.start_duplicate_cleanup(signature, plan["folder_names"], plan["targets"])

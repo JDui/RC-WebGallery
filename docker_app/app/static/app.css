@@ -3211,6 +3211,15 @@ html.is-interacting .detail-card {
     animation: pulse-ring 1.8s ease-in-out infinite;
 }
 
+.detail-load-status {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
 .detail-grid {
     display: grid;
     grid-template-columns: repeat(var(--detail-columns, 4), minmax(0, 1fr));
@@ -3490,6 +3499,51 @@ html.is-interacting .detail-card {
 
 .viewer-stage-preview {
     filter: none;
+}
+
+.viewer-position-hint {
+    position: fixed;
+    top: max(20px, env(safe-area-inset-top));
+    left: max(20px, env(safe-area-inset-left));
+    z-index: 6;
+    padding: 7px 12px;
+    border-radius: var(--radius-pill);
+    background: rgba(12, 17, 25, 0.5);
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+}
+
+.viewer-original-loading {
+    position: fixed;
+    left: max(20px, env(safe-area-inset-left));
+    bottom: max(20px, env(safe-area-inset-bottom));
+    z-index: 6;
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(12, 17, 25, 0.5);
+    pointer-events: none;
+}
+
+.viewer-original-loading-ring {
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    border-top-color: rgba(255, 255, 255, 0.95);
+    border-radius: 50%;
+    animation: viewer-original-loading-spin 800ms linear infinite;
+}
+
+@keyframes viewer-original-loading-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .viewer-original-loading-ring { animation: none; }
 }
 
 .viewer-stage-loading-wash {

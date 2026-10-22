@@ -366,6 +366,8 @@ class SiteSyncManager:
             download_jobs = []
             saved_files = 0
             seen_urls: set[str] = set()
+            existing_assets = {asset["url"]: asset for asset in self.db.list_site_assets(post["id"])}
+            used_filenames = {asset["filename"] for asset in existing_assets.values()}
             for index, asset in enumerate(download_assets, start=1):
                 if cooperate:
                     cooperate()
@@ -373,13 +375,29 @@ class SiteSyncManager:
                 if not asset_url or asset_url in seen_urls:
                     continue
                 seen_urls.add(asset_url)
-                filename = clean_filename(asset.url, parsed.title, index, asset.media_type)
+                filename = existing_assets.get(asset.url, {}).get("filename")
+                if not filename:
+                    filename = clean_filename(asset.url, parsed.title, index, asset.media_type)
+                    if filename in used_filenames:
+                        path = Path(filename)
+                        suffix = hashlib.sha256(asset_url.encode()).hexdigest()[:12]
+                        filename = f"{path.stem}-{suffix}{path.suffix}"
+                used_filenames.add(filename)
                 db_asset = self.db.upsert_site_asset(post["id"], {"url": asset.url, "media_type": asset.media_type, "filename": filename})
                 target = post_folder / filename
                 if db_asset.get("status") == "duplicate":
                     continue
-                if db_asset.get("status") == "ready" and target.exists() and target.stat().st_size > 0:
-                    continue
+                if db_asset.get("status") == "ready":
+                    # 同帖同素材优先复用已记录的文件，日期、标题或排序变化不应触发重新下载。
+                    try:
+                        saved_path = self.storage.resolve_storage_path(db_asset.get("rel_path"))
+                    except ValueError:
+                        saved_path = None
+                    if saved_path and saved_path.is_file() and saved_path.stat().st_size > 0:
+                        continue
+                    if target.is_file() and target.stat().st_size > 0:
+                        self.db.set_site_asset_result(db_asset["id"], "ready", self.storage.relative_to_storage(target))
+                        continue
                 download_jobs.append({"asset_id": db_asset["id"], "url": asset.url, "target": target})
             for result in self._download_assets(download_jobs, source_settings, request_sleep):
                 try:
@@ -1180,6 +1198,10 @@ class SiteSyncManager:
         self.db.replace_folder_assets(folder_name, "video", video_assets)
 
     def _gallery_folder_name(self, source: dict[str, Any], post: dict[str, Any]) -> str:
+        dynamic_id = f"site:{source['id']}:{post['id']}"
+        existing = self.db.get_folder_by_dynamic(dynamic_id, dynamic_id)
+        if existing:
+            return str(existing["folder_name"])
         title = str(post.get("title") or "post")
         return f"site_{source['id']}_{post['id']}_{safe_slug(title, 'post', 48)}"
 

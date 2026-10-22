@@ -1,4 +1,4 @@
-# RC-WebGallery｜Docker 部署说明 v12.0
+# RC-WebGallery｜Docker 部署说明 v12.1
 
 RC-WebGallery 是面向个人收藏与自托管场景的多来源媒体归档图库。当前来源包括 B 站动态与 Live Photo、小红书本人点赞笔记，以及 RSS、Sitemap 或 HTML 列表页形式的通用站点；不同来源共用任务中心、索引、筛选和图库界面。
 
@@ -14,11 +14,11 @@ AMD64 NAS 可以直接使用 [docker-compose.nas-amd64.yml](docker-compose.nas-a
 
 建议流程：
 
-1. 导入镜像包：`docker load -i zzs-bili-gallery_v12.0_amd64.tar`，并解压同版本部署包，保留其中目录关系。
+1. 导入镜像包：`docker load -i zzs-bili-gallery_v12.1_amd64.tar`，并解压同版本部署包，保留其中目录关系。
 2. 在默认 Compose 中保留你原有的两个配置、数据挂载路径；升级时使用随包的新版本 Compose。
 3. 在部署包根目录执行 `docker compose -f docker_app/docker-compose.nas-amd64.yml up -d`。
 
-小红书浏览器会随主服务自动启动，直接在网页中扫码使用。主应用通过 `7860` 网页端口提供界面；当前 v12.0 发布包的镜像 tar 与镜像标签仍沿用历史名称 `zzs-bili-gallery`，请按对应 Release 资产的实际名称加载，不要据此判断仓库项目名。
+小红书浏览器会随主服务自动启动，直接在网页中扫码使用。主应用通过 `7860` 网页端口提供界面；当前 v12.1 发布包的镜像 tar 与镜像标签仍沿用历史名称 `zzs-bili-gallery`，请按对应 Release 资产的实际名称加载，不要据此判断仓库项目名。
 
 默认挂载说明：
 
