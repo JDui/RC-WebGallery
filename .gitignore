@@ -20,6 +20,8 @@ storage/
 # Build/review artifacts
 test/
 tests/
+docker_app/checks/
+docker_app/scripts/test_*.py
 temp/
 tmp/
 .secrets/
