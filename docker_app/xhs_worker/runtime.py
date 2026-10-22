@@ -48,7 +48,7 @@ LOGIN_QR_SELECTORS = (
 )
 LOGIN_MODAL_SELECTOR = '.login-container, #login-container, .login-modal, div[class*="login-container"]'
 LOGIN_QR_MAX_IMAGE_BYTES = 1_600_000
-# 连续抓不到二维码达到该次数后，提示前端改用完整浏览器窗口（约 60 秒）。
+# 连续抓不到二维码达到该次数后，提示重新启动扫码登录（约 60 秒）。
 LOGIN_QR_MISS_LIMIT = 24
 
 
@@ -182,6 +182,9 @@ class BrowserRuntime:
             if '/note/like/page' not in parsed.path and '/v1/feed' not in parsed.path:
                 return
             if response.status in (401, 403, 429):
+                # 扫码期间的匿名推荐请求不能覆盖交互登录状态。
+                if self.login_deadline and not self.session_id:
+                    return
                 self.state = {401: 'NEEDS_REAUTH', 403: 'NEEDS_MANUAL_VERIFICATION', 429: 'RATE_LIMITED'}[response.status]
                 return
             headers = await response.all_headers()
@@ -351,6 +354,8 @@ class BrowserRuntime:
         async with self.lock:
             if not self.context or not self.page or not self.login_deadline:
                 raise BrowserFault('LOGIN_REQUIRED')
+            if self.state in {'NEEDS_REAUTH', 'NEEDS_MANUAL_VERIFICATION', 'RATE_LIMITED'}:
+                self.state = 'LOGIN_IN_PROGRESS'
             if self.state != 'LOGIN_IN_PROGRESS':
                 raise BrowserFault(self.state)
             try:
@@ -367,7 +372,7 @@ class BrowserRuntime:
         for index in range(min(await challenges.count(), 3)):
             if await challenges.nth(index).is_visible():
                 return {'state': self.state, 'phase': 'captcha',
-                        'message': '小红书要求人工安全验证，请打开完整登录窗口完成验证。'}
+                        'message': '小红书要求额外安全验证，当前扫码方式暂无法完成，请稍后重试。'}
         try:
             cookies = {item.get('name'): item.get('value')
                        for item in await self.context.cookies('https://www.xiaohongshu.com')}
@@ -475,14 +480,25 @@ class BrowserRuntime:
                 pass
         if self.qr_misses >= LOGIN_QR_MISS_LIMIT:
             return {'state': self.state, 'phase': 'missing',
-                    'message': '未能自动取得登录二维码，请改用完整登录窗口扫码登录。'}
+                    'message': '未能取得登录二维码，请重新启动扫码登录。'}
         return {'state': self.state, 'phase': 'preparing', 'message': '正在准备登录二维码…'}
 
     async def login_finish(self):
         async with self.lock:
             if not self.context or not self.login_deadline:
                 raise BrowserFault('LOGIN_REQUIRED')
-            owner = await self._identity()
+            # 手机确认后，侧栏账号信息可能比 Cookie 晚渲染，允许短暂等待。
+            for attempt in range(12):
+                try:
+                    owner = await self._identity()
+                    break
+                except BrowserFault as exc:
+                    self.state = 'LOGIN_IN_PROGRESS'
+                    if str(exc) != 'NEEDS_REAUTH':
+                        raise
+                    if attempt == 11:
+                        raise BrowserFault('LOGIN_IN_PROGRESS') from None
+                    await asyncio.sleep(0.5)
             if self.owner_key and owner != self.owner_key:
                 await self._close()
                 self.state = 'NEEDS_REBIND'

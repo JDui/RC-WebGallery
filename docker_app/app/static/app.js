@@ -202,7 +202,6 @@ function galleryApp(initialSettings = {}) {
   const defaultRandom = initialSettings.gallery_default_random === true;
   const defaultSortMode = defaultRandom ? "random" : "imported";
   // Keep native Window objects outside Alpine's reactive proxies.
-  let xhsLoginPopup = null;
   let masonryObserver = null;
   const masonryElements = new Set();
   let detailResizeObserver = null;
@@ -402,8 +401,6 @@ function galleryApp(initialSettings = {}) {
     xhsAutomaticAvailable: false,
     xhsLoginSession: null,
     xhsLoginTimer: null,
-    xhsLoginInlineOpen: false,
-    xhsLoginPopupBlocked: false,
     xhsLoginStarting: false,
     xhsLoginRevision: 0,
     xhsQr: null,
@@ -412,6 +409,7 @@ function galleryApp(initialSettings = {}) {
     xhsQrErrors: 0,
     xhsQrFinishing: false,
     xhsQrAutoFinishTried: false,
+    xhsQrFinishRetryAt: 0,
     xhsChecks: {},
     siteLogs: [],
     siteRules: { mode: "blacklist", keywords: [], allow_keywords: [], block_keywords: [], use_regex: false },
@@ -621,7 +619,7 @@ function galleryApp(initialSettings = {}) {
       });
       this.updateViewportMode();
       this.installTouchNavigation();
-      ["videoNote.open", "detail.open", "viewer.open", "taskInspector.open", "sourcePreview.open", "xhsLoginInlineOpen", "mediaContextMenu.open"].forEach((key) => {
+      ["videoNote.open", "detail.open", "viewer.open", "taskInspector.open", "sourcePreview.open", "mediaContextMenu.open"].forEach((key) => {
         this.$watch(key, () => this.$nextTick(() => this.syncModalAccessibility()));
       });
       window.addEventListener("beforeunload", (event) => {
@@ -1045,7 +1043,6 @@ function galleryApp(initialSettings = {}) {
       if (this.currentFullscreenElement()) return "fullscreen";
       if (this.mediaContextMenu.open) return "media-menu";
       if (this.viewer.open || (includeClosing && this.viewerClosing)) return "viewer";
-      if (this.xhsLoginInlineOpen) return "xhs-login";
       if (this.sourcePreview.open) return "source";
       if (this.videoNote.open) return "video-note";
       if (this.taskInspector.open) return "task";
@@ -1071,7 +1068,6 @@ function galleryApp(initialSettings = {}) {
       if (layer === "viewer") { this.closeViewer(); return; }
       if (layer === "open-sidebar") { this.sidebarDrawerOpen = true; return; }
       if (layer === "expand-sidebar") { this.toggleSidebar(); return; }
-      if (layer === "xhs-login") { this.xhsLoginInlineOpen = false; return; }
       if (layer === "source") { this.closeSourcePreview(); return; }
       if (layer === "video-note") { this.closeVideoNote(); return; }
       if (layer === "task") { this.closeTaskInspector(); return; }
@@ -1547,10 +1543,6 @@ function galleryApp(initialSettings = {}) {
       }
       if (this.viewer.open) {
         this.closeViewer();
-        return;
-      }
-      if (this.xhsLoginInlineOpen) {
-        this.xhsLoginInlineOpen = false;
         return;
       }
       if (this.sourcePreview.open) {
@@ -8738,11 +8730,11 @@ function galleryApp(initialSettings = {}) {
       if (loginRevision !== this.xhsLoginRevision) return;
       this.xhsWorker = payload.worker || { state: 'NOT_CONFIGURED', owner_key: null };
       if (this.xhsWorker.state === 'LOGIN_IN_PROGRESS' && !this.xhsLoginSession && !this.xhsLoginStarting) {
-        this.xhsLoginSession = { viewer_url: '/api/xhs/browser/' };
+        this.xhsLoginSession = { state: 'LOGIN_IN_PROGRESS' };
         this.startXhsQrPolling();
       } else if (this.xhsWorker.state !== 'LOGIN_IN_PROGRESS' && !this.xhsLoginStarting) {
         this.xhsLoginSession = null;
-        this.closeXhsLoginWindow();
+        this.clearXhsLoginUi();
       }
       this.xhsAutomaticAvailable = !!payload.automatic_sync_available;
       if (!this.xhsNewSource.owner_key && this.xhsWorker.owner_key) this.xhsNewSource.owner_key = this.xhsWorker.owner_key;
@@ -8771,7 +8763,7 @@ function galleryApp(initialSettings = {}) {
 
     xhsAuthText(state) {
       return { NOT_CONFIGURED: '当前运行环境缺少内置浏览器', LOGIN_REQUIRED: '等待扫码登录', MANUAL_ONLY: '清单导入模式',
-        LOGIN_IN_PROGRESS: '等待手动扫码', READY: '已登录', RUNNING: '正在读取', NEEDS_REAUTH: '登录已失效',
+        LOGIN_IN_PROGRESS: '等待扫码确认', READY: '已登录', RUNNING: '正在读取', NEEDS_REAUTH: '登录已失效',
         NEEDS_REBIND: '账号不一致', NEEDS_MANUAL_VERIFICATION: '需要人工验证', RATE_LIMITED: '请求受限，已暂停',
         STRUCTURE_CHANGED: '页面结构变化，已暂停', CURSOR_ERROR: '分页异常，已暂停',
         UNAUTHORIZED: '浏览器服务凭证不匹配', BROWSER_UNAVAILABLE: '浏览器暂不可用',
@@ -8782,40 +8774,17 @@ function galleryApp(initialSettings = {}) {
         CANCELLED: '已取消', WORKER_ERROR: '浏览器服务暂不可用' }[state] || state;
     },
 
-    openXhsLoginWindow(url = this.xhsLoginSession?.viewer_url || '/api/xhs/browser/') {
-      try {
-        if (!xhsLoginPopup || xhsLoginPopup.closed) {
-          xhsLoginPopup = window.open(url, 'rc-xhs-login', 'popup=yes,width=1180,height=900,resizable=yes,scrollbars=yes');
-          if (xhsLoginPopup) xhsLoginPopup.opener = null;
-        } else {
-          xhsLoginPopup.location.replace(url);
-        }
-        this.xhsLoginPopupBlocked = !xhsLoginPopup || xhsLoginPopup.closed;
-        if (!this.xhsLoginPopupBlocked) {
-          this.xhsLoginInlineOpen = false;
-          xhsLoginPopup.focus();
-        }
-      } catch (error) {
-        this.xhsLoginPopupBlocked = true;
-      }
-      if (this.xhsLoginPopupBlocked && this.xhsLoginSession) this.xhsLoginInlineOpen = true;
-    },
-
-    closeXhsLoginWindow() {
+    clearXhsLoginUi() {
       this.stopXhsQrPolling();
       this.xhsQr = null;
-      try { if (xhsLoginPopup && !xhsLoginPopup.closed) xhsLoginPopup.close(); } catch (_) {}
-      xhsLoginPopup = null;
-      this.xhsLoginInlineOpen = false;
-      this.xhsLoginPopupBlocked = false;
     },
 
     xhsQrText(phase) {
       return { preparing: '正在准备登录二维码…', await_scan: '请使用小红书 App 扫码并在手机上确认登录。',
         scanned: '已扫码，请在手机上确认登录。', refreshing: '二维码已刷新，请重新扫码。',
         finalizing: '已检测到登录，正在确认账号信息…', logged_in: '登录成功，正在完成…',
-        captcha: '需要人工安全验证，请使用完整登录窗口完成验证。',
-        missing: '未能自动取得二维码，请使用完整登录窗口扫码。',
+        captcha: '需要额外安全验证，当前扫码方式暂无法完成，请稍后重试。',
+        missing: '未能取得二维码，请重新启动扫码登录。',
         error: '二维码获取失败，请重新启动登录。' }[phase] || '正在准备登录二维码…';
     },
 
@@ -8823,6 +8792,7 @@ function galleryApp(initialSettings = {}) {
       this.stopXhsQrPolling();
       this.xhsQrErrors = 0;
       this.xhsQrAutoFinishTried = false;
+      this.xhsQrFinishRetryAt = 0;
       this.pollXhsLoginQr();
       this.xhsQrTimer = window.setInterval(() => { this.pollXhsLoginQr(); }, 2500);
     },
@@ -8842,7 +8812,7 @@ function galleryApp(initialSettings = {}) {
         this.xhsQrErrors = 0;
         this.xhsQr = { image_data_url: result.image_data_url || null,
           phase: result.phase || 'preparing', message: result.message || '' };
-        if (result.phase === 'logged_in' && !this.xhsQrAutoFinishTried && !this.xhsBusy) {
+        if (result.phase === 'logged_in' && !this.xhsQrAutoFinishTried && !this.xhsBusy && Date.now() >= (this.xhsQrFinishRetryAt || 0)) {
           this.xhsQrAutoFinishTried = true;
           this.xhsQrFinishing = true;
           try { await this.xhsLogin('finish'); } finally { this.xhsQrFinishing = false; }
@@ -8865,7 +8835,7 @@ function galleryApp(initialSettings = {}) {
       if (action === 'revoke' && !window.confirm('确认注销小红书浏览器登录态？对应订阅会停用，已归档媒体保留。')) return;
       this.xhsLoginRevision += 1;
       if (action === 'start') {
-        // 二维码内嵌展示是主路径；完整浏览器窗口保留为人工验证时的备用通道。
+        // 二维码直接在页面展示，登录检测失败时保留会话供重试。
         this.xhsLoginStarting = true;
         this.stopXhsQrPolling();
         this.xhsQr = null;
@@ -8879,20 +8849,24 @@ function galleryApp(initialSettings = {}) {
           this.xhsLoginSession = result;
           this.startXhsQrPolling();
           this.xhsLoginTimer = window.setTimeout(() => {
-            this.xhsLoginSession = null; this.closeXhsLoginWindow();
+            this.xhsLoginSession = null; this.clearXhsLoginUi();
           }, (result.expires_in || 600) * 1000);
         } else if (action !== 'check' || result.state !== 'LOGIN_IN_PROGRESS') {
           window.clearTimeout(this.xhsLoginTimer);
           this.xhsLoginSession = null;
-          this.closeXhsLoginWindow();
+          this.clearXhsLoginUi();
         }
         await Promise.all([this.loadXhsSources(), this.loadSubscriptions()]);
         this.notify('success', '小红书账号状态已更新', this.xhsAuthText(result.state));
       } catch (error) {
+        if (action === 'finish' && this.xhsLoginSession) {
+          this.xhsQrAutoFinishTried = false;
+          this.xhsQrFinishRetryAt = Date.now() + 10000;
+        }
         if (action === 'start') {
           window.clearTimeout(this.xhsLoginTimer);
           this.xhsLoginSession = null;
-          this.closeXhsLoginWindow();
+          this.clearXhsLoginUi();
         }
         this.notify('error', '账号操作未完成', error.message);
         await this.loadXhsSources().catch(() => {});

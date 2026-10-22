@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-2-detail-preload-1-trackpad-hint-1-responsive-swipe-1' %}
+    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-2-detail-preload-1-trackpad-hint-1-responsive-swipe-1-xhs-login-recovery-1' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -1372,7 +1372,7 @@
                                 <p x-text="xhsWorker.launch_error?.action"></p>
                             </div>
                             <div class="panel-card-actions">
-                                <button type="button" class="secondary-button" @click="xhsLogin('start')" :disabled="xhsBusy || !xhsAutomaticAvailable">启动手动登录</button>
+                                <button type="button" class="secondary-button" @click="xhsLogin('start')" :disabled="xhsBusy || !xhsAutomaticAvailable">启动扫码登录</button>
                                 <button type="button" class="secondary-button" @click="xhsLogin('finish')" :disabled="xhsBusy || (!xhsLoginSession && xhsWorker.state !== 'LOGIN_IN_PROGRESS')">完成扫码</button>
                                 <button type="button" class="secondary-button" @click="xhsLogin('check')" :disabled="xhsBusy || !xhsAutomaticAvailable">检查登录</button>
                                 <button type="button" class="secondary-button" @click="xhsLogin('revoke')" :disabled="xhsBusy || !xhsAutomaticAvailable">注销登录态</button>
@@ -1384,24 +1384,8 @@
                                         <span x-text="xhsQrText(xhsQr?.phase)"></span>
                                     </div>
                                     <p role="status" x-text="xhsQr?.message || xhsQrText(xhsQr?.phase)"></p>
-                                    <p x-show="xhsQr?.phase === 'captcha' || xhsQr?.phase === 'missing' || xhsQr?.phase === 'error'" x-cloak>无法直接扫码时，可打开完整登录窗口人工操作。</p>
-                                </div>
-                                <div class="panel-card-actions">
-                                    <button type="button" class="secondary-button" @click="openXhsLoginWindow()" :disabled="xhsBusy">打开完整登录窗口</button>
-                                    <button type="button" class="secondary-button" @click="xhsLoginInlineOpen = true" :disabled="xhsBusy">在当前页面打开</button>
                                 </div>
                             </div>
-                            <template x-if="xhsLoginInlineOpen && xhsLoginSession?.viewer_url">
-                                <div class="xhs-login-backdrop" data-modal-layer="xhs-login" tabindex="-1" @click.self="xhsLoginInlineOpen = false" @keydown.escape.stop="handleEscape()">
-                                    <section class="xhs-login-dialog" role="dialog" aria-modal="true" aria-label="小红书 Chromium 登录">
-                                        <div class="panel-card-actions"><strong>小红书 Chromium 登录</strong>
-                                            <button type="button" class="secondary-button" data-modal-close @click="xhsLoginInlineOpen = false">收起登录窗口</button>
-                                        </div>
-                                        <iframe class="xhs-login-frame" :src="xhsLoginSession.viewer_url" title="小红书扫码登录窗口" referrerpolicy="no-referrer"></iframe>
-                                        <button type="button" class="primary-button" @click="xhsLogin('finish')" :disabled="xhsBusy">完成扫码</button>
-                                    </section>
-                                </div>
-                            </template>
                             <div class="subscription-policy-grid site-policy-grid">
                                 <label class="policy-wide">名称<input class="ui-field" x-model="xhsNewSource.name" maxlength="100"></label>
                                 <label class="policy-wide">账号标识<input class="ui-field" x-model="xhsNewSource.owner_key" maxlength="128" placeholder="登录后自动填入，或填写清单 owner_key"></label>

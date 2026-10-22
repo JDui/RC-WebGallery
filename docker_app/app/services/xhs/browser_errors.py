@@ -34,4 +34,14 @@ def browser_error_text(category: str) -> str:
     if category in BROWSER_ERRORS:
         title, action = BROWSER_ERRORS[category]
         return title + '。' + action
+    auth_errors = {
+        'LOGIN_IN_PROGRESS': '尚未确认登录成功，请在手机上确认扫码登录，稍候再试。二维码会继续检测。',
+        'LOGIN_REQUIRED': '扫码会话已结束，请重新启动扫码登录。',
+        'NEEDS_REAUTH': '小红书登录状态尚未确认，请重新扫码并在手机上确认。',
+        'NEEDS_REBIND': '当前扫码账号与已绑定账号不一致，请使用原账号登录。',
+        'NEEDS_MANUAL_VERIFICATION': '小红书要求额外安全验证，当前扫码方式暂无法完成，请稍后重试。',
+        'RATE_LIMITED': '小红书暂时限制请求，请稍后再扫码登录。',
+    }
+    if category in auth_errors:
+        return auth_errors[category]
     return '小红书浏览器状态：' + category
