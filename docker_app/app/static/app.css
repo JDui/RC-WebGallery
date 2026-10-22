@@ -3402,11 +3402,11 @@ html.is-interacting .detail-card {
 }
 
 .viewer-stage-wrap.switch-up {
-    animation: viewer-fade-up 420ms var(--ease-fluid);
+    animation: viewer-fade-up 180ms var(--ease-fluid);
 }
 
 .viewer-stage-wrap.switch-down {
-    animation: viewer-fade-down 420ms var(--ease-fluid);
+    animation: viewer-fade-down 180ms var(--ease-fluid);
 }
 
 .viewer-floating {
@@ -3943,31 +3943,13 @@ html.is-interacting .detail-card {
 }
 
 @keyframes viewer-fade-up {
-    0% {
-        transform: translate3d(0, 18px, 0) scale(0.992);
-        opacity: 0;
-    }
-    45% {
-        opacity: 0.32;
-    }
-    100% {
-        transform: translate3d(0, 0, 0) scale(1);
-        opacity: 1;
-    }
+    from { transform: translate3d(0, 12px, 0); opacity: 0.8; }
+    to { transform: translate3d(0, 0, 0); opacity: 1; }
 }
 
 @keyframes viewer-fade-down {
-    0% {
-        transform: translate3d(0, -18px, 0) scale(0.992);
-        opacity: 0;
-    }
-    45% {
-        opacity: 0.32;
-    }
-    100% {
-        transform: translate3d(0, 0, 0) scale(1);
-        opacity: 1;
-    }
+    from { transform: translate3d(0, -12px, 0); opacity: 0.8; }
+    to { transform: translate3d(0, 0, 0); opacity: 1; }
 }
 
 @keyframes deleted-card-flash {

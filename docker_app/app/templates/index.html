@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-2-detail-preload-1' %}
+    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-2-detail-preload-1-trackpad-hint-1-responsive-swipe-1' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -25,8 +25,8 @@
     <script defer src="/static/vendor/alpinejs.min.js?v={{ app_version }}"></script>
 </head>
 <body x-data="galleryApp({{ initial_ui_settings | default({}) | tojson | forceescape }})" data-intranet-access="{{ intranet_access }}">
-    <div class="touch-back-hint" data-testid="touch-back-hint" x-show="touchBackProgress > 0" :class="{ ready: touchBackProgress >= 1 }" :style="{ opacity: touchBackProgress, transform: `translateX(${(touchBackProgress - 1) * 32}px)` }" aria-hidden="true" x-cloak>
-        <svg class="nav-icon"><use :href="touchBackGesture?.layer === 'open-sidebar' ? '#icon-all' : '#icon-back'"></use></svg><span x-text="touchBackGesture?.layer === 'open-sidebar' ? '菜单' : '返回'"></span>
+    <div class="touch-back-hint" data-testid="touch-back-hint" x-show="backGestureProgress() > 0" x-transition.opacity.duration.160ms :class="{ ready: backGestureProgress() >= 1 }" :style="{ opacity: backGestureProgress(), transform: `translateX(${(backGestureProgress() - 1) * 32}px)` }" aria-hidden="true" x-cloak>
+        <svg class="nav-icon"><use :href="backGestureLayer() === 'open-sidebar' ? '#icon-all' : '#icon-back'"></use></svg><span x-text="backGestureLayer() === 'open-sidebar' ? '菜单' : '返回'"></span>
     </div>
     <div class="intranet-edge" aria-hidden="true"></div>
     <svg class="ui-icon-definitions" xmlns="http://www.w3.org/2000/svg" width="0" height="0" aria-hidden="true" focusable="false">

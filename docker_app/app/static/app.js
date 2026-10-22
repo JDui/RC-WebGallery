@@ -217,6 +217,9 @@ function galleryApp(initialSettings = {}) {
     currentView: "gallery",
     touchBackGesture: null,
     touchBackProgress: 0,
+    trackpadBackProgress: 0,
+    trackpadBackLayer: "",
+    trackpadBackHintTimer: null,
     touchBackClickUntil: 0,
     mediaContextMenu: { open: false, folderName: "", pairIndex: null, x: 12, y: 12 },
     category: "all",
@@ -1151,6 +1154,7 @@ function galleryApp(initialSettings = {}) {
       if (gesture.fired) { if (event.cancelable) event.preventDefault(); return; }
       if (gesture.axis === "x" && gesture.x < 0 && this.touchBackLayer()) {
         if (event.cancelable) event.preventDefault();
+        this.updateTrackpadBackHint(-gesture.x / this.touchBackThreshold(), this.touchBackLayer());
         if (-gesture.x >= this.touchBackThreshold()) {
           gesture.fired = true;
           this.navigateTouchBack();
@@ -1212,6 +1216,25 @@ function galleryApp(initialSettings = {}) {
 
     touchBackThreshold() {
       return Math.max(72, Math.min(112, window.innerWidth * 0.22));
+    },
+
+    backGestureProgress() {
+      return Math.max(this.touchBackProgress, this.trackpadBackProgress);
+    },
+
+    backGestureLayer() {
+      return this.touchBackGesture?.layer || this.trackpadBackLayer;
+    },
+
+    updateTrackpadBackHint(progress, layer) {
+      if (this.trackpadBackHintTimer !== null) window.clearTimeout(this.trackpadBackHintTimer);
+      this.trackpadBackProgress = Math.max(0, Math.min(1, progress));
+      this.trackpadBackLayer = layer;
+      this.trackpadBackHintTimer = window.setTimeout(() => {
+        this.trackpadBackHintTimer = null;
+        this.trackpadBackProgress = 0;
+        this.trackpadBackLayer = "";
+      }, 260);
     },
 
     endTouchBack(event) {
@@ -4119,14 +4142,14 @@ function galleryApp(initialSettings = {}) {
       this.viewerPreviewRetired = false;
       this.viewerImageReady = !pair.image;
       this.viewerImageLoading = !!pair.image?.url;
-      this.viewerImageRevealAfter = Date.now() + (switchDirection ? 420 : 260);
+      this.viewerImageRevealAfter = Date.now() + (switchDirection ? 0 : 120);
       if (this.viewerImageRevealTimer) {
         window.clearTimeout(this.viewerImageRevealTimer);
         this.viewerImageRevealTimer = null;
       }
-      this.viewerSwapPending = !!switchDirection;
-      this.viewerPendingDirection = switchDirection || "";
-      this.viewerNavigationLockedUntil = switchDirection ? Date.now() + 260 : 0;
+      this.viewerSwapPending = false;
+      this.viewerPendingDirection = "";
+      this.viewerNavigationLockedUntil = switchDirection ? Date.now() + 140 : 0;
       this.viewer = { open: true, pair, folder: entry.folder, showVideo: false };
       if (switchDirection) this.showViewerPositionHint();
       else this.hideViewerPositionHint();
@@ -4138,7 +4161,10 @@ function galleryApp(initialSettings = {}) {
       this.resetViewerTransform();
       this.setInteracting(320);
       this.syncBodyLock();
+      const viewerToken = this.viewerToken;
       this.$nextTick(() => {
+        if (!this.viewer.open || viewerToken !== this.viewerToken) return;
+        if (switchDirection) this.animateViewerSwitch(switchDirection);
         const image = document.querySelector(".viewer-stage-image");
         if (pair.image && image?.complete && image.naturalWidth > 0
             && image.dataset.viewerToken === String(this.viewerToken)) {
@@ -5226,13 +5252,19 @@ function galleryApp(initialSettings = {}) {
     },
 
     animateViewerSwitch(direction) {
-      this.viewerSwitchDirection = direction;
+      this.viewerSwitchDirection = "";
       if (this.viewerSwitchTimer) {
         window.clearTimeout(this.viewerSwitchTimer);
       }
-      this.viewerSwitchTimer = window.setTimeout(() => {
-        this.viewerSwitchDirection = "";
-      }, 430);
+      const token = this.viewerToken;
+      this.$nextTick(() => {
+        if (!this.viewer.open || token !== this.viewerToken) return;
+        this.viewerSwitchDirection = direction;
+        this.viewerSwitchTimer = window.setTimeout(() => {
+          this.viewerSwitchDirection = "";
+          this.viewerSwitchTimer = null;
+        }, 190);
+      });
     },
 
     resetViewerTransform() {
@@ -5462,7 +5494,11 @@ function galleryApp(initialSettings = {}) {
       }
       const gesture = this.wheelGestureStep(event, "trackpadGesture", "viewer");
       if (gesture.fired) return;
-      if (gesture.axis === "y" && Math.abs(gesture.y) >= 72) {
+      if (gesture.axis === "x" && gesture.x < 0) {
+        this.updateTrackpadBackHint(-gesture.x / 82, "viewer");
+      }
+      if (gesture.axis === "y" && Math.abs(gesture.y) >= 48) {
+        if (Date.now() < this.viewerNavigationLockedUntil) return;
         gesture.fired = true;
         if (gesture.y > 0) this.showNextPair(); else this.showPreviousPair();
       } else if (gesture.axis === "x" && Math.abs(gesture.x) >= 82) {
@@ -5552,6 +5588,7 @@ function galleryApp(initialSettings = {}) {
       this.viewerGesture.dismissAxis = "";
       this.viewerGesture.startX = event.clientX;
       this.viewerGesture.startY = event.clientY;
+      this.viewerGesture.startedAt = Date.now();
       this.viewerGesture.startOffsetX = this.viewerOffsetX;
       this.viewerGesture.startOffsetY = this.viewerOffsetY;
       this.viewerGesture.moved = false;
@@ -5591,10 +5628,13 @@ function galleryApp(initialSettings = {}) {
       }
       if (this.viewerGesture.isPinch) return;
       if (!this.viewerGesture.dismissAxis && Math.max(Math.abs(deltaX), Math.abs(deltaY)) > 12) {
-        this.viewerGesture.dismissAxis = Math.abs(deltaY) > Math.abs(deltaX) * 1.4 ? "vertical" : "horizontal";
+        if (Math.abs(deltaY) > Math.abs(deltaX) * 1.2) this.viewerGesture.dismissAxis = "vertical";
+        else if (Math.abs(deltaX) > Math.abs(deltaY) * 1.4) this.viewerGesture.dismissAxis = "horizontal";
       }
-      this.viewerOffsetX = deltaX * (this.viewerGesture.dismissAxis === "horizontal" && deltaX > 0 ? 0.65 : 0.35);
-      this.viewerOffsetY = deltaY * 0.35;
+      this.viewerOffsetX = this.viewerGesture.dismissAxis === "vertical" ? 0
+        : deltaX * (this.viewerGesture.dismissAxis === "horizontal" && deltaX > 0 ? 0.65 : 0.35);
+      const canMove = deltaY < 0 ? this.canShowNextPair() : this.canShowPreviousPair();
+      this.viewerOffsetY = deltaY * (this.viewerGesture.dismissAxis === "vertical" && canMove ? 0.85 : 0.25);
     },
 
     viewerPointerUp(event) {
@@ -5619,6 +5659,9 @@ function galleryApp(initialSettings = {}) {
       const absX = Math.abs(deltaX);
       const absY = Math.abs(deltaY);
       if (absX > 8 || absY > 8) this.viewerGesture.moved = true;
+      const moved = this.viewerGesture.moved;
+      const elapsed = Math.max(1, Date.now() - (this.viewerGesture.startedAt || Date.now()));
+      const verticalSwipe = absY >= 56 || (absY >= 24 && elapsed <= 250 && absY / elapsed >= 0.35);
       if (event.type === "pointercancel") {
         this.viewerSyntheticTapUntil = Date.now() + 450;
       } else if (wasPinch) {
@@ -5629,14 +5672,14 @@ function galleryApp(initialSettings = {}) {
           this.closeViewer();
         } else if (this.viewerGesture.dismissAxis === "horizontal" && deltaX <= -72 && -deltaX > absY * 1.4) {
           this.revealViewerToolbar();
-        } else if (this.viewerGesture.dismissAxis === "vertical" && absY > 100 && absY > absX * 1.4) {
+        } else if (this.viewerGesture.dismissAxis === "vertical" && verticalSwipe && absY > absX * 1.2) {
           if (deltaY < 0) this.showNextPair(); else this.showPreviousPair();
         } else if (!this.viewerGesture.moved && event.pointerType !== "mouse") {
           this.viewerSyntheticTapUntil = Date.now() + 220;
           this.handleViewerTap(event.clientX, event.clientY, event.currentTarget);
         }
       }
-      if (this.viewerGesture.moved || wasPinch) this.viewerSyntheticTapUntil = Date.now() + 450;
+      if (moved || wasPinch) this.viewerSyntheticTapUntil = Date.now() + 450;
       this.viewerGesture.active = false;
       this.viewerGesture.isPinch = false;
       if (this.viewerZoom === 1 && !this.viewerClosing) {
