@@ -2468,7 +2468,7 @@ class PullManager:
         existing = self.db.get_folder_by_dynamic(candidate.top_dynamic_id, candidate.source_dynamic_id)
         used_names = {folder["folder_name"] for folder in self.db.list_folders()}
         folder_name = existing["folder_name"] if existing else build_folder_name(candidate.pub_ts, candidate.text, used_names)
-        self.storage.prepare_folder(folder_name, f"bilibili-{candidate.subscription_uid or settings['host_mid']}", format_pub_time(candidate.pub_ts))
+        self.storage.prepare_folder(folder_name, f"bilibili-{candidate.subscription_uid or settings['host_mid']}", self._folder_pub_time(candidate.pub_ts))
         saved_files = 0
         header_uid = str(candidate.subscription_uid or settings["host_mid"])
         options = self._subscription_options(settings, header_uid, subscription)
