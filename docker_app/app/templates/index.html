@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-2-detail-preload-1-trackpad-hint-1-responsive-swipe-1-xhs-login-recovery-2-gallery-instant-injection-1' %}
+    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-3-detail-preload-2-trackpad-hint-1-responsive-swipe-2-xhs-login-recovery-2-gallery-instant-injection-1' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -1718,12 +1718,23 @@
                         <strong class="detail-compact-title" :title="detail.folder?.title" x-text="detail.folder?.title || '动态详情'"></strong>
                         <button type="button" class="secondary-button viewer-icon-button" :disabled="!canShowPreviousFolder()" @click="showPreviousFolder()" aria-label="上一篇动态"><svg class="nav-icon" aria-hidden="true"><use href="#icon-previous"></use></svg></button>
                         <button type="button" class="secondary-button viewer-icon-button" :disabled="!canShowNextFolder()" @click="showNextFolder()" aria-label="下一篇动态"><svg class="nav-icon" aria-hidden="true"><use href="#icon-next"></use></svg></button>
+                        <template x-if="pendingTrashFolder !== detail.folder?.folder_name">
+                            <button type="button" class="secondary-button danger-button viewer-icon-button" data-testid="detail-compact-delete" @click="askTrashCurrentFolder()" :aria-label="detail.folder?.folder_name?.startsWith('xhs_') ? '删除并取消点赞' : '移入垃圾桶'" :data-tooltip="detail.folder?.folder_name?.startsWith('xhs_') ? '删除并取消点赞' : '移入垃圾桶'">
+                                <svg class="trash-icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
+                            </button>
+                        </template>
+                        <template x-if="pendingTrashFolder === detail.folder?.folder_name">
+                            <div class="detail-compact-delete-confirm">
+                                <button type="button" class="primary-button danger-confirm detail-compact-confirm" @click="trashCurrentFolder()" :aria-label="detail.folder?.folder_name?.startsWith('xhs_') ? '确认删除并取消点赞' : '确认移入垃圾桶'">确认删除</button>
+                                <button type="button" class="secondary-button viewer-icon-button" @click="cancelTrashCurrentFolder()" aria-label="取消删除"><svg class="nav-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
+                            </div>
+                        </template>
                         <button type="button" class="secondary-button viewer-icon-button" data-modal-close @click="closeDetail()" aria-label="关闭动态详情"><svg class="nav-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
                     </div>
                 </div>
                 <header class="detail-head">
                     <div class="detail-head-copy">
-                        <p class="viewer-kicker" :title="detail.folder?.pub_time"><span x-text="displayDate(detail.folder?.pub_time)"></span><span> - </span><a class="creator-link" x-show="creatorProfileUrl(detail.folder)" :href="creatorProfileUrl(detail.folder) || null" target="_blank" rel="noopener noreferrer" x-text="creatorName(detail.folder)"></a><span x-show="!creatorProfileUrl(detail.folder)" x-text="creatorName(detail.folder)"></span></p>
+                        <p class="viewer-kicker" :title="detail.folder?.pub_time"><span x-text="displayDate(detail.folder?.pub_time)"></span><span> - </span><button type="button" class="creator-link detail-creator-link" :class="`source-${creatorSourceKind(detail.folder)}`" :disabled="!creatorSubscriptionUid(detail.folder)" @click="openCreatorSubscription(detail.folder)" :aria-label="`查看${creatorName(detail.folder)}的订阅瀑布流`" data-tooltip="查看对应订阅瀑布流" x-text="creatorName(detail.folder)"></button></p>
                         <span class="date-warning" x-show="futureDate(detail.folder?.pub_time)" data-tooltip="原始时间已保留，可查看原帖确认。" tabindex="0">来源日期待核实</span>
                         <button
                             type="button"
@@ -1930,8 +1941,12 @@
                     </div>
                 </div>
                 <div class="viewer-position-hint" data-testid="viewer-position-hint" role="status" aria-label="当前图片序号" x-show="viewer.open && viewerPositionHintVisible && !viewerToolbarOpen" x-transition.opacity.duration.220ms x-text="viewerPositionText()" x-cloak></div>
-                <div class="viewer-original-loading" data-testid="viewer-original-loading" role="status" aria-label="正在加载原图" x-show="viewerShouldShowOriginalLoading()" x-transition.opacity.duration.280ms x-cloak>
-                    <span class="viewer-original-loading-ring" aria-hidden="true"></span>
+                <div class="viewer-original-loading" data-testid="viewer-original-loading" role="progressbar" aria-label="原图加载进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="viewerImageProgress" :aria-valuetext="viewerImageProgress === null ? '正在加载原图' : viewerOriginalProgressLabel()" x-show="viewerShouldShowOriginalLoading()" x-transition.opacity.duration.280ms x-cloak>
+                    <svg class="viewer-original-loading-ring" viewBox="0 0 36 36" aria-hidden="true">
+                        <circle class="viewer-original-loading-track" cx="18" cy="18" r="15"></circle>
+                        <circle class="viewer-original-loading-value" cx="18" cy="18" r="15" pathLength="100" :stroke-dasharray="`${viewerImageProgress ?? 0} 100`"></circle>
+                    </svg>
+                    <span class="viewer-original-loading-label" x-text="viewerOriginalProgressLabel()" aria-hidden="true"></span>
                 </div>
                 <article class="viewer-stage-wrap" :class="{ live: viewer.pair?.livephoto, closing: viewerClosing, 'switch-up': viewerSwitchDirection === 'up', 'switch-down': viewerSwitchDirection === 'down', 'is-swapping': viewerSwapPending }" x-show="viewer.pair || viewerClosing" x-cloak>
                     <div
@@ -1945,12 +1960,15 @@
                         @pointerup="viewerPointerUp($event)"
                         @pointercancel="viewerPointerUp($event)"
                     >
+                        <template x-for="direction in [-1, 1]" :key="direction">
+                            <img x-retire-image class="viewer-stage-neighbor" :data-neighbor="direction" :src="viewerNeighborUrl(direction) || null" :style="viewerNeighborStyle(direction)" x-show="viewerVerticalDragging && viewerZoom <= 1.02 && viewerNeighborUrl(direction)" alt="" aria-hidden="true" draggable="false" decoding="async">
+                        </template>
                         <template x-if="viewer.pair?.image && !viewerPreviewRetired">
                             <img x-retire-image class="viewer-stage-preview" fetchpriority="high" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) }" :src="viewerPreviewUrl()" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片预览'" decoding="async" loading="eager" draggable="false" @load="fadeLoadedImage($event)">
                         </template>
                         <div class="viewer-stage-loading-wash" x-show="viewerShouldShowImageWash()" x-transition:enter="wash-fade" x-transition:enter-start="wash-transparent" x-transition:enter-end="wash-visible" x-transition:leave="wash-fade" x-transition:leave-start="wash-visible" x-transition:leave-end="wash-transparent" :style="viewerMediaStyle()"></div>
                         <template x-if="viewer.pair?.image">
-                            <img x-retire-image class="viewer-stage-image" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) || !viewerImageReady }" :src="viewer.pair?.image?.url" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片'" :data-viewer-token="viewerToken" decoding="async" loading="eager" fetchpriority="auto" draggable="false" @load="viewerMediaLoaded('image', $event)" @error="viewerMediaFailed('image', $event)">
+                            <img x-retire-image class="viewer-stage-image" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) || !viewerImageReady }" :src="viewerImageSource || null" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片'" :data-viewer-token="viewerToken" decoding="async" loading="eager" fetchpriority="auto" draggable="false" @load="viewerMediaLoaded('image', $event)" @error="viewerMediaFailed('image', $event)">
                         </template>
                         <template x-if="viewer.pair?.livephoto">
                             <video

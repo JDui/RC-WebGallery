@@ -1,6 +1,6 @@
 services:
   bili-gallery:
-    image: zzs-bili-gallery:12.4-amd64
+    image: zzs-bili-gallery:12.5-amd64
     container_name: bili-gallery
     restart: unless-stopped
     user: "0:0"

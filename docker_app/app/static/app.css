@@ -3322,7 +3322,9 @@ html.is-interacting .detail-card {
     display: grid;
     place-items: center;
     min-height: 100vh;
+    height: 100vh;
     width: 100vw;
+    gap: 0;
     padding: 0;
     overflow: hidden;
     touch-action: none;
@@ -3484,10 +3486,13 @@ html.is-interacting .detail-card {
     align-items: flex-start;
 }
 
+.viewer-stage-neighbor,
 .viewer-stage-preview,
 .viewer-stage-loading-wash,
 .viewer-stage-image,
 .viewer-video {
+    position: absolute;
+    inset: 0;
     width: 100vw;
     height: 100vh;
     object-fit: contain;
@@ -3495,6 +3500,11 @@ html.is-interacting .detail-card {
     will-change: transform;
     user-select: none;
     -webkit-user-drag: none;
+}
+
+.viewer-stage-neighbor {
+    pointer-events: none;
+    transition: none;
 }
 
 .viewer-stage-preview {
@@ -3530,20 +3540,29 @@ html.is-interacting .detail-card {
 }
 
 .viewer-original-loading-ring {
-    width: 18px;
-    height: 18px;
-    border: 2px solid rgba(255, 255, 255, 0.25);
-    border-top-color: rgba(255, 255, 255, 0.95);
-    border-radius: 50%;
-    animation: viewer-original-loading-spin 800ms linear infinite;
+    position: absolute;
+    inset: 2px;
+    width: 32px;
+    height: 32px;
+    fill: none;
+    stroke-width: 2;
+    transform: rotate(-90deg);
 }
 
-@keyframes viewer-original-loading-spin {
-    to { transform: rotate(360deg); }
+.viewer-original-loading-track { stroke: rgba(255, 255, 255, 0.25); }
+.viewer-original-loading-value {
+    stroke: rgba(255, 255, 255, 0.95);
+    stroke-linecap: round;
+    transition: stroke-dasharray 120ms linear;
+}
+.viewer-original-loading-label {
+    color: white;
+    font-size: 9px;
+    font-variant-numeric: tabular-nums;
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .viewer-original-loading-ring { animation: none; }
+    .viewer-original-loading-value { transition: none; }
 }
 
 .viewer-stage-loading-wash {
@@ -3557,6 +3576,7 @@ html.is-interacting .detail-card {
     pointer-events: none;
 }
 
+.viewer-media.stage.dragging .viewer-stage-loading-wash,
 .viewer-media.stage.dragging .viewer-stage-preview,
 .viewer-media.stage.dragging .viewer-stage-image,
 .viewer-media.stage.dragging .viewer-video {
@@ -5680,3 +5700,22 @@ details.settings-card[open] > summary::after { content: "⌃"; }
         user-select: text;
     }
 }
+
+.detail-creator-link {
+    display: inline;
+    width: auto;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    font: inherit;
+    vertical-align: baseline;
+}
+/* 来源颜色用于标识平台，保留固定语义色。 */
+.detail-creator-link.source-up { color: rgb(216 93 135); }
+.detail-creator-link.source-xhs { color: rgb(159 51 70); }
+.detail-creator-link.source-site { color: rgb(53 118 191); }
+.detail-compact-delete-confirm { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.detail-compact-bar .detail-compact-confirm { width: auto; min-height: 30px; padding: 5px 8px; font-size: 12px; white-space: nowrap; }
