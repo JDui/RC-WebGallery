@@ -483,6 +483,7 @@ function galleryApp(initialSettings = {}) {
     viewerSwipeCancelAnimations: null,
     viewerSwipeFinish: null,
     viewerSwipeTimer: null,
+    viewerHandoff: null,
     viewerVerticalDragging: false,
     viewerEdgeCancel: null,
     viewerEdgeWheelTimer: null,
@@ -1246,7 +1247,7 @@ function galleryApp(initialSettings = {}) {
           if (layer === "viewer") this.closeViewer(); else this.navigateTouchBack();
         }
         this.trackpadBackProgress = 0;
-      }, 260);
+      }, 90);
     },
 
     endTouchBack(event) {
@@ -4160,20 +4161,21 @@ function galleryApp(initialSettings = {}) {
       this.viewerClosing = false;
       this.pauseCurrentViewerMedia(true);
       const pair = entry.pair;
+      if (this.viewerHandoff?.key !== this.viewerEntryKey(entry)) this.viewerHandoff = null;
       this.viewerToken += 1;
       const shouldShowVideo = !!pair.livephoto && !pair.image;
       this.cancelViewerPreviewRetirement();
       this.viewerPreviewRetired = false;
       this.viewerImageReady = !pair.image;
       this.loadViewerOriginal(pair.image?.url || "");
-      this.viewerImageRevealAfter = Date.now() + (switchDirection ? 0 : 120);
+      this.viewerImageRevealAfter = Date.now();
       if (this.viewerImageRevealTimer) {
         window.clearTimeout(this.viewerImageRevealTimer);
         this.viewerImageRevealTimer = null;
       }
       this.viewerSwapPending = false;
       this.viewerPendingDirection = "";
-      this.viewerNavigationLockedUntil = switchDirection ? Date.now() + 140 : 0;
+      this.viewerNavigationLockedUntil = switchDirection ? Date.now() + 80 : 0;
       this.viewer = { open: true, pair, folder: entry.folder, showVideo: false };
       if (switchDirection) this.showViewerPositionHint();
       else this.hideViewerPositionHint();
@@ -4370,6 +4372,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     closeViewer(skipAnimation = false) {
+      this.viewerHandoff = null;
       this.cancelViewerSwipe();
       this.cancelViewerEdgeBounce();
       this.cancelViewerOriginal();
@@ -5235,6 +5238,7 @@ function galleryApp(initialSettings = {}) {
       this.pauseCurrentViewerMedia(true);
       this.viewerSequence = sequence;
       this.viewerIndex = currentIndex - 1;
+      this.prepareViewerHandoff(sequence[this.viewerIndex]);
       this.openViewerEntry(sequence[this.viewerIndex], true, false, fromSwipe ? "" : "down");
     },
 
@@ -5250,6 +5254,7 @@ function galleryApp(initialSettings = {}) {
       this.pauseCurrentViewerMedia(true);
       this.viewerSequence = sequence;
       this.viewerIndex = currentIndex + 1;
+      this.prepareViewerHandoff(sequence[this.viewerIndex]);
       this.openViewerEntry(sequence[this.viewerIndex], true, false, fromSwipe ? "" : "up");
     },
 
@@ -5406,7 +5411,10 @@ function galleryApp(initialSettings = {}) {
           const token = this.viewerToken;
           this.viewerPreviewRetireTimer = window.setTimeout(() => {
             this.viewerPreviewRetireTimer = null;
-            if (this.viewer.open && token === this.viewerToken && this.viewerImageReady) this.viewerPreviewRetired = true;
+            if (this.viewer.open && token === this.viewerToken && this.viewerImageReady) {
+              this.viewerPreviewRetired = true;
+              this.viewerHandoff = null;
+            }
           }, window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? 0 : 400);
         };
         const scheduleReveal = () => {
@@ -5432,6 +5440,7 @@ function galleryApp(initialSettings = {}) {
           || !this.viewer.open || !this.viewerImageReady) return;
       this.cancelViewerPreviewRetirement();
       this.viewerPreviewRetired = true;
+      this.viewerHandoff = null;
     },
 
     viewerMediaFailed(kind, event) {
@@ -5558,6 +5567,34 @@ function galleryApp(initialSettings = {}) {
       } else this.scheduleViewerToolbarHide();
     },
 
+    prepareViewerHandoff(entry) {
+      const pair = entry?.pair;
+      const url = this.detailPairPreviewUrl(pair) || pair?.preview_url || pair?.image?.url || "";
+      this.viewerHandoff = url ? { key: this.viewerEntryKey(entry), url } : null;
+    },
+
+    viewerHandoffStyle() {
+      return {
+        transform: `translate3d(${this.viewerOffsetX}px, ${this.viewerOffsetY}px, 0) scale(${this.viewerZoom})`,
+        backgroundImage: this.viewerHandoff?.url ? `url(${JSON.stringify(this.viewerHandoff.url)})` : "none",
+      };
+    },
+
+    viewerPreviewLoaded(event) {
+      const target = event?.target;
+      const token = this.viewerToken;
+      const reveal = () => {
+        if (!this.viewer.open || token !== this.viewerToken || target?.dataset.viewerToken !== String(token)) return;
+        target.dataset.previewReady = "1";
+        const release = () => {
+          if (this.viewer.open && token === this.viewerToken) this.viewerHandoff = null;
+        };
+        if (window.requestAnimationFrame) window.requestAnimationFrame(release); else release();
+      };
+      if (typeof target?.decode === "function") target.decode().then(reveal).catch(() => {});
+      else reveal();
+    },
+
     viewerNeighbor(direction) {
       const sequence = this.resolvedViewerSequence();
       return sequence[this.currentViewerSequenceIndex(sequence) + direction]?.pair;
@@ -5601,7 +5638,7 @@ function galleryApp(initialSettings = {}) {
       this.viewerSwipeFinish = commit;
       this.viewerSwipeCancelAnimations = () => animations.forEach(animation => animation.cancel());
       if (!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
-        document.querySelectorAll(".viewer-stage-image, .viewer-stage-preview, .viewer-video, .viewer-stage-neighbor").forEach(node => {
+        document.querySelectorAll(".viewer-stage-image, .viewer-stage-preview, .viewer-stage-handoff, .viewer-video, .viewer-stage-neighbor").forEach(node => {
           if (!node.animate) return;
           const neighbor = Number(node.dataset.neighbor || 0);
           const start = this.viewerOffsetY + neighbor * height;
@@ -5609,17 +5646,17 @@ function galleryApp(initialSettings = {}) {
           animations.push(node.animate([
             { transform: `translate3d(0, ${start}px, 0)` },
             { transform: `translate3d(0, ${end}px, 0)` },
-          ], { duration: 160, easing: "cubic-bezier(0.2, 0.7, 0.3, 1)", fill: "forwards" }));
+          ], { duration: 120, easing: "cubic-bezier(0.2, 0.7, 0.3, 1)", fill: "forwards" }));
         });
       }
       if (!animations.length) { commit(); return; }
       animations.at(-1).onfinish = commit;
-      this.viewerSwipeTimer = window.setTimeout(commit, 210);
+      this.viewerSwipeTimer = window.setTimeout(commit, 170);
     },
 
     viewerTrackpadOffset(distance) {
-      const limit = Math.min(150, window.innerHeight * 0.2);
-      return Math.sign(distance) * limit * (1 - Math.exp(-Math.abs(distance) * 0.5 / limit));
+      const limit = Math.min(200, window.innerHeight * 0.25);
+      return Math.sign(distance) * limit * (1 - Math.exp(-Math.abs(distance) * 0.75 / limit));
     },
 
     viewerEdgeOffset(distance) {
@@ -5640,7 +5677,7 @@ function galleryApp(initialSettings = {}) {
       this.viewerTransitionEnabled = true;
       if (!offset || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
       const animations = Array.from(document.querySelectorAll(
-        ".viewer-stage-image, .viewer-stage-preview, .viewer-video",
+        ".viewer-stage-image, .viewer-stage-preview, .viewer-stage-handoff, .viewer-video",
       )).filter(node => typeof node.animate === "function").map(node => node.animate([
         { transform: `translate3d(0, ${offset}px, 0) scale(1)`, offset: 0 },
         { transform: `translate3d(0, ${-offset * 0.12}px, 0) scale(1)`, offset: 0.65 },
@@ -5676,7 +5713,7 @@ function galleryApp(initialSettings = {}) {
         return;
       }
       const previous = this.trackpadGesture;
-      if (previous?.axis === "y" && previous.fired && Date.now() - previous.lastAt > 220) {
+      if (previous?.axis === "y" && previous.fired && Date.now() - previous.lastAt > 110) {
         if (this.viewerSwipeFinish) this.viewerSwipeFinish();
         this.trackpadGesture = null;
       }
@@ -5692,13 +5729,19 @@ function galleryApp(initialSettings = {}) {
         const canMove = gesture.y < 0 ? this.canShowPreviousPair() : this.canShowNextPair();
         this.viewerOffsetY = canMove ? this.viewerTrackpadOffset(-gesture.y) : this.viewerEdgeOffset(-gesture.y * 0.35);
         const token = this.viewerToken;
-        this.viewerEdgeWheelTimer = window.setTimeout(() => {
+        const settle = () => {
           this.viewerEdgeWheelTimer = null;
-          if (token !== this.viewerToken || !this.viewer.open || gesture !== this.trackpadGesture) return;
+          if (token !== this.viewerToken || !this.viewer.open || gesture !== this.trackpadGesture || gesture.fired) return;
           gesture.fired = true;
-          if (canMove && Math.abs(gesture.y) >= 120) this.finishViewerVerticalSwipe(gesture.y > 0 ? 1 : -1);
+          if (canMove && Math.abs(gesture.y) >= 80) this.finishViewerVerticalSwipe(gesture.y > 0 ? 1 : -1);
           else { this.viewerVerticalDragging = false; this.springViewerEdge(); }
-        }, 100);
+        };
+        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
+        const magnitude = Math.abs((event.deltaY || 0) * unit);
+        gesture.peakY = Math.max(gesture.peakY || 0, magnitude);
+        gesture.coastingY = magnitude > 0 && magnitude < gesture.peakY * 0.45 ? (gesture.coastingY || 0) + 1 : 0;
+        if (canMove && Math.abs(gesture.y) >= 80 && gesture.coastingY >= 2) settle();
+        else this.viewerEdgeWheelTimer = window.setTimeout(settle, 45);
       } else if (gesture.axis === "x" && gesture.x >= 82) {
         gesture.fired = true;
         this.revealViewerToolbar();

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-4-detail-preload-2-trackpad-hint-2-responsive-swipe-3-xhs-login-recovery-2-gallery-instant-injection-1' %}
+    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-5-detail-preload-2-trackpad-hint-3-responsive-swipe-4-xhs-login-recovery-2-gallery-instant-injection-1' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -1727,7 +1727,6 @@
                         <template x-if="pendingTrashFolder === detail.folder?.folder_name">
                             <div class="detail-compact-delete-confirm">
                                 <button type="button" class="primary-button danger-confirm detail-compact-confirm" @click="trashCurrentFolder()" :aria-label="detail.folder?.folder_name?.startsWith('xhs_') ? '确认删除并取消点赞' : '确认移入垃圾桶'">确认删除</button>
-                                <button type="button" class="secondary-button viewer-icon-button" @click="cancelTrashCurrentFolder()" aria-label="取消删除"><svg class="nav-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
                             </div>
                         </template>
                         <button type="button" class="secondary-button viewer-icon-button" data-modal-close @click="closeDetail()" aria-label="关闭动态详情"><svg class="nav-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
@@ -1963,8 +1962,9 @@
                         <template x-for="direction in [-1, 1]" :key="direction">
                             <div class="viewer-stage-neighbor" :data-neighbor="direction" :style="viewerNeighborStyle(direction)" x-show="viewerVerticalDragging && viewerZoom <= 1.02 && viewerNeighborUrl(direction)" aria-hidden="true"></div>
                         </template>
+                        <div class="viewer-stage-handoff" :style="viewerHandoffStyle()" x-show="viewerHandoff?.url && !(viewer.showVideo && viewer.pair?.livephoto)" aria-hidden="true"></div>
                         <template x-for="preview in viewer.pair?.image && !viewerPreviewRetired && viewerPreviewUrl() ? [{ url: viewerPreviewUrl(), token: viewerToken }] : []" :key="preview.token + ':' + preview.url">
-                            <img x-retire-image class="viewer-stage-preview" fetchpriority="high" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) }" :src="preview.url" :data-viewer-token="preview.token" alt="" decoding="async" loading="eager" draggable="false" @load="$el.dataset.previewReady = '1'" @error="$el.dataset.previewReady = '0'">
+                            <img x-retire-image class="viewer-stage-preview" fetchpriority="high" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) }" :src="preview.url" :data-viewer-token="preview.token" alt="" decoding="async" loading="eager" draggable="false" @load="viewerPreviewLoaded($event)" @error="$el.dataset.previewReady = '0'">
                         </template>
                         <template x-for="original in viewer.pair?.image && viewerImageSource ? [{ url: viewerImageSource, token: viewerToken }] : []" :key="original.token + ':' + original.url">
                             <img x-retire-image class="viewer-stage-image" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) || !viewerImageReady }" :src="original.url" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片'" :data-viewer-token="original.token" decoding="async" loading="eager" fetchpriority="auto" draggable="false" @load="viewerMediaLoaded('image', $event)" @error="viewerMediaFailed('image', $event)" @transitionend.self="viewerOriginalTransitionEnded($event)">

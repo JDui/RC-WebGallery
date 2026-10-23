@@ -184,12 +184,12 @@ test('trackpad resists short scrolls and requires a deliberate swipe before chan
   state.viewerNavigationLockedUntil=Date.now()+1000;
   const wheel=deltaY=>({deltaX:0,deltaY,preventDefault(){}});
   state.viewerWheel(wheel(50));
-  assert.ok(state.viewerOffsetY<0 && state.viewerOffsetY>-30);
+  assert.ok(state.viewerOffsetY<0 && state.viewerOffsetY>-50);
   assert.equal(state.viewerTransitionEnabled,false);
   timers.get(state.viewerEdgeWheelTimer)();assert.equal(state.viewerIndex,0);assert.equal(state.viewerOffsetY,0);
   state.trackpadGesture=null;
   state.viewerWheel(wheel(150));
-  assert.ok(state.viewerOffsetY<0 && state.viewerOffsetY>-75);
+  assert.ok(state.viewerOffsetY<0 && state.viewerOffsetY>-150);
   timers.get(state.viewerEdgeWheelTimer)();assert.equal(state.viewerIndex,1);
   state.viewerWheel(wheel(100));assert.equal(state.viewerIndex,1);
 });
@@ -321,4 +321,30 @@ test('back hint keeps its identity while fading after a completed menu gesture',
   state.compactTrackpadWheel({target:{closest:()=>null},deltaX:-150,deltaY:0,cancelable:true,preventDefault(){}});
   assert.equal(state.backGestureLayer(),'open-sidebar');assert.equal(state.backGestureProgress(),1);
   finish();assert.equal(state.backGestureProgress(),0);assert.equal(state.backGestureLayer(),'open-sidebar');
+});
+
+
+test('a prepared neighbor stays visible until the new preview has decoded and reached a frame', async () => {
+  const {state}=responsiveViewerState();const frames=[];
+  state.showNextPair(true);
+  assert.equal(state.viewerHandoff.url,'thumb-2');
+  assert.equal(state.viewerHandoff.key,'demo::2');
+  const token=state.viewerToken;
+  let decoded;const target={dataset:{viewerToken:String(token)},decode:()=>new Promise(resolve=>decoded=resolve)};
+  // Use a separate state to control frame delivery without relying on browser timers.
+  const managed=app({window:{requestAnimationFrame:fn=>frames.push(fn)}});
+  managed.viewer={open:true};managed.viewerToken=token;managed.viewerHandoff={key:'demo::2',url:'thumb-2'};
+  managed.viewerPreviewLoaded({target});assert.equal(managed.viewerHandoff.url,'thumb-2');
+  decoded();await Promise.resolve();assert.equal(target.dataset.previewReady,'1');
+  assert.equal(managed.viewerHandoff.url,'thumb-2');
+  frames.shift()();assert.equal(managed.viewerHandoff,null);
+});
+
+test('trackpad commits on deceleration without waiting through the inertial tail', () => {
+  const {state}=responsiveViewerState();
+  const wheel=y=>({deltaX:0,deltaY:y,preventDefault(){}});
+  state.viewerWheel(wheel(70));state.viewerWheel(wheel(20));
+  assert.equal(state.viewerIndex,0);
+  state.viewerWheel(wheel(10));assert.equal(state.viewerIndex,1);
+  state.viewerWheel(wheel(5));assert.equal(state.viewerIndex,1);
 });
