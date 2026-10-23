@@ -303,7 +303,6 @@ function galleryApp(initialSettings = {}) {
     galleryCardQuality: {},
     galleryQualityUpdateQueue: {},
     galleryQualityUpdateRaf: null,
-    galleryQualityUpdateTimer: null,
     gallerySmallObserver: null,
     galleryObservedCardElements: {},
     galleryLoadObserver: null,
@@ -403,6 +402,7 @@ function galleryApp(initialSettings = {}) {
     xhsLoginTimer: null,
     xhsLoginStarting: false,
     xhsLoginRevision: 0,
+    xhsBrowserVisible: false,
     xhsQr: null,
     xhsQrTimer: null,
     xhsQrBusy: false,
@@ -2273,19 +2273,15 @@ function galleryApp(initialSettings = {}) {
       if (this.galleryQualityUpdateRaf) {
         return;
       }
-      const flush = () => this.flushGalleryQualityUpdates();
-      this.galleryQualityUpdateRaf = window.requestAnimationFrame(flush);
-      this.galleryQualityUpdateTimer = window.setTimeout(flush, 120);
+      // 仅做同帧合批、下一帧立即落地：此前附加的 120ms 防抖计时器会在首次加载/
+      // 快速翻页时让质量类迟迟不更新，卡片灰框久留、图片随后集中突现。
+      this.galleryQualityUpdateRaf = window.requestAnimationFrame(() => this.flushGalleryQualityUpdates());
     },
 
     flushGalleryQualityUpdates() {
       if (this.galleryQualityUpdateRaf) {
         window.cancelAnimationFrame(this.galleryQualityUpdateRaf);
         this.galleryQualityUpdateRaf = null;
-      }
-      if (this.galleryQualityUpdateTimer) {
-        window.clearTimeout(this.galleryQualityUpdateTimer);
-        this.galleryQualityUpdateTimer = null;
       }
       const updates = this.galleryQualityUpdateQueue;
       this.galleryQualityUpdateQueue = {};
@@ -8777,14 +8773,16 @@ function galleryApp(initialSettings = {}) {
     clearXhsLoginUi() {
       this.stopXhsQrPolling();
       this.xhsQr = null;
+      this.xhsBrowserVisible = false;
     },
 
     xhsQrText(phase) {
       return { preparing: '正在准备登录二维码…', await_scan: '请使用小红书 App 扫码并在手机上确认登录。',
         scanned: '已扫码，请在手机上确认登录。', refreshing: '二维码已刷新，请重新扫码。',
         finalizing: '已检测到登录，正在确认账号信息…', logged_in: '登录成功，正在完成…',
-        captcha: '需要额外安全验证，当前扫码方式暂无法完成，请稍后重试。',
-        missing: '未能取得二维码，请重新启动扫码登录。',
+        captcha: '请在下方验证画面中完成安全验证，然后继续扫码登录。',
+        blocked: '小红书显示安全限制，请查看验证画面中的提示。',
+        missing: '未能取得二维码，可打开验证画面检查当前页面。',
         error: '二维码获取失败，请重新启动登录。' }[phase] || '正在准备登录二维码…';
     },
 
@@ -8810,6 +8808,9 @@ function galleryApp(initialSettings = {}) {
         const result = await this.api('/api/xhs/login/qr', { method: 'POST', body: '{}' });
         if (revision !== this.xhsLoginRevision) return;
         this.xhsQrErrors = 0;
+        if (['captcha', 'missing', 'blocked'].includes(result.phase) && result.phase !== this.xhsQr?.phase) {
+          this.xhsBrowserVisible = true;
+        }
         this.xhsQr = { image_data_url: result.image_data_url || null,
           phase: result.phase || 'preparing', message: result.message || '' };
         if (result.phase === 'logged_in' && !this.xhsQrAutoFinishTried && !this.xhsBusy && Date.now() >= (this.xhsQrFinishRetryAt || 0)) {
@@ -8839,6 +8840,7 @@ function galleryApp(initialSettings = {}) {
         this.xhsLoginStarting = true;
         this.stopXhsQrPolling();
         this.xhsQr = null;
+        this.xhsBrowserVisible = false;
       }
       this.xhsBusy = true;
       try {

@@ -6,13 +6,13 @@ from collections import deque
 import fcntl
 import hashlib
 import hmac
+import math
 import os
 from pathlib import Path
 import random
 import re
 import secrets
 import shutil
-import subprocess
 import time
 import threading
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
@@ -35,7 +35,7 @@ ASSET_ORIGIN_TIMEOUT = 45.0
 ASSET_ORIGIN_LIMIT = 3
 ASSET_CANDIDATE_LIMIT = 6
 
-# 登录二维码抓取：主界面只展示这张截图，不再把整个浏览器画面推给页面。
+# 登录二维码单独展示；安全验证通过同一登录会话的截图和操作回传完成。
 # 选择器按官方登录弹窗从精确到宽泛排列，命中第一个“可见 + 接近正方形”的元素即截图。
 LOGIN_QR_SELECTORS = (
     '.qrcode-img img',
@@ -47,6 +47,11 @@ LOGIN_QR_SELECTORS = (
     'div[class*="qrcode"] canvas',
 )
 LOGIN_MODAL_SELECTOR = '.login-container, #login-container, .login-modal, div[class*="login-container"]'
+LOGIN_CHALLENGE_SELECTOR = (
+    '.captcha-container, .security-verify, #captcha, #captcha-modal, #red-captcha, #red-captcha-container, '
+    '[class*="captcha-modal"], [class*="captcha-wrapper"], '
+    '.verify-slider, .verify-dialog, iframe[src*="captcha"], iframe[src*="verify"]'
+)
 LOGIN_QR_MAX_IMAGE_BYTES = 1_600_000
 # 连续抓不到二维码达到该次数后，提示重新启动扫码登录（约 60 秒）。
 LOGIN_QR_MISS_LIMIT = 24
@@ -83,7 +88,6 @@ class BrowserRuntime:
         self.state, self.owner_key = 'LOGIN_REQUIRED', None
         self.profile_url = None
         self.login_deadline = 0.0
-        self.viewer_processes = []
         self.session_id = None
         self.session_deadline = 0.0
         self.queue = deque(maxlen=12)
@@ -101,6 +105,7 @@ class BrowserRuntime:
         self.qr_misses = 0
         self.qr_reloads = 0
         self.qr_login_clicks = 0
+        self.login_frames = deque(maxlen=24)
 
     async def _launch(self, headed=False):
         from playwright.async_api import async_playwright
@@ -132,22 +137,6 @@ class BrowserRuntime:
             raise BrowserFault(self.state) from None
 
     async def _close(self):
-        for process in self.viewer_processes:
-            if process.poll() is None:
-                try:
-                    process.terminate()
-                except ProcessLookupError:
-                    pass
-        for process in self.viewer_processes:
-            try:
-                await asyncio.to_thread(process.wait, timeout=3)
-            except subprocess.TimeoutExpired:
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
-                await asyncio.to_thread(process.wait, timeout=3)
-        self.viewer_processes = []
         for task in tuple(self.capture_tasks):
             task.cancel()
         if self.context:
@@ -168,6 +157,7 @@ class BrowserRuntime:
         for path in self.work.glob('vnc-*'):
             path.unlink(missing_ok=True)
         self.login_deadline = 0
+        self.login_frames.clear()
 
     def _on_response(self, response):
         task = asyncio.create_task(self._capture(response))
@@ -249,11 +239,9 @@ class BrowserRuntime:
         return value
 
     async def _identity(self) -> str:
-        challenges = self.page.locator('.captcha-container, .security-verify, iframe[src*="captcha"]')
-        for index in range(await challenges.count()):
-            if await challenges.nth(index).is_visible():
-                self.state = 'NEEDS_MANUAL_VERIFICATION'
-                raise BrowserFault(self.state)
+        if await self._challenge_box():
+            self.state = 'NEEDS_MANUAL_VERIFICATION'
+            raise BrowserFault(self.state)
         links = self.page.locator('a.channel[href*="/user/profile/"], .side-bar a[href*="/user/profile/"], a.user[href*="/user/profile/"], [data-testid="self-profile"][href]')
         href = None
         profile_link = None
@@ -279,48 +267,6 @@ class BrowserRuntime:
         self.avatar_url = self._safe_avatar_url(avatar)
         self.profile_url = urljoin('https://www.xiaohongshu.com/', href)
         return 'acct_' + hmac.new(self.owner_salt, match[1].encode(), hashlib.sha256).hexdigest()[:32]
-    def _viewer(self):
-        password = secrets.token_urlsafe(6)[:8]
-        password_file = self.work / ('vnc-' + uuid4().hex)
-        subprocess.run(['x11vnc', '-storepasswd', password, str(password_file)], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        password_file.chmod(0o600)
-        commands = [
-            ['x11vnc', '-display', os.environ.get('DISPLAY', ':99'), '-localhost', '-rfbport', '5900',
-             '-rfbauth', str(password_file), '-forever', '-shared'],
-        ]
-        if os.environ.get('XHS_EMBEDDED') != '1':
-            commands.append(['websockify', '--web', '/usr/share/novnc', '0.0.0.0:6080', '127.0.0.1:5900'])
-        for command in commands:
-            self.viewer_processes.append(subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
-        return password
-
-    async def _wait_for_viewer(self):
-        # Popen succeeding does not mean the display server is listening. Check
-        # the real RFB greeting before exposing a login session to the client.
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            await asyncio.sleep(0.1)
-            if not self.viewer_processes or any(p.poll() is not None for p in self.viewer_processes):
-                break
-            writer = None
-            try:
-                reader, writer = await asyncio.wait_for(asyncio.open_connection('127.0.0.1', 5900), timeout=0.5)
-                greeting = await asyncio.wait_for(reader.readexactly(12), timeout=0.5)
-                if greeting.startswith(b'RFB ') and all(p.poll() is None for p in self.viewer_processes):
-                    return
-            except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError):
-                pass
-            finally:
-                if writer:
-                    writer.close()
-                    try:
-                        await writer.wait_closed()
-                    except OSError:
-                        pass
-        self.last_launch_error = launch_diagnostic('cannot open display')
-        raise BrowserFault('BROWSER_DISPLAY_UNAVAILABLE', self.last_launch_error)
-
     async def login_start(self):
         async with self.lock:
             if self.session_id:
@@ -328,8 +274,8 @@ class BrowserRuntime:
             await self._close()
             await self._launch(headed=True)
             try:
-                password = self._viewer()
-                await self._wait_for_viewer()
+                # HTTP screenshots and input relay work without noVNC/WebSocket.
+                password = secrets.token_urlsafe(24)
                 await self.page.goto('https://www.xiaohongshu.com/explore', wait_until='domcontentloaded')
                 self.state = 'LOGIN_IN_PROGRESS'
                 self.login_deadline = time.monotonic() + 600
@@ -347,9 +293,8 @@ class BrowserRuntime:
     async def login_qr(self):
         """登录期间的一次抓取：返回登录二维码截图或当前登录阶段，供页面直接展示。
 
-        与整屏推流（noVNC 登录浮窗）不同，这里只把登录弹窗里的二维码元素截成
-        PNG 回传，页面渲染这张图即可完成扫码；验证码等需要人工操作的场景仍由
-        前端引导用户打开完整登录窗口处理。
+        二维码元素截成 PNG 回传；验证码通过 HTTP 验证画面处理，始终使用
+        同一浏览器会话，不复制或重新加载第三方验证模块。
         """
         async with self.lock:
             if not self.context or not self.page or not self.login_deadline:
@@ -368,11 +313,14 @@ class BrowserRuntime:
 
     async def _login_qr_probe(self):
         page = self.page
-        challenges = page.locator('.captcha-container, .security-verify, iframe[src*="captcha"]')
-        for index in range(min(await challenges.count(), 3)):
-            if await challenges.nth(index).is_visible():
-                return {'state': self.state, 'phase': 'captcha',
-                        'message': '小红书要求额外安全验证，当前扫码方式暂无法完成，请稍后重试。'}
+        if urlsplit(page.url).path.rstrip('/') == '/website-login/error':
+            code = parse_qs(urlsplit(page.url).query).get('error_code', [''])[0]
+            message = ('小红书拒绝了当前网络（300012：IP 存在风险），请切换可靠网络后重新登录。'
+                       if code == '300012' else '小红书显示安全限制，请查看下方页面提示。')
+            return {'state': self.state, 'phase': 'blocked', 'message': message}
+        if await self._challenge_box():
+            return {'state': self.state, 'phase': 'captcha',
+                    'message': '需要安全验证，请在下方验证画面中完成点击或拖动。'}
         try:
             cookies = {item.get('name'): item.get('value')
                        for item in await self.context.cookies('https://www.xiaohongshu.com')}
@@ -480,8 +428,103 @@ class BrowserRuntime:
                 pass
         if self.qr_misses >= LOGIN_QR_MISS_LIMIT:
             return {'state': self.state, 'phase': 'missing',
-                    'message': '未能取得登录二维码，请重新启动扫码登录。'}
+                    'message': '未能取得登录二维码，请打开验证画面检查当前页面。'}
         return {'state': self.state, 'phase': 'preparing', 'message': '正在准备登录二维码…'}
+
+    async def _challenge_box(self):
+        # Outer iframe boxes use main-viewport coordinates, including cross-origin frames.
+        nodes = self.page.locator(LOGIN_CHALLENGE_SELECTOR)
+        viewport = self.page.viewport_size or {'width': 1280, 'height': 900}
+        for index in range(min(await nodes.count(), 20)):
+            node = nodes.nth(index)
+            if not await node.is_visible():
+                continue
+            box = await node.bounding_box()
+            if not box:
+                continue
+            left, top = max(0, math.floor(box['x']) - 16), max(0, math.floor(box['y']) - 16)
+            right = min(viewport['width'], math.ceil(box['x'] + box['width']) + 16)
+            bottom = min(viewport['height'], math.ceil(box['y'] + box['height']) + 16)
+            if right - left >= 60 and bottom - top >= 40:
+                return {'x': left, 'y': top, 'width': right - left, 'height': bottom - top}
+        return None
+
+    def _require_login_view(self):
+        if (not self.page or not self.context or self.session_id
+                or time.monotonic() >= self.login_deadline):
+            raise BrowserFault('LOGIN_REQUIRED')
+
+    async def login_frame(self, payload):
+        async with self.lock:
+            self._require_login_view()
+            viewport = self.page.viewport_size or {'width': 1280, 'height': 900}
+            challenge = await self._challenge_box()
+            clip = challenge if payload.get('mode') != 'page' and challenge else {
+                'x': 0, 'y': 0, **viewport}
+            # Never scroll an element into view: that would move a pending click/drag target.
+            image = await self.page.screenshot(type='jpeg', quality=85, clip=clip, timeout=5000)
+            if len(image) > LOGIN_QR_MAX_IMAGE_BYTES:
+                raise BrowserFault('STRUCTURE_CHANGED')
+            frame_id = secrets.token_urlsafe(18)
+            self.login_frames.append((frame_id, time.monotonic(), dict(clip), self.page.url, dict(viewport), clip is challenge))
+            return {'frame_id': frame_id, 'image_data_url': 'data:image/jpeg;base64,' + base64.b64encode(image).decode('ascii'),
+                    'width': clip['width'], 'height': clip['height'],
+                    'mode': 'captcha' if clip is challenge else 'page', 'challenge': bool(challenge)}
+
+    async def login_input(self, payload):
+        async with self.lock:
+            self._require_login_view()
+            frame = next((item for item in self.login_frames if item[0] == payload.get('frame_id')), None)
+            if (not frame or time.monotonic() - frame[1] > 30 or frame[3] != self.page.url
+                    or frame[4] != self.page.viewport_size):
+                raise BrowserFault('LOGIN_FRAME_EXPIRED')
+            clip = frame[2]
+            if frame[5] and await self._challenge_box() != clip:
+                raise BrowserFault('LOGIN_FRAME_EXPIRED')
+            kind = payload.get('kind')
+            if kind == 'pointer':
+                points = payload.get('points')
+                if not isinstance(points, list) or not 1 <= len(points) <= 160:
+                    raise BrowserFault('LOGIN_INPUT_INVALID')
+                previous = 0
+                for point in points:
+                    if not isinstance(point, dict):
+                        raise BrowserFault('LOGIN_INPUT_INVALID')
+                    x, y, elapsed = point.get('x'), point.get('y'), point.get('t')
+                    if (any(type(v) not in (int, float) or not math.isfinite(v) for v in (x, y, elapsed))
+                            or not 0 <= x < clip['width'] or not 0 <= y < clip['height']
+                            or not previous <= elapsed <= 8000):
+                        raise BrowserFault('LOGIN_INPUT_INVALID')
+                    previous = elapsed
+                await self.page.mouse.move(clip['x'] + points[0]['x'], clip['y'] + points[0]['y'])
+                try:
+                    await self.page.mouse.down()
+                    previous = 0
+                    for point in points:
+                        await asyncio.sleep((point['t'] - previous) / 1000)
+                        await self.page.mouse.move(clip['x'] + point['x'], clip['y'] + point['y'])
+                        previous = point['t']
+                finally:
+                    await self.page.mouse.up()
+            elif kind == 'text':
+                value = payload.get('text')
+                if not isinstance(value, str) or not 1 <= len(value) <= 128 or any(ord(c) < 32 for c in value):
+                    raise BrowserFault('LOGIN_INPUT_INVALID')
+                await self.page.keyboard.insert_text(value)
+            elif kind == 'key':
+                key = payload.get('key')
+                if key not in {'Backspace', 'Delete', 'Tab', 'Enter', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'}:
+                    raise BrowserFault('LOGIN_INPUT_INVALID')
+                await self.page.keyboard.press(key)
+            elif kind == 'wheel':
+                delta = payload.get('delta')
+                if type(delta) not in (int, float) or not math.isfinite(delta) or abs(delta) > 900:
+                    raise BrowserFault('LOGIN_INPUT_INVALID')
+                await self.page.mouse.move(clip['x'] + clip['width'] / 2, clip['y'] + clip['height'] / 2)
+                await self.page.mouse.wheel(0, delta)
+            else:
+                raise BrowserFault('LOGIN_INPUT_INVALID')
+            return {'ok': True}
 
     async def login_finish(self):
         async with self.lock:

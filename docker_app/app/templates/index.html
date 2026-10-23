@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-2-detail-preload-1-trackpad-hint-1-responsive-swipe-1-xhs-login-recovery-1' %}
+    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-2-detail-preload-1-trackpad-hint-1-responsive-swipe-1-xhs-login-recovery-2-gallery-instant-injection-1' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -317,15 +317,12 @@
                                                             <strong>已删除</strong>
                                                         </div>
                                                     </template>
-                                                    <template x-if="!item.__deleted_placeholder">
-                                                        <div>
+                                                    <div x-show="!item.__deleted_placeholder">
                                                     <div class="photo-visual" x-show="item.preview_tiles?.length">
                                                     <div class="photo-collage" :class="`tiles-${Math.min(galleryPreviewTiles(item).length, 4) || 1}`" :style="galleryCoverStyle(item)">
                                                         <template x-for="tile in galleryPreviewTiles(item)" :key="tile.id">
                                                             <div class="photo-collage-tile">
-                                                                <template x-if="galleryQualityFor(item) === 'small' && galleryTileUrl(tile)">
-                                                                    <img loading="lazy" decoding="async" x-progressive-src="galleryTileUrl(tile)" :alt="item.title" :width="tile.width || null" :height="tile.height || null">
-                                                                </template>
+                                                                <img loading="lazy" decoding="async" x-progressive-src="galleryTileUrl(tile)" :alt="item.title" :width="tile.width || null" :height="tile.height || null">
                                                             </div>
                                                         </template>
                                                     </div>
@@ -362,8 +359,7 @@
                                                         <span x-show="item.livephoto_count > 0" x-text="`${item.livephoto_count} 条 Live Photo`"></span>
                                                     </div>
                                                 </div>
-                                                        </div>
-                                                    </template>
+                                                    </div>
                                             </article>
                                         </template>
                                 </div>
@@ -1385,6 +1381,13 @@
                                     </div>
                                     <p role="status" x-text="xhsQr?.message || xhsQrText(xhsQr?.phase)"></p>
                                 </div>
+                                <div class="heading-with-help">
+                                    <button type="button" class="secondary-button" @click="xhsBrowserVisible = !xhsBrowserVisible" :aria-expanded="xhsBrowserVisible" x-text="xhsBrowserVisible ? '收起验证画面' : '打开验证画面'"></button>
+                                    <button type="button" class="help-button" aria-label="小红书验证画面说明" data-tooltip="需要安全验证时自动显示验证码区域。可在画面中点击或拖动；找不到验证码时显示完整登录页面。完成验证后继续扫码，无需重新启动登录。画面通过普通 HTTP 请求传输，无需额外端口或 WebSocket 转发。">?</button>
+                                </div>
+                                <template x-if="xhsBrowserVisible && xhsLoginSession">
+                                    <iframe class="xhs-login-frame" src="/api/xhs/browser/" title="小红书验证码与登录页面" referrerpolicy="no-referrer"></iframe>
+                                </template>
                             </div>
                             <div class="subscription-policy-grid site-policy-grid">
                                 <label class="policy-wide">名称<input class="ui-field" x-model="xhsNewSource.name" maxlength="100"></label>

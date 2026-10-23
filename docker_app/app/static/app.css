@@ -5448,11 +5448,12 @@ html.is-interacting .detail-card {
 .xhs-login-frame {
     display: block;
     width: 100%;
-    height: min(70vh, 720px);
+    height: min(78vh, 820px);
     min-height: 360px;
     border: 1px solid var(--border-color, #dbe4f4);
     border-radius: var(--radius-card, 12px);
     background: #edf3ff;
+    margin-top: 10px;
 }
 .xhs-qr-panel {
     display: flex;

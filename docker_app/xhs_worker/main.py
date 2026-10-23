@@ -68,7 +68,12 @@ def create_app(runtime=None, token: str | None = None):
                 'network_mode': 'direct', 'launch_error': getattr(engine, 'last_launch_error', None)}
 
     @app.post('/auth/{action}')
-    async def auth(action: str):
+    async def auth(action: str, request: Request):
+        if action in {'frame', 'input'}:
+            payload = await request.json()
+            if not isinstance(payload, dict):
+                raise HTTPException(400)
+            return await perform(getattr(app.state.runtime, 'login_' + action), payload)
         methods = {'start': 'login_start', 'finish': 'login_finish', 'check': 'check', 'revoke': 'revoke',
                    'qr': 'login_qr'}
         if action not in methods:

@@ -39,7 +39,9 @@ def browser_error_text(category: str) -> str:
         'LOGIN_REQUIRED': '扫码会话已结束，请重新启动扫码登录。',
         'NEEDS_REAUTH': '小红书登录状态尚未确认，请重新扫码并在手机上确认。',
         'NEEDS_REBIND': '当前扫码账号与已绑定账号不一致，请使用原账号登录。',
-        'NEEDS_MANUAL_VERIFICATION': '小红书要求额外安全验证，当前扫码方式暂无法完成，请稍后重试。',
+        'NEEDS_MANUAL_VERIFICATION': '小红书要求安全验证，请打开验证画面完成操作后继续登录。',
+        'LOGIN_FRAME_EXPIRED': '画面已更新，请等待刷新后重新操作。',
+        'LOGIN_INPUT_INVALID': '操作无效或拖动时间过长，请重试。',
         'RATE_LIMITED': '小红书暂时限制请求，请稍后再扫码登录。',
     }
     if category in auth_errors:

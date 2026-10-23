@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>小红书安全验证</title>
+<style>
+html,body{margin:0;width:100%;height:100%;background:#edf3ff;font:14px sans-serif;color:#233552}
+body{display:flex;flex-direction:column;overflow:hidden}
+header,footer{display:flex;align-items:center;gap:8px;padding:8px 12px;background:white;flex-wrap:wrap}
+#message{flex:1;min-width:160px}button,input{font:inherit;padding:6px 10px;max-width:100%;box-sizing:border-box}
+.heading-with-help{display:flex;align-items:center;gap:6px}.help-button{border:1px solid #bdcce0;border-radius:50%;padding:0;width:22px;height:22px;background:white}
+.help-button:hover:after,.help-button:focus:after{content:attr(data-tooltip);position:absolute;left:12px;right:12px;top:54px;padding:12px;background:#233552;color:white;z-index:2;line-height:1.6;border-radius:8px}
+#screen{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:6px}
+#view{display:block;max-width:100%;max-height:100%;object-fit:contain;touch-action:none;user-select:none;cursor:crosshair}
+#view[hidden]{display:none}#text{flex:1;min-width:120px}button{cursor:pointer}
+</style>
+</head>
+<body>
+<header>
+  <div class="heading-with-help"><strong id="title">小红书安全验证</strong><button class="help-button" aria-label="安全验证操作说明" data-tooltip="画面来自当前登录浏览器。可点击、按顺序点选或拖动滑块，操作会在松开后传回。需要输入时先点击画面中的输入框，再在下方输入并发送。无法定位验证码时会显示完整页面，也可手动切换。验证完成后回到应用继续扫码；不要重新启动登录。" type="button">?</button></div>
+  <span id="message" role="status">正在读取登录画面…</span>
+  <button id="mode" type="button">显示完整页面</button><button id="retry" type="button">刷新画面</button>
+</header>
+<div id="screen"><img id="view" alt="小红书当前登录页面，可点击或拖动完成验证" tabindex="0" draggable="false" hidden></div>
+<footer><input id="text" aria-label="发送到浏览器输入框的文本" placeholder="点击画面中的输入框后，在此输入" maxlength="128" autocomplete="off"><button id="send" type="button">发送文字</button><button id="backspace" type="button">退格</button><button id="enter" type="button">回车</button><button id="tab" type="button">切换输入框</button></footer>
+<script nonce="__NONCE__">
+const view = document.getElementById('view'), message = document.getElementById('message');
+let frame = null, mode = 'auto', busy = false, gesture = null, stopped = false, timer = null, loading = false;
+let generation = 0, controller = null, lastError = '';
+async function rpc(action, payload) {
+  controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch('./' + action, {method:'POST', cache:'no-store', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload), signal:controller.signal});
+    const result = await response.json();
+    if (!response.ok) {
+      if ([403,410].includes(response.status)) {stopped = true; view.hidden = true; frame = null;}
+      throw new Error(result.detail || '画面请求失败');
+    }
+    return result;
+  } finally {clearTimeout(deadline); controller = null;}
+}
+function schedule() {clearTimeout(timer); if (!stopped) timer = setTimeout(refresh, 900);}
+async function refresh() {
+  if (stopped || busy || gesture || loading) {schedule(); return;}
+  busy = true;
+  const revision = generation;
+  try {
+    const result = await rpc('frame', {mode});
+    if (stopped || revision !== generation) return;
+    loading = true;
+    // Swap image and coordinate metadata together after decoding.
+    const next = new Image(); next.src = result.image_data_url; await next.decode();
+    if (stopped || revision !== generation) return;
+    frame = result; view.src = result.image_data_url; view.hidden = false;
+    document.getElementById('title').textContent = result.mode === 'captcha' ? '小红书验证码' : '小红书登录页面';
+    message.textContent = lastError || (result.challenge ? '请在画面中完成安全验证。' : '可直接操作页面；扫码确认后回到应用完成登录。');
+  } catch (error) {message.textContent = error.name === 'AbortError' ? '请求超时，请刷新画面重试。' : error.message;}
+  finally {busy = false; loading = false; schedule();}
+}
+async function input(payload) {
+  if (!frame || busy || stopped || loading) return false;
+  busy = true; generation += 1;
+  message.textContent = '正在传回操作…';
+  try {await rpc('input', {frame_id:frame.frame_id, ...payload}); lastError = ''; return true;}
+  catch (error) {lastError = error.name === 'AbortError' ? '操作请求超时，请刷新后确认页面状态。' : error.message; message.textContent = lastError; return false;}
+  finally {busy = false; schedule();}
+}
+function point(event) {
+  const box = view.getBoundingClientRect();
+  return {x:Math.max(0,Math.min(frame.width - 0.01,(event.clientX-box.left)*frame.width/box.width)),
+          y:Math.max(0,Math.min(frame.height - 0.01,(event.clientY-box.top)*frame.height/box.height)),
+          t:Math.min(8000,Math.max(0,Math.round(performance.now()-gesture.started)))};
+}
+view.addEventListener('pointerdown', event => {
+  if (!frame || busy || loading || stopped || gesture || event.button !== 0) return;
+  event.preventDefault(); view.focus(); view.setPointerCapture(event.pointerId);
+  gesture = {id:event.pointerId, started:performance.now(), points:[]}; gesture.points.push(point(event));
+});
+view.addEventListener('pointermove', event => {
+  if (!gesture || event.pointerId !== gesture.id) return;
+  const next = point(event), last = gesture.points[gesture.points.length-1];
+  if (next.t-last.t >= 50 && gesture.points.length < 158) gesture.points.push(next);
+});
+view.addEventListener('pointerup', event => {
+  if (!gesture || event.pointerId !== gesture.id) return;
+  gesture.points.push(point(event)); const points = gesture.points; gesture = null;
+  view.releasePointerCapture(event.pointerId); input({kind:'pointer', points});
+});
+view.addEventListener('pointercancel', () => {gesture = null; schedule();});
+view.addEventListener('lostpointercapture', () => {if (gesture) {gesture = null; schedule();}});
+view.addEventListener('wheel', event => {event.preventDefault(); input({kind:'wheel',delta:Math.max(-900,Math.min(900,event.deltaY))});}, {passive:false});
+view.addEventListener('keydown', event => {
+  if (['Backspace','Delete','Tab','Enter','Escape','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)) {
+    event.preventDefault(); input({kind:'key', key:event.key});
+  }
+});
+document.getElementById('mode').onclick = event => {
+  if (busy || gesture || loading) return;
+  mode = mode === 'auto' ? 'page' : 'auto'; frame = null; view.hidden = true; generation += 1;
+  event.target.textContent = mode === 'page' ? '优先显示验证码' : '显示完整页面'; refresh();
+};
+document.getElementById('retry').onclick = () => {lastError = ''; if (stopped) location.reload(); else refresh();};
+document.getElementById('send').onclick = async () => {
+  const text = document.getElementById('text');
+  if (text.value && !busy && await input({kind:'text',text:text.value})) text.value = '';
+};
+document.getElementById('backspace').onclick = () => input({kind:'key',key:'Backspace'});
+document.getElementById('enter').onclick = () => input({kind:'key',key:'Enter'});
+document.getElementById('tab').onclick = () => input({kind:'key',key:'Tab'});
+window.addEventListener('pagehide', () => {stopped = true; generation += 1; clearTimeout(timer); if (controller) controller.abort();}, {once:true});
+refresh();
+</script>
+</body>
+</html>

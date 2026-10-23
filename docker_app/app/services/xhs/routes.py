@@ -26,9 +26,9 @@ async def read_body(request: Request, maximum: int = MAX_MANIFEST_BYTES) -> byte
     return bytes(raw)
 
 
-async def read_object(request: Request) -> dict:
+async def read_object(request: Request, maximum: int = 4096) -> dict:
     try:
-        value = json.loads(await read_body(request, 4096))
+        value = json.loads(await read_body(request, maximum))
     except (ValueError, UnicodeError, RecursionError):
         raise HTTPException(400, "JSON 无效") from None
     if not isinstance(value, dict):
