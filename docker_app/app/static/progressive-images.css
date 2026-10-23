@@ -20,7 +20,7 @@
     transition: none;
     animation: none;
 }
-.viewer-stage-image { transition: transform var(--duration-base) var(--ease-fluid), opacity 260ms ease-out; }
+.viewer-stage-image { transition: transform var(--duration-base) var(--ease-fluid), opacity 280ms ease-out; }
 
 .photo-card .asset-visual img[data-progressive-image].hidden,
 .detail-card .detail-thumb img[data-progressive-image].hidden { opacity: 0; }

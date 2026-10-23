@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-3-detail-preload-2-trackpad-hint-1-responsive-swipe-2-xhs-login-recovery-2-gallery-instant-injection-1' %}
+    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-4-detail-preload-2-trackpad-hint-2-responsive-swipe-3-xhs-login-recovery-2-gallery-instant-injection-1' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -25,8 +25,9 @@
     <script defer src="/static/vendor/alpinejs.min.js?v={{ app_version }}"></script>
 </head>
 <body x-data="galleryApp({{ initial_ui_settings | default({}) | tojson | forceescape }})" data-intranet-access="{{ intranet_access }}">
-    <div class="touch-back-hint" data-testid="touch-back-hint" x-show="backGestureProgress() > 0" x-transition.opacity.duration.160ms :class="{ ready: backGestureProgress() >= 1 }" :style="{ opacity: backGestureProgress(), transform: `translateX(${(backGestureProgress() - 1) * 32}px)` }" aria-hidden="true" x-cloak>
+    <div class="touch-back-hint" data-testid="touch-back-hint" :class="{ visible: backGestureProgress() > 0 }" :style="{ '--back-progress': backGestureProgress() }" aria-hidden="true" x-cloak>
         <svg class="nav-icon"><use :href="backGestureLayer() === 'open-sidebar' ? '#icon-all' : '#icon-back'"></use></svg><span x-text="backGestureLayer() === 'open-sidebar' ? '菜单' : '返回'"></span>
+        <span class="touch-back-hint-progress"></span>
     </div>
     <div class="intranet-edge" aria-hidden="true"></div>
     <svg class="ui-icon-definitions" xmlns="http://www.w3.org/2000/svg" width="0" height="0" aria-hidden="true" focusable="false">
@@ -1946,7 +1947,6 @@
                         <circle class="viewer-original-loading-track" cx="18" cy="18" r="15"></circle>
                         <circle class="viewer-original-loading-value" cx="18" cy="18" r="15" pathLength="100" :stroke-dasharray="`${viewerImageProgress ?? 0} 100`"></circle>
                     </svg>
-                    <span class="viewer-original-loading-label" x-text="viewerOriginalProgressLabel()" aria-hidden="true"></span>
                 </div>
                 <article class="viewer-stage-wrap" :class="{ live: viewer.pair?.livephoto, closing: viewerClosing, 'switch-up': viewerSwitchDirection === 'up', 'switch-down': viewerSwitchDirection === 'down', 'is-swapping': viewerSwapPending }" x-show="viewer.pair || viewerClosing" x-cloak>
                     <div
@@ -1961,14 +1961,13 @@
                         @pointercancel="viewerPointerUp($event)"
                     >
                         <template x-for="direction in [-1, 1]" :key="direction">
-                            <img x-retire-image class="viewer-stage-neighbor" :data-neighbor="direction" :src="viewerNeighborUrl(direction) || null" :style="viewerNeighborStyle(direction)" x-show="viewerVerticalDragging && viewerZoom <= 1.02 && viewerNeighborUrl(direction)" alt="" aria-hidden="true" draggable="false" decoding="async">
+                            <div class="viewer-stage-neighbor" :data-neighbor="direction" :style="viewerNeighborStyle(direction)" x-show="viewerVerticalDragging && viewerZoom <= 1.02 && viewerNeighborUrl(direction)" aria-hidden="true"></div>
                         </template>
-                        <template x-if="viewer.pair?.image && !viewerPreviewRetired">
-                            <img x-retire-image class="viewer-stage-preview" fetchpriority="high" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) }" :src="viewerPreviewUrl()" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片预览'" decoding="async" loading="eager" draggable="false" @load="fadeLoadedImage($event)">
+                        <template x-for="preview in viewer.pair?.image && !viewerPreviewRetired && viewerPreviewUrl() ? [{ url: viewerPreviewUrl(), token: viewerToken }] : []" :key="preview.token + ':' + preview.url">
+                            <img x-retire-image class="viewer-stage-preview" fetchpriority="high" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) }" :src="preview.url" :data-viewer-token="preview.token" alt="" decoding="async" loading="eager" draggable="false" @load="$el.dataset.previewReady = '1'" @error="$el.dataset.previewReady = '0'">
                         </template>
-                        <div class="viewer-stage-loading-wash" x-show="viewerShouldShowImageWash()" x-transition:enter="wash-fade" x-transition:enter-start="wash-transparent" x-transition:enter-end="wash-visible" x-transition:leave="wash-fade" x-transition:leave-start="wash-visible" x-transition:leave-end="wash-transparent" :style="viewerMediaStyle()"></div>
-                        <template x-if="viewer.pair?.image">
-                            <img x-retire-image class="viewer-stage-image" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) || !viewerImageReady }" :src="viewerImageSource || null" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片'" :data-viewer-token="viewerToken" decoding="async" loading="eager" fetchpriority="auto" draggable="false" @load="viewerMediaLoaded('image', $event)" @error="viewerMediaFailed('image', $event)">
+                        <template x-for="original in viewer.pair?.image && viewerImageSource ? [{ url: viewerImageSource, token: viewerToken }] : []" :key="original.token + ':' + original.url">
+                            <img x-retire-image class="viewer-stage-image" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) || !viewerImageReady }" :src="original.url" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片'" :data-viewer-token="original.token" decoding="async" loading="eager" fetchpriority="auto" draggable="false" @load="viewerMediaLoaded('image', $event)" @error="viewerMediaFailed('image', $event)" @transitionend.self="viewerOriginalTransitionEnded($event)">
                         </template>
                         <template x-if="viewer.pair?.livephoto">
                             <video

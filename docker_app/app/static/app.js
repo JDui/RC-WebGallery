@@ -1246,7 +1246,6 @@ function galleryApp(initialSettings = {}) {
           if (layer === "viewer") this.closeViewer(); else this.navigateTouchBack();
         }
         this.trackpadBackProgress = 0;
-        this.trackpadBackLayer = "";
       }, 260);
     },
 
@@ -1268,6 +1267,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     cancelTouchBack() {
+      if (this.touchBackGesture?.layer) this.trackpadBackLayer = this.touchBackGesture.layer;
       this.touchBackGesture = null;
       this.touchBackProgress = 0;
     },
@@ -5407,18 +5407,31 @@ function galleryApp(initialSettings = {}) {
           this.viewerPreviewRetireTimer = window.setTimeout(() => {
             this.viewerPreviewRetireTimer = null;
             if (this.viewer.open && token === this.viewerToken && this.viewerImageReady) this.viewerPreviewRetired = true;
-          }, window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? 0 : 280);
+          }, window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? 0 : 400);
         };
-        const waitMs = Math.max(0, Number(this.viewerImageRevealAfter || 0) - Date.now());
-        if (this.viewerImageRevealTimer) {
-          window.clearTimeout(this.viewerImageRevealTimer);
-        }
-        this.viewerImageRevealTimer = window.setTimeout(reveal, waitMs);
+        const scheduleReveal = () => {
+          if (!this.viewer.open || imageToken !== this.viewerToken) return;
+          // Establish the transparent original before starting its overlap with the preview.
+          target.getBoundingClientRect?.();
+          const waitMs = Math.max(0, Number(this.viewerImageRevealAfter || 0) - Date.now());
+          if (this.viewerImageRevealTimer) window.clearTimeout(this.viewerImageRevealTimer);
+          this.viewerImageRevealTimer = window.setTimeout(reveal, waitMs);
+        };
+        if (typeof target.decode === "function") {
+          target.decode().then(scheduleReveal).catch(() => this.viewerMediaFailed("image", event));
+        } else scheduleReveal();
       }
       this.releaseViewerSwap();
       if (kind === "image" && this.viewer.pair?.livephoto && !this.viewer.showVideo && this.playbackMode !== "pause") {
         this.scheduleViewerPlaybackStart();
       }
+    },
+
+    viewerOriginalTransitionEnded(event) {
+      if (event?.propertyName !== "opacity" || event.target?.dataset.viewerToken !== String(this.viewerToken)
+          || !this.viewer.open || !this.viewerImageReady) return;
+      this.cancelViewerPreviewRetirement();
+      this.viewerPreviewRetired = true;
     },
 
     viewerMediaFailed(kind, event) {
@@ -5450,10 +5463,6 @@ function galleryApp(initialSettings = {}) {
 
     viewerMediaStyle() {
       return `transform: translate3d(${this.viewerOffsetX}px, ${this.viewerOffsetY}px, 0) scale(${this.viewerZoom});`;
-    },
-
-    viewerShouldShowImageWash() {
-      return !!(this.viewer.pair?.image && !this.viewerImageReady && !(this.viewer.showVideo && this.viewer.pair?.livephoto));
     },
 
     viewerShouldShowOriginalLoading() {
@@ -5559,7 +5568,11 @@ function galleryApp(initialSettings = {}) {
     },
 
     viewerNeighborStyle(direction) {
-      return `transform: translate3d(0, ${this.viewerOffsetY + direction * window.innerHeight}px, 0);`;
+      const url = this.viewerNeighborUrl(direction);
+      return {
+        transform: `translate3d(0, ${this.viewerOffsetY + direction * window.innerHeight}px, 0)`,
+        backgroundImage: url ? `url(${JSON.stringify(url)})` : "none",
+      };
     },
 
     cancelViewerSwipe() {
@@ -5588,7 +5601,7 @@ function galleryApp(initialSettings = {}) {
       this.viewerSwipeFinish = commit;
       this.viewerSwipeCancelAnimations = () => animations.forEach(animation => animation.cancel());
       if (!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
-        document.querySelectorAll(".viewer-stage-image, .viewer-stage-preview, .viewer-stage-loading-wash, .viewer-video, .viewer-stage-neighbor").forEach(node => {
+        document.querySelectorAll(".viewer-stage-image, .viewer-stage-preview, .viewer-video, .viewer-stage-neighbor").forEach(node => {
           if (!node.animate) return;
           const neighbor = Number(node.dataset.neighbor || 0);
           const start = this.viewerOffsetY + neighbor * height;
@@ -5604,8 +5617,13 @@ function galleryApp(initialSettings = {}) {
       this.viewerSwipeTimer = window.setTimeout(commit, 210);
     },
 
+    viewerTrackpadOffset(distance) {
+      const limit = Math.min(150, window.innerHeight * 0.2);
+      return Math.sign(distance) * limit * (1 - Math.exp(-Math.abs(distance) * 0.5 / limit));
+    },
+
     viewerEdgeOffset(distance) {
-      return Math.sign(distance) * 80 * (1 - Math.exp(-Math.abs(distance) / 220));
+      return Math.sign(distance) * 36 * (1 - Math.exp(-Math.abs(distance) / 150));
     },
 
     cancelViewerEdgeBounce() {
@@ -5622,7 +5640,7 @@ function galleryApp(initialSettings = {}) {
       this.viewerTransitionEnabled = true;
       if (!offset || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
       const animations = Array.from(document.querySelectorAll(
-        ".viewer-stage-image, .viewer-stage-preview, .viewer-stage-loading-wash, .viewer-video",
+        ".viewer-stage-image, .viewer-stage-preview, .viewer-video",
       )).filter(node => typeof node.animate === "function").map(node => node.animate([
         { transform: `translate3d(0, ${offset}px, 0) scale(1)`, offset: 0 },
         { transform: `translate3d(0, ${-offset * 0.12}px, 0) scale(1)`, offset: 0.65 },
@@ -5658,7 +5676,7 @@ function galleryApp(initialSettings = {}) {
         return;
       }
       const previous = this.trackpadGesture;
-      if (previous?.axis === "y" && previous.fired && Date.now() - previous.lastAt > 140) {
+      if (previous?.axis === "y" && previous.fired && Date.now() - previous.lastAt > 220) {
         if (this.viewerSwipeFinish) this.viewerSwipeFinish();
         this.trackpadGesture = null;
       }
@@ -5672,13 +5690,13 @@ function galleryApp(initialSettings = {}) {
         this.viewerTransitionEnabled = false;
         this.viewerVerticalDragging = true;
         const canMove = gesture.y < 0 ? this.canShowPreviousPair() : this.canShowNextPair();
-        this.viewerOffsetY = canMove ? -gesture.y : this.viewerEdgeOffset(-gesture.y);
+        this.viewerOffsetY = canMove ? this.viewerTrackpadOffset(-gesture.y) : this.viewerEdgeOffset(-gesture.y * 0.35);
         const token = this.viewerToken;
         this.viewerEdgeWheelTimer = window.setTimeout(() => {
           this.viewerEdgeWheelTimer = null;
           if (token !== this.viewerToken || !this.viewer.open || gesture !== this.trackpadGesture) return;
           gesture.fired = true;
-          if (canMove && Math.abs(gesture.y) >= 48) this.finishViewerVerticalSwipe(gesture.y > 0 ? 1 : -1);
+          if (canMove && Math.abs(gesture.y) >= 120) this.finishViewerVerticalSwipe(gesture.y > 0 ? 1 : -1);
           else { this.viewerVerticalDragging = false; this.springViewerEdge(); }
         }, 100);
       } else if (gesture.axis === "x" && gesture.x >= 82) {

@@ -179,17 +179,20 @@ test('small slow drags, cancellations and pinch releases do not accidentally cha
 });
 
 
-test('trackpad follows wheel input immediately and commits after the stream settles despite the old lock', () => {
+test('trackpad resists short scrolls and requires a deliberate swipe before changing the image', () => {
   const {state,timers}=responsiveViewerState();
   state.viewerNavigationLockedUntil=Date.now()+1000;
   const wheel=deltaY=>({deltaX:0,deltaY,preventDefault(){}});
-  state.viewerWheel(wheel(50));assert.equal(state.viewerIndex,0);assert.equal(state.trackpadGesture.fired,false);
-  assert.equal(state.viewerOffsetY,-50);assert.equal(state.viewerTransitionEnabled,false);
-  state.viewerWheel(wheel(4));assert.equal(state.viewerIndex,0);assert.equal(state.viewerOffsetY,-54);
+  state.viewerWheel(wheel(50));
+  assert.ok(state.viewerOffsetY<0 && state.viewerOffsetY>-30);
+  assert.equal(state.viewerTransitionEnabled,false);
+  timers.get(state.viewerEdgeWheelTimer)();assert.equal(state.viewerIndex,0);assert.equal(state.viewerOffsetY,0);
+  state.trackpadGesture=null;
+  state.viewerWheel(wheel(150));
+  assert.ok(state.viewerOffsetY<0 && state.viewerOffsetY>-75);
   timers.get(state.viewerEdgeWheelTimer)();assert.equal(state.viewerIndex,1);
   state.viewerWheel(wheel(100));assert.equal(state.viewerIndex,1);
 });
-
 
 test('original image reports byte progress and cancels superseded requests and object URLs', () => {
   const requests=[],revoked=[];
@@ -295,3 +298,27 @@ test('wheel gesture identity remains stable through a reactive proxy', () => {
   gesture.fired=true;assert.equal(state.trackpadGesture.fired,true);
 });
 
+
+
+test('original decode finishes before reveal and the preview remains until the overlap ends', async () => {
+  let id=0,decode;const timers=new Map();
+  const state=app({window:{setTimeout:fn=>{timers.set(++id,fn);return id;},clearTimeout:key=>timers.delete(key)}});
+  state.viewer={open:true,pair:{image:{url:'original'}}};state.viewerToken=7;state.viewerImageLoading=true;
+  const target={dataset:{viewerToken:'7'},decode:()=>new Promise(resolve=>decode=resolve)};
+  state.viewerMediaLoaded('image',{target});
+  assert.equal(state.viewerImageReady,false);assert.equal(timers.size,0);
+  decode();await Promise.resolve();timers.get(state.viewerImageRevealTimer)();
+  assert.equal(state.viewerImageReady,true);assert.equal(state.viewerPreviewRetired,false);
+  state.viewerOriginalTransitionEnded({propertyName:'transform',target});assert.equal(state.viewerPreviewRetired,false);
+  state.viewerOriginalTransitionEnded({propertyName:'opacity',target:{dataset:{viewerToken:'6'}}});assert.equal(state.viewerPreviewRetired,false);
+  state.viewerOriginalTransitionEnded({propertyName:'opacity',target});assert.equal(state.viewerPreviewRetired,true);
+});
+
+test('back hint keeps its identity while fading after a completed menu gesture', () => {
+  let finish;const state=wideGestureState({setTimeout:fn=>{finish=fn;return 1;}});
+  state.compactViewport=true;state.touchBackLayer=()=> 'open-sidebar';
+  state.navigateTouchBack=()=>{};
+  state.compactTrackpadWheel({target:{closest:()=>null},deltaX:-150,deltaY:0,cancelable:true,preventDefault(){}});
+  assert.equal(state.backGestureLayer(),'open-sidebar');assert.equal(state.backGestureProgress(),1);
+  finish();assert.equal(state.backGestureProgress(),0);assert.equal(state.backGestureLayer(),'open-sidebar');
+});
