@@ -7,6 +7,8 @@ docker_app/.venv/
 docker_app/.pytest_cache/
 docker_app/**/__pycache__/
 docker_app/dist/
+dist/
+.build-cache/
 docker_app/review/
 docker_app/tests/
 test/
