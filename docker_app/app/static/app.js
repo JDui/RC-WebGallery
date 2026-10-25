@@ -4373,8 +4373,7 @@ function galleryApp(initialSettings = {}) {
       this.viewerPendingDirection = "";
       this.viewerNavigationLockedUntil = switchDirection ? Date.now() + 80 : 0;
       this.viewer = { open: true, pair, folder: entry.folder, showVideo: false };
-      if (switchDirection) this.showViewerPositionHint();
-      else this.hideViewerPositionHint();
+      this.showViewerPositionHint();
       this.cancelDeleteViewerPair();
       if (!preservePlayback) {
         this.playbackMode = "once";

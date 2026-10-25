@@ -2912,6 +2912,17 @@ html.is-interacting .detail-card {
     opacity: 0;
 }
 
+/* Keep the finished drawer concealed while Alpine hides it and clears its
+   scrolled/virtualized content. Removing .closing must never fade an empty shell in. */
+.detail-backdrop[data-modal-layer="detail"]:not(.open) {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.detail-backdrop[data-modal-layer="detail"]:not(.open):not(.closing) {
+    visibility: hidden;
+}
+
 .detail-shell,
 .inspector-shell,
 .source-preview-shell,
@@ -3531,8 +3542,8 @@ html.is-interacting .detail-card {
 
 .viewer-position-hint {
     position: fixed;
-    top: max(20px, env(safe-area-inset-top));
-    left: max(20px, env(safe-area-inset-left));
+    bottom: max(20px, env(safe-area-inset-bottom));
+    left: calc(max(20px, env(safe-area-inset-left)) + 44px);
     z-index: 6;
     padding: 7px 12px;
     border-radius: var(--radius-pill);
@@ -3574,8 +3585,26 @@ html.is-interacting .detail-card {
     transition: stroke-dasharray 120ms linear;
 }
 
+.viewer-original-loading-value.indeterminate {
+    transform-origin: 18px 18px;
+    animation: viewer-loading-spin 1s linear infinite;
+}
+
+.viewer-original-loading-label {
+    position: relative;
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 9px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+
+@keyframes viewer-loading-spin {
+    to { transform: rotate(360deg); }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .viewer-original-loading-value { transition: none; }
+    .viewer-original-loading-value.indeterminate { animation: none; }
 }
 
 .viewer-media.stage.dragging .viewer-stage-preview,

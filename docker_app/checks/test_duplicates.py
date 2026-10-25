@@ -2,7 +2,11 @@
 
 import ast
 import random
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
+from types import MethodType, SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
 
@@ -60,6 +64,194 @@ def add_folder(library, name, seeds, *, published=1, live=False, fingerprint=Tru
                 "values(?,?,?,?,?,?,?)",
                 (name, "livephoto", 1, "live.mov", "live.mov", "now", "now"),
             )
+
+
+def puller_method(name):
+    tree = ast.parse((Path(__file__).parents[1] / "app/services/puller.py").read_text(encoding="utf-8"))
+    manager_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PullManager")
+    method = next(node for node in manager_class.body if isinstance(node, ast.FunctionDef) and node.name == name)
+    namespace = {"Any": Any}
+    exec(compile(ast.Module(body=[method], type_ignores=[]), "puller-task", "exec"), namespace)
+    return namespace[name]
+
+
+@pytest.fixture
+def duplicate_manager(library):
+    db, _, service = library
+    manager = SimpleNamespace(
+        db=db, duplicate_service=service, indexer=Mock(), _background_checkpoint=Mock(),
+        _run_background_cleanup=Mock(), _remove_duplicate_pair_files=Mock(),
+        _refresh_delete_sidebar_counts=db.get_sidebar_count_cache,
+        _release=Mock(), _run_next_queued_task=Mock(),
+    )
+    for name in ("cleanup_duplicate_pairs", "_run_duplicate_cleanup", "_run_duplicate_trash", "_run_duplicate_resolve"):
+        setattr(manager, name, MethodType(puller_method(name), manager))
+
+    def trash(folder_name, **_):
+        db.delete_folder(folder_name)
+        return {"cleanup_queued": True}
+
+    manager.move_to_trash = trash
+    return manager
+
+
+def two_duplicate_groups(library):
+    for name, seed, published in (("A", 1, 1), ("B", 1, 2), ("C", 2, 3), ("D", 2, 4)):
+        add_folder(library, name, [seed], published=published)
+    groups = library[2].list_groups(force=True)["items"]
+    assert len(groups) == 2
+    return groups
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_cleanups_can_run_back_to_back_without_rescan(library, duplicate_manager, restart):
+    db, storage, service = library
+    groups = two_duplicate_groups(library)
+    plans = [(group["signature"], service.cleanup_plan(group["signature"])) for group in groups]
+    for index, (signature, plan) in enumerate(plans):
+        if restart and index:
+            service = DuplicateService(db, storage)
+            duplicate_manager.duplicate_service = service
+        duplicate_manager._run_duplicate_cleanup(signature, plan["folder_names"], plan["targets"])
+        assert db.list_task_runs(limit=1)[0]["status"] == "success"
+        result = service.list_groups()
+        assert not result["cache_stale"]
+        assert result["total"] == 1 - index
+        assert all(target["asset_id"] not in {row["id"] for row in db.list_all_assets()} for target in plan["targets"])
+
+
+@pytest.mark.parametrize("operation", ["trash", "resolve"])
+def test_deleting_duplicate_posts_keeps_other_groups_fresh(library, duplicate_manager, operation):
+    groups = two_duplicate_groups(library)
+    group, other = groups
+    service = library[2]
+    if operation == "trash":
+        duplicate_manager._run_duplicate_trash(group["signature"], group["items"][0]["folder_name"])
+    else:
+        keep, removed = [item["folder_name"] for item in group["items"]]
+        duplicate_manager._run_duplicate_resolve(group["signature"], keep, [removed])
+    assert library[0].list_task_runs(limit=1)[0]["status"] == "success"
+    assert not service.list_groups()["cache_stale"]
+    plan = service.cleanup_plan(other["signature"])
+    service.validate_cleanup_targets(other["signature"], plan["targets"])
+
+
+@pytest.mark.parametrize("external_change", ["unrelated_asset", "new_asset_in_group", "threshold"])
+def test_cleanup_does_not_certify_concurrent_library_changes(library, duplicate_manager, external_change):
+    db, _, service = library
+    groups = two_duplicate_groups(library)
+    signature = groups[0]["signature"]
+    plan = service.cleanup_plan(signature)
+    cleanup = duplicate_manager.cleanup_duplicate_pairs
+
+    def changing_cleanup(targets):
+        result = cleanup(targets)
+        if external_change == "threshold":
+            db.save_settings({"duplicate_image_threshold": 2})
+        else:
+            with db.connect() as conn:
+                if external_change == "unrelated_asset":
+                    conn.execute("update assets set width = width + 1 where folder_name = ?", (groups[1]["items"][0]["folder_name"],))
+                else:
+                    conn.execute(
+                        "insert into assets(folder_name,media_type,pair_index,filename,rel_path,created_at,updated_at) "
+                        "values(?, 'image', 99, 'new.png', 'new.png', 'now', 'now')", (plan["folder_names"][0],),
+                    )
+        return result
+
+    duplicate_manager.cleanup_duplicate_pairs = changing_cleanup
+    duplicate_manager._run_duplicate_cleanup(signature, plan["folder_names"], plan["targets"])
+    assert db.list_task_runs(limit=1)[0]["status"] == "success"
+    assert service.list_groups()["cache_stale"]
+    with pytest.raises(RuntimeError, match="重新检测"):
+        service.cleanup_plan(groups[1]["signature"])
+
+
+def test_revisiting_results_and_presentation_updates_do_not_expire_cache(library):
+    db, storage, service = library
+    groups = two_duplicate_groups(library)
+    db.set_folder_favorite("A", True)
+    db.save_settings({"app_title": "New title", "gallery_default_random": True})
+    with db.connect() as conn:
+        conn.execute("update folders set updated_at = 'later'")
+        conn.execute("update assets set updated_at = 'later', tiny_thumb_rel_path = 'derived.webp'")
+    # 模拟离开页面后读取其它信息，再重新进入与服务重启后的缓存读取。
+    db.list_folders()
+    db.get_settings()
+    db.get_sidebar_count_cache()
+    assert not service.list_groups()["cache_stale"]
+    restarted = DuplicateService(db, storage)
+    assert not restarted.list_groups()["cache_stale"]
+    plan = restarted.cleanup_plan(groups[0]["signature"])
+    restarted.validate_cleanup_targets(groups[0]["signature"], plan["targets"])
+
+
+def test_waiting_reader_uses_key_after_scan_commits(library, monkeypatch):
+    db, _, service = library
+    two_duplicate_groups(library)
+    started, sampled = threading.Event(), threading.Event()
+    main_thread = threading.get_ident()
+    cache_key = service._cache_key
+
+    def read_key(*args, **kwargs):
+        key = cache_key(*args, **kwargs)
+        if threading.get_ident() != main_thread:
+            sampled.set()
+        return key
+
+    def revisit():
+        started.set()
+        return service.list_groups()
+
+    monkeypatch.setattr(service, "_cache_key", read_key)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with service._cache_lock:
+            with db.connect() as conn:
+                conn.execute("update assets set duplicate_fingerprint = null")
+            pending = executor.submit(revisit)
+            assert started.wait(2)
+            # 旧实现此时已读到检测前的 key，随后等待同一个缓存锁。
+            sampled.wait(0.1)
+            assert not service.list_groups(force=True)["cache_stale"]
+        assert not pending.result(timeout=5)["cache_stale"]
+
+
+def test_rescan_waits_for_duplicate_deletion(library, duplicate_manager, monkeypatch):
+    service = library[2]
+    group = two_duplicate_groups(library)[0]
+    plan = service.cleanup_plan(group["signature"])
+    deleted, finish, scan_started, built = (threading.Event() for _ in range(4))
+    cleanup, build = duplicate_manager.cleanup_duplicate_pairs, service._build_groups
+
+    def waiting_cleanup(targets):
+        result = cleanup(targets)
+        deleted.set()
+        assert finish.wait(5)
+        return result
+
+    def tracked_build(*args):
+        built.set()
+        return build(*args)
+
+    def rescan():
+        scan_started.set()
+        return service.list_groups(force=True)
+
+    duplicate_manager.cleanup_duplicate_pairs = waiting_cleanup
+    monkeypatch.setattr(service, "_build_groups", tracked_build)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        task = executor.submit(duplicate_manager._run_duplicate_cleanup, group["signature"], plan["folder_names"], plan["targets"])
+        try:
+            assert deleted.wait(2)
+            scan = executor.submit(rescan)
+            assert scan_started.wait(2)
+            assert not built.wait(0.1)
+        finally:
+            finish.set()
+        task.result(timeout=5)
+        result = scan.result(timeout=5)
+    assert library[0].list_task_runs(limit=1)[0]["status"] == "success"
+    assert result["total"] == 1 and not result["cache_stale"]
 
 
 def test_maximum_matching_recovers_pairs_blocked_by_greedy(library):
@@ -282,15 +474,12 @@ def test_scan_changed_during_build_is_marked_stale(library, monkeypatch):
 @pytest.mark.parametrize("operation", ["cleanup", "resolve"])
 def test_background_tasks_abort_before_deletion_on_failed_validation(operation):
     # 隔离执行真实任务方法，避免启动依赖已移除旧下载脚本的整套采集服务。
-    tree = ast.parse((Path(__file__).parents[1] / "app/services/puller.py").read_text(encoding="utf-8"))
-    manager_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PullManager")
     method_name = f"_run_duplicate_{operation}"
-    method = next(node for node in manager_class.body if isinstance(node, ast.FunctionDef) and node.name == method_name)
-    namespace = {"Any": Any}
-    exec(compile(ast.Module(body=[method], type_ignores=[]), "puller-task", "exec"), namespace)
+    method = puller_method(method_name)
     manager = Mock()
     manager.db = Mock()
     manager.duplicate_service = Mock()
+    manager.duplicate_service.track_deletions.return_value = nullcontext(None)
     manager.duplicate_service.validate_cleanup_targets.side_effect = RuntimeError("计划过期")
     manager.duplicate_service.resolve_plan.side_effect = RuntimeError("计划过期")
     manager.cleanup_duplicate_pairs = Mock()
@@ -298,9 +487,11 @@ def test_background_tasks_abort_before_deletion_on_failed_validation(operation):
     manager._release = Mock()
     manager._run_next_queued_task = Mock()
     if operation == "cleanup":
-        namespace[method_name](manager, "signature", ["A", "B"], [])
+        method(manager, "signature", ["A", "B"], [])
+        manager.duplicate_service.validate_cleanup_targets.assert_called_once()
     else:
-        namespace[method_name](manager, "signature", "A", ["B"])
+        method(manager, "signature", "A", ["B"])
+        manager.duplicate_service.resolve_plan.assert_called_once()
     manager.cleanup_duplicate_pairs.assert_not_called()
     manager.move_to_trash.assert_not_called()
     assert manager.db.finish_task_run.call_args.args[1] == "failed"

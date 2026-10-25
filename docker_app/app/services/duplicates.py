@@ -5,9 +5,10 @@ import json
 import math
 import threading
 from collections import defaultdict, deque
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from functools import cmp_to_key
-from typing import Any
+from typing import Any, Iterator
 
 from app.db import Database
 from app.services.image_similarity import color_distance, hamming_distance, image_fingerprint, parse_fingerprint
@@ -21,7 +22,14 @@ MAX_HASH_DISTANCE = 32
 MAX_ASPECT_LOG_DISTANCE = 0.24
 LOW_CONTRAST_LIMIT = 12
 LOW_CONTRAST_COLOR_DISTANCE = 36
-DUPLICATE_CACHE_VERSION = 7
+DUPLICATE_CACHE_VERSION = 8
+
+
+@dataclass
+class DuplicateDeletion:
+    cache_key: str
+    threshold: int
+    expected_content: dict[str, list[dict[str, Any]]]
 
 
 @dataclass
@@ -89,6 +97,7 @@ class DuplicateService:
         self._cache_stale = True
         self._signature_aliases: dict[str, str] = {}
         self._cache_lock = threading.RLock()
+        self._operation_lock = threading.RLock()
 
     def invalidate_cache(self) -> None:
         """Drop derived URLs after a storage-layout change; keep ignore choices."""
@@ -102,24 +111,25 @@ class DuplicateService:
 
     def list_groups(self, include_ignored: bool = False, force: bool = False) -> dict[str, Any]:
         threshold = self._image_threshold()
-        cache_key = self._cache_key(threshold)
         if force:
-            source_signature = self.db.duplicate_content_signature(include_fingerprints=False)
-            rebuilt_groups = self._build_groups(threshold)
-            rebuilt_key = self._cache_key(threshold)
-            cache_key = rebuilt_key
-            if source_signature != self.db.duplicate_content_signature(include_fingerprints=False):
-                rebuilt_key += ":stale"
-            with self._cache_lock:
-                self._signature_aliases = {}
-                self._cached_groups = rebuilt_groups
-                self.db.set_duplicate_group_cache(rebuilt_key, self._cached_groups)
-                self._cache_signature = rebuilt_key
-                self._cache_updated_at = now_iso()
-                self._has_cache = True
-                self._cache_stale = cache_key != rebuilt_key
+            # 检测与重复项删除串行，避免相互覆盖刚生成的缓存。
+            with self._operation_lock:
+                source_signature = self.db.duplicate_content_signature(include_fingerprints=False)
+                rebuilt_groups = self._build_groups(threshold)
+                rebuilt_key = self._cache_key(threshold)
+                if source_signature != self.db.duplicate_content_signature(include_fingerprints=False):
+                    rebuilt_key += ":stale"
+                with self._cache_lock:
+                    self._signature_aliases = {}
+                    self._cached_groups = rebuilt_groups
+                    self.db.set_duplicate_group_cache(rebuilt_key, self._cached_groups)
+                    self._cache_signature = rebuilt_key
+                    self._cache_updated_at = now_iso()
+                    self._has_cache = True
 
         with self._cache_lock:
+            # 等待检测完成后再读取当前标记，不能拿检测开始前的状态判定新结果过期。
+            cache_key = self._cache_key(self._image_threshold())
             if not self._cache_signature:
                 cached = self.db.get_latest_duplicate_group_cache()
                 if cached and str(cached["cache_key"]).startswith(f"v{DUPLICATE_CACHE_VERSION}:"):
@@ -185,7 +195,7 @@ class DuplicateService:
             "remaining": payload["active_total"],
         }
 
-    def remove_folders(self, folder_names: list[str]) -> dict[str, Any]:
+    def remove_folders(self, folder_names: list[str], change: DuplicateDeletion | None = None) -> dict[str, Any]:
         self._ensure_operation_cache()
         removed = {str(name) for name in folder_names if str(name)}
         if not removed:
@@ -203,7 +213,7 @@ class DuplicateService:
                     str(rebuilt[0]["signature"]) if len(rebuilt) == 1 else ""
                 )
             self._cached_groups = groups
-            self._persist_incremental_cache()
+            self._persist_incremental_cache(change)
             return self.list_groups()
 
     def cleanup_plan(self, signature: str) -> dict[str, Any]:
@@ -294,7 +304,7 @@ class DuplicateService:
                 checked.add(asset_id)
         self._require_fresh_cache()
 
-    def complete_cleanup(self, signature: str) -> dict[str, Any]:
+    def complete_cleanup(self, signature: str, change: DuplicateDeletion | None = None) -> dict[str, Any]:
         self._ensure_operation_cache()
         with self._cache_lock:
             resolved = self._resolve_signature(signature)
@@ -305,11 +315,36 @@ class DuplicateService:
             self._signature_aliases[str(signature)] = ""
             if resolved and resolved != str(signature):
                 self._signature_aliases[resolved] = ""
-            self._persist_incremental_cache()
+            self._persist_incremental_cache(change)
             return self.list_groups()
 
-    def _persist_incremental_cache(self) -> None:
-        # 局部处理不能替尚未重新检测的其它图库变化背书。
+    @contextmanager
+    def track_deletions(
+        self, *, asset_ids: list[int] | None = None, folder_names: list[str] | None = None,
+    ) -> Iterator[DuplicateDeletion | None]:
+        with self._operation_lock:
+            self._ensure_operation_cache()
+            with self._cache_lock:
+                threshold = self._image_threshold()
+                content = self.db.duplicate_content_snapshot()
+                key = self._cache_key(threshold, snapshot=content)
+                change = None
+                if self._has_cache and key == self._cache_signature:
+                    removed_ids, removed_folders = set(asset_ids or []), set(folder_names or [])
+                    expected = {
+                        table: [row for row in rows if row["folder_name"] not in removed_folders
+                                and (table != "assets" or int(row["id"]) not in removed_ids)]
+                        for table, rows in content.items()
+                    }
+                    change = DuplicateDeletion(key, threshold, expected)
+            yield change
+
+    def _persist_incremental_cache(self, change: DuplicateDeletion | None = None) -> None:
+        # 只认可本次已确认删除的记录；外部新增、替换或设置变化仍使缓存过期。
+        if change and change.cache_key == self._cache_signature and change.threshold == self._image_threshold():
+            content = self.db.duplicate_content_snapshot()
+            if content == change.expected_content:
+                self._cache_signature = self._cache_key(change.threshold, snapshot=content)
         self.db.set_duplicate_group_cache(self._cache_signature, self._cached_groups)
         self._cache_updated_at = now_iso()
         self._has_cache = True
@@ -413,8 +448,8 @@ class DuplicateService:
         except (TypeError, ValueError):
             return 2
 
-    def _cache_key(self, threshold: int) -> str:
-        return f"v{DUPLICATE_CACHE_VERSION}:{threshold}:{self.db.duplicate_content_signature()}"
+    def _cache_key(self, threshold: int, *, snapshot: dict[str, list[dict[str, Any]]] | None = None) -> str:
+        return f"v{DUPLICATE_CACHE_VERSION}:{threshold}:{self.db.duplicate_content_signature(snapshot=snapshot)}"
 
     def _duplicate_assets(self, folders: dict[str, dict[str, Any]]) -> list[DuplicateAsset]:
         output = []

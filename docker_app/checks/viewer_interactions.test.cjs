@@ -348,3 +348,15 @@ test('trackpad commits on deceleration without waiting through the inertial tail
   state.viewerWheel(wheel(10));assert.equal(state.viewerIndex,1);
   state.viewerWheel(wheel(5));assert.equal(state.viewerIndex,1);
 });
+
+test('position hint appears on first open and gesture navigation and cancels the older hide timer', () => {
+  const {state,timers}=responsiveViewerState();
+  assert.equal(state.viewerPositionHintVisible,true);
+  const oldTimer=state.viewerPositionHintTimer;
+  state.showNextPair(true);
+  assert.equal(state.viewerIndex,1);
+  assert.equal(state.viewerPositionHintVisible,true);
+  assert.equal(timers.has(oldTimer),false);
+  timers.get(state.viewerPositionHintTimer)();
+  assert.equal(state.viewerPositionHintVisible,false);
+});

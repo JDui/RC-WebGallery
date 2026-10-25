@@ -958,8 +958,9 @@ class PullManager:
             f"开始删除重复贴文 {folder_name}",
         )
         try:
-            result = self.move_to_trash(folder_name, reason="重复内容")
-            duplicate_payload = self.duplicate_service.remove_folders([folder_name])
+            with self.duplicate_service.track_deletions(folder_names=[folder_name]) as change:
+                result = self.move_to_trash(folder_name, reason="重复内容")
+                duplicate_payload = self.duplicate_service.remove_folders([folder_name], change=change)
             details = {
                 "folder_name": folder_name,
                 "cleanup_queued": bool(result.get("cleanup_queued")),
@@ -987,16 +988,17 @@ class PullManager:
         )
         removed = []
         try:
-            current_folders = self.duplicate_service.resolve_plan(signature, keep_folder_name)
-            if set(folder_names) != set(current_folders) - {keep_folder_name}:
-                raise RuntimeError("仅保留贴文的处理范围已变化，请重新检测后再处理")
-            for folder_name in folder_names:
-                try:
-                    self.move_to_trash(folder_name, reason=f"重复内容，保留 {keep_folder_name}")
-                except RuntimeError:
-                    continue
-                removed.append(folder_name)
-            duplicate_payload = self.duplicate_service.remove_folders(removed)
+            with self.duplicate_service.track_deletions(folder_names=folder_names) as change:
+                current_folders = self.duplicate_service.resolve_plan(signature, keep_folder_name)
+                if set(folder_names) != set(current_folders) - {keep_folder_name}:
+                    raise RuntimeError("仅保留贴文的处理范围已变化，请重新检测后再处理")
+                for folder_name in folder_names:
+                    try:
+                        self.move_to_trash(folder_name, reason=f"重复内容，保留 {keep_folder_name}")
+                    except RuntimeError:
+                        continue
+                    removed.append(folder_name)
+                duplicate_payload = self.duplicate_service.remove_folders(removed, change=change)
             details = {
                 "kept": keep_folder_name,
                 "removed": removed,
@@ -1023,9 +1025,10 @@ class PullManager:
             "开始清理重复图片",
         )
         try:
-            self.duplicate_service.validate_cleanup_targets(signature, targets)
-            result = self.cleanup_duplicate_pairs(targets)
-            duplicate_payload = self.duplicate_service.complete_cleanup(signature)
+            with self.duplicate_service.track_deletions(asset_ids=[int(target["asset_id"]) for target in targets]) as change:
+                self.duplicate_service.validate_cleanup_targets(signature, targets)
+                result = self.cleanup_duplicate_pairs(targets)
+                duplicate_payload = self.duplicate_service.complete_cleanup(signature, change=change)
             details = {
                 "removed": result["removed"],
                 "duplicates_remaining": duplicate_payload["active_total"],

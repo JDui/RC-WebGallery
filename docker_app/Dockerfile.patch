@@ -1,5 +1,5 @@
-# Patch package: reuse the installed browser/media runtime from v12.8.
+# Patch package: reuse the installed browser/media runtime from v12.9.
 # The resulting docker-save archive includes its base layers and loads alone.
-ARG PATCH_BASE_IMAGE=zzs-bili-gallery:12.8-amd64
+ARG PATCH_BASE_IMAGE=zzs-bili-gallery:12.9-amd64
 FROM ${PATCH_BASE_IMAGE}
 COPY docker_app /opt/zzs/docker_app

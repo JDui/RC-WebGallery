@@ -1919,18 +1919,52 @@ class Database:
         with self.connect() as conn:
             conn.execute("delete from duplicate_group_cache")
 
-    def duplicate_content_signature(self, *, include_fingerprints: bool = True) -> str:
-        digest = hashlib.sha256()
+    @staticmethod
+    def _duplicate_content_values(table: str, row: Any) -> dict[str, Any]:
+        values = dict(row)
+        # 时间戳、收藏和派生图维护不改变判重依据；媒体类型以 assets 实际记录为准。
+        ignored = {"created_at", "updated_at"}
+        if table == "folders":
+            ignored.update(("is_favorite", "has_images", "has_livephoto"))
+        else:
+            ignored.update(("thumb_rel_path", "small_thumb_rel_path", "tiny_thumb_rel_path", "cover_rel_path", "reverse_rel_path"))
+        return {key: value for key, value in values.items() if key not in ignored}
+
+    def duplicate_content_snapshot(self) -> dict[str, list[dict[str, Any]]]:
+        # 同一读事务取得一致快照，用记录差异确认本次删除，不为其它变化更新缓存标记。
         with self.connect() as conn:
-            # 流式摘要包含媒体及贴文元数据，避免数量不变时替换图片仍命中旧缓存。
+            conn.execute("begin")
+            return {
+                table: [self._duplicate_content_values(table, row) for row in conn.execute(f"select * from {table} order by {order}")]
+                for table, order in (("assets", "id"), ("folders", "folder_name"))
+            }
+
+    def duplicate_content_signature(
+        self,
+        *,
+        include_fingerprints: bool = True,
+        snapshot: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> str:
+        digest = hashlib.sha256()
+
+        def add_rows(table: str, rows: Any) -> None:
+            digest.update(table.encode("utf-8"))
+            for row in rows:
+                values = self._duplicate_content_values(table, row)
+                if not include_fingerprints and table == "assets":
+                    values.pop("duplicate_fingerprint", None)
+                digest.update(dumps_json(values).encode("utf-8"))
+                digest.update(b"\n")
+
+        if snapshot is not None:
+            for table in ("assets", "folders"):
+                add_rows(table, snapshot[table])
+            return digest.hexdigest()
+        with self.connect() as conn:
+            conn.execute("begin")
+            # 普通检查仍流式读取，避免数量不变时替换图片仍命中旧缓存。
             for table, order in (("assets", "id"), ("folders", "folder_name")):
-                digest.update(table.encode("utf-8"))
-                for row in conn.execute(f"select * from {table} order by {order}"):
-                    values = dict(row)
-                    if not include_fingerprints and table == "assets":
-                        values.pop("duplicate_fingerprint", None)
-                    digest.update(dumps_json(values).encode("utf-8"))
-                    digest.update(b"\n")
+                add_rows(table, conn.execute(f"select * from {table} order by {order}"))
         return digest.hexdigest()
 
     def set_folder_favorite(self, folder_name: str, is_favorite: bool) -> None:
