@@ -212,8 +212,11 @@ function galleryApp(initialSettings = {}) {
   let mediaLongPressStart = null;
   let mediaLongPressOpened = false;
   let mediaMenuAnchor = null;
+  let settingsGroupAnimation = null;
+  let settingsGroupToken = 0;
   return {
     currentView: "gallery",
+    navigationView: "gallery",
     touchBackGesture: null,
     touchBackProgress: 0,
     trackpadBackProgress: 0,
@@ -541,6 +544,15 @@ function galleryApp(initialSettings = {}) {
     videoFeedHintVisible: false,
     videoFeedHintTimer: null,
     videoFeedDirection: 1,
+    videoFeedPending: null,
+    videoFeedRetiring: null,
+    videoFeedSwitching: false,
+    videoFeedReadyTimer: null,
+    videoFeedRetireTimer: null,
+    videoFeedPositionTotal: null,
+    videoNoteFullscreen: false,
+    videoNoteClosing: false,
+    videoNoteCloseTimer: null,
     subscriptionPullPending: false,
     allSubscriptionsPullPending: false,
     compactViewport: false,
@@ -550,6 +562,7 @@ function galleryApp(initialSettings = {}) {
     pendingRestoreTrashId: null,
     clearDataConfirmStep: 0,
     validateConfirmStep: 0,
+    validateActionsRevealed: false,
     rebuildIndexConfirmStep: 0,
     thumbnailRebuildConfirmLevel: null,
     resetSubscriptionIconsConfirmStep: 0,
@@ -1035,7 +1048,7 @@ function galleryApp(initialSettings = {}) {
     currentFullscreenElement() {
       return document.fullscreenElement || document.webkitFullscreenElement
         || (webkitFullscreenVideo?.webkitDisplayingFullscreen ? webkitFullscreenVideo : null)
-        || (this.$refs?.xhsNoteVideo?.webkitDisplayingFullscreen ? this.$refs.xhsNoteVideo : null);
+        || (this.currentVideoNotePlayer()?.webkitDisplayingFullscreen ? this.currentVideoNotePlayer() : null);
     },
 
     exitCurrentFullscreen() {
@@ -1055,7 +1068,7 @@ function galleryApp(initialSettings = {}) {
       if (this.mediaContextMenu.open) return "media-menu";
       if (this.viewer.open || (includeClosing && this.viewerClosing)) return "viewer";
       if (this.sourcePreview.open) return "source";
-      if (this.videoNote.open) return "video-note";
+      if (this.videoNote.open || (includeClosing && this.videoNoteClosing)) return "video-note";
       if (this.taskInspector.open) return "task";
       if (this.detail.open || (includeClosing && this.detailClosing)) return "detail";
       return "";
@@ -1066,6 +1079,7 @@ function galleryApp(initialSettings = {}) {
       // The viewer handles its own image navigation, zooming and horizontal actions.
       if (layer === "viewer") return keyboard && this.viewer.open ? "viewer" : "";
       if (layer === "detail" && this.detailClosing) return "";
+      if (layer === "video-note" && this.videoNoteClosing) return "";
       if (layer) return layer;
       if (this.sidebarDrawerOpen) return "sidebar";
       if (this.compactViewport) return "open-sidebar";
@@ -1094,6 +1108,7 @@ function galleryApp(initialSettings = {}) {
       document.addEventListener("touchend", event => this.endRandomPull(event), { capture: true, passive: false });
       document.addEventListener("touchcancel", () => this.cancelRandomPull(), { capture: true, passive: true });
       const fullscreenChanged = () => {
+        this.videoNoteFullscreen = !!this.currentFullscreenElement()?.classList?.contains('xhs-video-shell');
         this.cancelTouchBack();
         this.syncModalAccessibility();
       };
@@ -1363,12 +1378,19 @@ function galleryApp(initialSettings = {}) {
 
     closeGalleryLayers() {
       this.closeMediaContextMenu();
-      this.closeVideoNote();
+      this.closeVideoNote(true);
       this.closeViewer(true);
       this.closeDetail(true);
     },
 
     scrollViewTop() {
+      if (this.currentView !== 'settings') {
+        settingsGroupToken += 1;
+        settingsGroupAnimation?.cancel();
+        settingsGroupAnimation = null;
+      }
+      const fadeWithinView = this.navigationView === this.currentView && ['gallery', 'recent-updates'].includes(this.currentView);
+      this.navigationView = this.currentView;
       const workspace = document.querySelector(".workspace");
       if (workspace) {
         workspace.scrollTop = 0;
@@ -1379,6 +1401,7 @@ function galleryApp(initialSettings = {}) {
       document.body.scrollTop = 0;
       this.updateHeaderState(0);
       this.scheduleFixedLayoutMetrics();
+      if (fadeWithinView) this.$nextTick(() => this.fadeContent(document.querySelector('.view-stack > section:not([inert])')));
     },
 
     resetGalleryWindowToTop() {
@@ -1437,7 +1460,13 @@ function galleryApp(initialSettings = {}) {
     },
 
     releaseGalleryMinHeight() {
+      const token = this.galleryRenderToken;
       window.setTimeout(() => {
+        if (token !== this.galleryRenderToken) return;
+        if (this.galleryLoading || this.galleryBatchQueue.length) {
+          this.releaseGalleryMinHeight();
+          return;
+        }
         this.galleryMinHeight = 0;
       }, 120);
     },
@@ -2543,8 +2572,30 @@ function galleryApp(initialSettings = {}) {
       }
     },
 
-    setSettingsGroup(group) {
+    async setSettingsGroup(group) {
+      const token = ++settingsGroupToken;
+      settingsGroupAnimation?.cancel();
+      settingsGroupAnimation = null;
+      if (this.settingsGroup === group) return;
+      const grid = document.querySelector('.settings-grid');
+      if (grid?.animate && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+        settingsGroupAnimation = grid.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 90, fill: 'forwards' });
+        await settingsGroupAnimation.finished.catch(() => {});
+        if (token !== settingsGroupToken) return;
+      }
       this.settingsGroup = group;
+      this.scrollViewTop();
+      await this.$nextTick();
+      if (token !== settingsGroupToken) return;
+      settingsGroupAnimation?.cancel();
+      settingsGroupAnimation = null;
+      this.fadeContent(grid, 0);
+    },
+
+    fadeContent(element, from = 0.35) {
+      if (!element?.animate || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+      element.getAnimations().forEach(animation => animation.cancel());
+      element.animate([{ opacity: from }, { opacity: 1 }], { duration: 180, easing: 'ease-out' });
     },
 
     subscriptionPanelIndex() {
@@ -3043,6 +3094,7 @@ function galleryApp(initialSettings = {}) {
         this.measureGalleryWindow();
         this.observeGalleryCards();
         this.observeGalleryLoadSentinel();
+        if (direction !== 'next' && this.currentView === 'gallery') this.fadeContent(document.querySelector('.gallery-layout'));
       });
     },
 
@@ -3710,9 +3762,10 @@ function galleryApp(initialSettings = {}) {
     },
 
     async stepVideoFeed(direction) {
-      if (!this.videoNote.open || !this.videoFeed.active || this.videoFeed.busy) return;
+      if (!this.videoNote.open || this.videoNote.loading || !this.videoNote.video || !this.videoFeed.active || this.videoFeed.busy) return;
       const token = ++this.videoFeedToken;
       this.videoFeed.busy = true;
+      this.videoFeedPositionTotal = this.videoFeed.items.length;
       this.videoFeedMessage = '';
       this.videoFeedDirection = direction;
       try {
@@ -3738,23 +3791,138 @@ function galleryApp(initialSettings = {}) {
         if (token !== this.videoFeedToken || !this.videoNote.open) return;
         if (!payload.videos?.length) {
           this.videoFeedMessage = '这条视频暂时无法播放，请重试或切换下一条';
-          this.videoFeed.items.splice(index, 1);
-          if (direction < 0) this.videoFeed.index -= 1;
+          await this.fadeVideoFeedCaption(() => {
+            this.videoFeed.items.splice(index, 1);
+            if (direction < 0) this.videoFeed.index -= 1;
+            this.videoFeedPositionTotal = null;
+          }, token);
           return;
         }
         this.cacheDetailPayload(item.folder_name, payload);
-        this.videoFeed.index = index;
         this.pendingTrashFolder = null;
-        this.$refs?.xhsNoteVideo?.pause();
-        // Recreate the player so the previous source cannot continue playing.
-        this.videoNote.video = null;
-        await this.$nextTick();
-        if (token !== this.videoFeedToken || !this.videoNote.open) return;
-        this.openVideoNote(payload);
+        // Mount the next player behind the current frame. Commit only after it can render.
+        this.videoFeedPending = { payload, index, token };
+        this.videoFeedReadyTimer = window.setTimeout(() => this.failPendingVideo(token), 15000);
+        this.$nextTick(() => {
+          const video = document.querySelector('.xhs-video-shell video:not(.is-retiring):not(.is-current)') || this.currentVideoNotePlayer();
+          if (video?.readyState >= 2) this.videoNotePlayerReady({ key: this.videoNotePlayerKey(payload.folder, payload.videos[0]) });
+        });
       } catch (error) {
         if (token === this.videoFeedToken) this.videoFeedMessage = error.message || '读取视频失败，请重试';
       } finally {
-        if (token === this.videoFeedToken) this.videoFeed.busy = false;
+        if (token === this.videoFeedToken && !this.videoFeedPending) {
+          if (this.videoFeedPositionTotal !== null && this.videoFeedPositionTotal !== this.videoFeed.items.length) {
+            await this.fadeVideoFeedCaption(() => { this.videoFeedPositionTotal = null; }, token);
+          }
+          if (token !== this.videoFeedToken) return;
+          this.videoFeed.busy = false;
+          this.videoFeedPositionTotal = null;
+        }
+      }
+    },
+
+    videoNotePlayerKey(folder = this.videoNote.folder, video = this.videoNote.video) {
+      return `${folder?.folder_name || ''}::${video?.url || ''}`;
+    },
+
+    videoFeedPositionText() {
+      const total = this.videoFeedPositionTotal ?? this.videoFeed.items.length;
+      return `${this.videoFeed.index + 1} / ${total}${this.videoFeed.page < this.videoFeed.totalPages ? '+' : ''}`;
+    },
+
+    videoNotePlayers() {
+      if (!this.videoNote.open && !this.videoNoteClosing) return [];
+      const players = [];
+      if (this.videoFeedRetiring) players.push(this.videoFeedRetiring);
+      if (this.videoNote.video) players.push({ key: this.videoNotePlayerKey(), video: this.videoNote.video });
+      const pending = this.videoFeedPending?.payload;
+      if (pending) {
+        const key = this.videoNotePlayerKey(pending.folder, pending.videos[0]);
+        if (!players.some(player => player.key === key)) players.push({ key, video: pending.videos[0] });
+      }
+      return players;
+    },
+
+    currentVideoNotePlayer() {
+      return document.querySelector('.xhs-video-shell video.is-current');
+    },
+
+    async toggleVideoNoteFullscreen() {
+      const shell = document.querySelector('.xhs-video-shell');
+      if (!shell || !this.videoNote.open) return;
+      if (this.currentFullscreenElement()) { this.exitCurrentFullscreen(); return; }
+      try {
+        if (shell.requestFullscreen) await shell.requestFullscreen();
+        else if (shell.webkitRequestFullscreen) await shell.webkitRequestFullscreen();
+        else this.videoNote.error = '此浏览器暂不支持整页全屏，可使用播放器的全屏按钮。';
+      } catch (_error) {
+        this.videoNote.error = '全屏未能打开，请再次点击全屏按钮。';
+      }
+    },
+
+    async failPendingVideo(token) {
+      if (token !== this.videoFeedToken || !this.videoFeedPending) return;
+      window.clearTimeout(this.videoFeedReadyTimer);
+      this.videoFeedReadyTimer = null;
+      this.videoFeedPending = null;
+      this.videoFeedMessage = '这条视频加载失败，请重试或切换其他视频';
+      if (this.videoFeedPositionTotal !== null && this.videoFeedPositionTotal !== this.videoFeed.items.length) {
+        await this.fadeVideoFeedCaption(() => { this.videoFeedPositionTotal = null; }, token);
+      }
+      if (token !== this.videoFeedToken) return;
+      this.videoFeedSwitching = false;
+      this.videoFeed.busy = false;
+      this.videoFeedPositionTotal = null;
+    },
+
+    async fadeVideoFeedCaption(update, token) {
+      this.videoFeedSwitching = true;
+      if (!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+        await new Promise(resolve => window.setTimeout(resolve, 120));
+      }
+      if (token !== this.videoFeedToken || !this.videoNote.open) return false;
+      update();
+      await this.$nextTick();
+      if (token !== this.videoFeedToken || !this.videoNote.open) return false;
+      this.videoFeedSwitching = false;
+      return true;
+    },
+
+    async videoNotePlayerReady(player) {
+      const pending = this.videoFeedPending;
+      if (!pending || pending.committing || player.key !== this.videoNotePlayerKey(pending.payload.folder, pending.payload.videos[0])) return;
+      pending.committing = true;
+      window.clearTimeout(this.videoFeedReadyTimer);
+      this.videoFeedReadyTimer = null;
+      this.videoFeedSwitching = true;
+      const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      if (!reduced) await new Promise(resolve => window.setTimeout(resolve, 120));
+      if (pending.token !== this.videoFeedToken || this.videoFeedPending !== pending || !this.videoNote.open) return;
+      this.currentVideoNotePlayer()?.pause();
+      this.videoFeedRetiring = this.videoNote.video ? { key: this.videoNotePlayerKey(), video: this.videoNote.video } : null;
+      this.videoFeed.index = pending.index;
+      this.videoFeedPositionTotal = null;
+      this.videoNote = { open: true, loading: false, folder: pending.payload.folder, video: pending.payload.videos[0], error: '' };
+      this.videoFeedPending = null;
+      await this.$nextTick();
+      if (pending.token !== this.videoFeedToken || !this.videoNote.open) return;
+      this.videoFeedSwitching = false;
+      this.videoFeed.busy = false;
+      this.startVideoNote();
+      if (this.narrowViewport) this.showVideoFeedHint();
+      window.clearTimeout(this.videoFeedRetireTimer);
+      this.videoFeedRetireTimer = window.setTimeout(() => {
+        this.videoFeedRetiring = null;
+        this.videoFeedRetireTimer = null;
+      }, reduced ? 0 : 240);
+    },
+
+    videoNotePlayerFailed(player) {
+      const pending = this.videoFeedPending;
+      if (pending && player.key === this.videoNotePlayerKey(pending.payload.folder, pending.payload.videos[0])) {
+        this.failPendingVideo(pending.token);
+      } else if (player.key === this.videoNotePlayerKey()) {
+        this.videoNote.error = '视频无法播放，请检查归档文件或重试媒体。';
       }
     },
 
@@ -3762,7 +3930,7 @@ function galleryApp(initialSettings = {}) {
       this.videoFeedGesture = null;
       if (!(this.compactViewport || this.narrowViewport) || !this.videoFeed.active || event.touches.length !== 1 || event.target.closest('button, a, input, header, .video-feed-caption')) return;
       const touch = event.touches[0];
-      const player = this.$refs?.xhsNoteVideo;
+      const player = this.currentVideoNotePlayer();
       if (player && touch.clientY > player.getBoundingClientRect().bottom - 72) return;
       this.videoFeedGesture = { x: touch.clientX, y: touch.clientY };
     },
@@ -3907,6 +4075,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     openVideoNoteLoading(folder) {
+      this.cancelVideoNoteClose();
       this.closeDetail(true);
       this.pauseCurrentViewerMedia(true);
       this.detail = { open: false, pairs: [], folder: folder || null, videos: [] };
@@ -3920,6 +4089,7 @@ function galleryApp(initialSettings = {}) {
       const standalone = this.isStandaloneVideoFolder(folder)
         || (isXhs && payload?.videos?.length > 0 && !folder?.has_livephoto);
       if (!standalone || !payload?.videos?.length) return false;
+      this.cancelVideoNoteClose();
       this.closeDetail(true);
       this.pauseCurrentViewerMedia(true);
       this.videoNote = { open: true, loading: false, folder, video: payload.videos[0], error: '' };
@@ -3942,7 +4112,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     startVideoNote() {
-      const video = this.$refs?.xhsNoteVideo;
+      const video = this.currentVideoNotePlayer();
       if (!video || !this.videoNote.open) return;
       const configuredVolume = Number(this.settings?.video_default_volume);
       const volumePercent = Number.isFinite(configuredVolume) ? configuredVolume : 0;
@@ -3953,14 +4123,32 @@ function galleryApp(initialSettings = {}) {
       video.defaultMuted = video.muted;
       const playing = video.play();
       playing?.catch(() => {
-        if (this.videoNote.open && video === this.$refs?.xhsNoteVideo)
+        if (this.videoNote.open && video === this.currentVideoNotePlayer())
           this.videoNote.error = volume > 0
             ? '浏览器阻止了带声音的自动播放，请点击播放器中的播放按钮。'
             : '自动播放未能开始，请点击播放器中的播放按钮。';
       });
     },
 
-    closeVideoNote() {
+    cancelVideoNoteClose() {
+      window.clearTimeout(this.videoNoteCloseTimer);
+      this.videoNoteCloseTimer = null;
+      this.videoNoteClosing = false;
+    },
+
+    closeVideoNote(skipAnimation = false) {
+      if (!this.videoNote.open && !this.videoNoteClosing) return;
+      this.cancelVideoNoteClose();
+      if (this.videoNoteFullscreen) this.exitCurrentFullscreen();
+      this.videoNoteFullscreen = false;
+      window.clearTimeout(this.videoFeedReadyTimer);
+      window.clearTimeout(this.videoFeedRetireTimer);
+      this.videoFeedReadyTimer = null;
+      this.videoFeedRetireTimer = null;
+      this.videoFeedPending = null;
+      this.videoFeedRetiring = null;
+      this.videoFeedSwitching = false;
+      this.videoFeedPositionTotal = null;
       if (this.videoFeedHintTimer) window.clearTimeout(this.videoFeedHintTimer);
       this.videoFeedHintTimer = null;
       this.videoFeedHintVisible = false;
@@ -3971,13 +4159,21 @@ function galleryApp(initialSettings = {}) {
       this.videoFeed.busy = false;
       this.videoFeedGesture = null;
       this.videoFeedMessage = '';
-      const video = this.$refs?.xhsNoteVideo;
-      if (video) {
-        video.pause();
-        video.removeAttribute('src');
-        video.load();
-      }
-      this.videoNote = { open: false, loading: false, folder: null, video: null, error: '' };
+      const video = this.currentVideoNotePlayer();
+      video?.pause();
+      this.videoNoteClosing = !skipAnimation && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      this.videoNote = { ...this.videoNote, open: false, loading: false, error: '' };
+      const finish = () => {
+        if (this.videoNote.open) return;
+        video?.removeAttribute('src');
+        video?.load();
+        this.videoNote = { open: false, loading: false, folder: null, video: null, error: '' };
+        this.videoNoteClosing = false;
+        this.videoNoteCloseTimer = null;
+        this.syncBodyLock();
+      };
+      if (this.videoNoteClosing) this.videoNoteCloseTimer = window.setTimeout(finish, 240);
+      else finish();
       this.syncBodyLock();
     },
 
@@ -4418,11 +4614,11 @@ function galleryApp(initialSettings = {}) {
     },
 
     syncBodyLock() {
-      const locked = this.videoNote.open || this.detail.open || this.viewer.open || this.detailClosing || this.viewerClosing || this.taskInspector.open || this.sourcePreview.open;
+      const locked = this.videoNote.open || this.videoNoteClosing || this.detail.open || this.viewer.open || this.detailClosing || this.viewerClosing || this.taskInspector.open || this.sourcePreview.open;
       const html = document.documentElement;
       const body = document.body;
       body.classList.toggle("detail-layer-open", this.detail.open || this.detailClosing || this.taskInspector.open || this.sourcePreview.open);
-      body.classList.toggle("viewer-layer-open", this.videoNote.open || this.viewer.open || this.viewerClosing);
+      body.classList.toggle("viewer-layer-open", this.videoNote.open || this.videoNoteClosing || this.viewer.open || this.viewerClosing);
       body.classList.toggle("overlay-locked", locked);
       if (locked) {
         if (this.bodyLockTop !== null) {
@@ -7905,12 +8101,17 @@ function galleryApp(initialSettings = {}) {
       return this.validateConfirmStep === 0 ? "校验当前内容" : "再次确认校验";
     },
 
+    revealValidateActions() {
+      this.validateActionsRevealed = true;
+    },
+
     askValidateContent() {
       this.validateConfirmStep = Math.min(this.validateConfirmStep + 1, 2);
     },
 
     cancelValidateContent() {
       this.validateConfirmStep = 0;
+      this.validateActionsRevealed = false;
     },
 
     async confirmValidateContent() {
@@ -7920,9 +8121,24 @@ function galleryApp(initialSettings = {}) {
       this.setImmediateTaskFeedback("正在提交内容校验任务...");
       const result = await this.api("/api/settings/validate-content", { method: "POST" });
       this.validateConfirmStep = 0;
+      // 校验可能整条删除补不齐的贴文，提交后重新收起，避免被连续误点。
+      this.validateActionsRevealed = false;
       await this.refreshStatus();
       await this.refreshTasks();
       this.notify("info", "校验任务已提交", result.message);
+    },
+
+    // 危险操作总抽屉：收起时连同内部抽屉一起合上，并丢掉未完成的两步/三步确认，
+    // 避免下次展开直接落在「确认清空」这类高危按钮上。
+    collapseDangerOperations(element) {
+      if (!element || element.open) {
+        return;
+      }
+      for (const inner of element.querySelectorAll("details")) {
+        inner.open = false;
+      }
+      this.cancelValidateContent();
+      this.clearDataConfirmStep = 0;
     },
 
     rebuildIndexButtonLabel() {

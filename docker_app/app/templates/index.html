@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-5-detail-preload-2-trackpad-hint-3-responsive-swipe-4-xhs-login-recovery-2-gallery-instant-injection-1' %}
+    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-5-detail-preload-2-trackpad-hint-3-responsive-swipe-4-xhs-login-recovery-2-gallery-instant-injection-1-motion-2' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -201,7 +201,8 @@
                 </div>
             </header>
 
-            <section class="gallery-stage" :class="{'search-has-results': searchActive() && searchQuery, 'is-pulling': !!randomPullGesture?.locked, 'is-refreshing': randomRefreshing && mobileRandomRefresh()}" :style="{ '--gallery-pull-progress': randomPullVisualProgress() }" data-testid="section-gallery" x-show="currentView === 'gallery'" x-ref="galleryStage">
+            <div class="view-stack">
+            <section class="gallery-stage" :class="{'search-has-results': searchActive() && searchQuery, 'is-pulling': !!randomPullGesture?.locked, 'is-refreshing': randomRefreshing && mobileRandomRefresh()}" :style="{ '--gallery-pull-progress': randomPullVisualProgress() }" data-testid="section-gallery" x-show="currentView === 'gallery'" x-ref="galleryStage" x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'gallery')" :aria-hidden="!(currentView === 'gallery')">
                 <section class="search-panel" :class="searchQuery ? 'search-results-bar' : 'search-landing'" x-show="searchActive()" x-cloak>
                     <form class="search-engine-form" @submit.prevent="applySearch()">
                         <label class="search-engine-field">
@@ -413,7 +414,7 @@
                 </div>
             </section>
 
-            <section class="panel-view recent-updates-view" data-testid="section-recent-updates" x-show="currentView === 'recent-updates'" x-cloak>
+            <section class="panel-view recent-updates-view" data-testid="section-recent-updates" x-show="currentView === 'recent-updates'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'recent-updates')" :aria-hidden="!(currentView === 'recent-updates')">
                 <div class="section-heading page-toolbar">
 
                     <div class="button-row">
@@ -497,7 +498,7 @@
                 </div>
             </section>
 
-            <section class="panel-view duplicate-view" data-testid="section-duplicates" x-show="currentView === 'duplicates'" x-cloak>
+            <section class="panel-view duplicate-view" data-testid="section-duplicates" x-show="currentView === 'duplicates'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'duplicates')" :aria-hidden="!(currentView === 'duplicates')">
                 <div class="section-heading page-toolbar">
 
                     <div class="button-row">
@@ -616,7 +617,7 @@
                 </div>
             </section>
 
-            <section class="panel-view" data-testid="section-review" x-show="currentView === 'review'" x-cloak>
+            <section class="panel-view" data-testid="section-review" x-show="currentView === 'review'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'review')" :aria-hidden="!(currentView === 'review')">
                 <div class="section-heading page-toolbar">
 
                     <button class="secondary-button" @click="refreshReview()">刷新</button>
@@ -648,7 +649,7 @@
                 </div>
             </section>
 
-            <section class="panel-view" data-testid="section-logs" x-show="currentView === 'logs'" x-cloak>
+            <section class="panel-view" data-testid="section-logs" x-show="currentView === 'logs'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'logs')" :aria-hidden="!(currentView === 'logs')">
                 <div class="section-heading page-toolbar">
 
                     <div class="button-row">
@@ -680,7 +681,7 @@
                 </div>
             </section>
 
-            <section class="panel-view" data-testid="section-tasks" x-show="currentView === 'tasks'" x-cloak>
+            <section class="panel-view" data-testid="section-tasks" x-show="currentView === 'tasks'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'tasks')" :aria-hidden="!(currentView === 'tasks')">
                 <div class="section-heading page-toolbar">
                     <div>
                         <p class="field-copy" x-text="`运行 ${pullStatus.running ? 1 : 0} · 等待 ${queuedTasks.length} · 历史 ${sidebarCounts.tasks || taskRuns.length}`"></p>
@@ -779,7 +780,7 @@
                 </div>
             </section>
 
-            <section class="panel-view" data-testid="section-trash" x-show="currentView === 'trash'" x-cloak>
+            <section class="panel-view" data-testid="section-trash" x-show="currentView === 'trash'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'trash')" :aria-hidden="!(currentView === 'trash')">
                 <div class="section-heading trash-toolbar page-toolbar">
                     <input class="ui-field trash-search" type="search" x-model="trashSearch" placeholder="搜索标题、来源或删除日期" aria-label="搜索垃圾桶">
                     <div class="button-row">
@@ -840,7 +841,7 @@
                 </div>
             </section>
 
-            <section class="panel-view settings-pane" data-testid="section-settings" x-show="currentView === 'settings'" x-cloak>
+            <section class="panel-view settings-pane" data-testid="section-settings" x-show="currentView === 'settings'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'settings')" :aria-hidden="!(currentView === 'settings')">
                 <div class="settings-save-bar">
                     <nav class="settings-groups" aria-label="设置分组">
                         <template x-for="group in [{key:'sync',name:'同步',label:'同步与来源'},{key:'network',name:'网络',label:'网络与内网访问'},{key:'filter',name:'过滤',label:'过滤与重复'},{key:'media',name:'界面',label:'界面与媒体'},{key:'account',name:'账号',label:'账号'},{key:'maintenance',name:'维护',label:'维护与清理'}]" :key="group.key">
@@ -1088,44 +1089,64 @@
                         <p class="field-copy" role="status" x-show="xhsAuthorLatestTask()" x-text="xhsAuthorLatestTask()?.message || ''"></p>
                     </article>
 
-                    <article class="settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance" data-testid="data-upgrade-maintenance">
-                        <h4 class="heading-with-help">数据检查与备份<button type="button" class="help-button" aria-label="数据结构升级说明" data-tooltip="检查会验证数据库与原始媒体引用；已标为 duplicate 的去重记录不算缺失。修复会寻找原文件或补下可用原文件，不覆盖已有文件。升级会先保存完整数据库备份，按 B站动态、站点订阅、小红书笔记分库，并校验每张表；已完成 v2 的媒体目录无需再搬迁。维护期间所有页面暂停访问，中断后可继续。升级前后及手动备份保留在 config/backups；自动备份每24小时执行，保留至少最近3代完整备份。数据库备份不含媒体，请另行备份完整 config 与 data，并预留数据库副本、事务日志和主库压缩所需空间。">?</button></h4>
-                        <p class="field-copy" role="status" x-text="dataUpgrade.current_version ? (dataUpgrade.dirty ? '旧版数据（脏） · 待升级' : '数据结构已是最新版本') : '正在检查数据版本…'"></p>
-                        <p class="field-copy" x-show="dataUpgrade.result && dataUpgrade.action !== 'backup'" x-text="`上次检查 ${dataUpgrade.result?.checked_assets || 0} 个媒体引用，缺失 ${dataUpgrade.result?.missing_assets || 0} 个`"></p>
-                        <p class="field-copy" x-show="dataUpgrade.result && dataUpgrade.action !== 'backup' && !dataUpgrade.result.check_version">旧规则结果，待重新检查</p>
-                        <p class="field-copy" x-show="dataUpgrade.content_shards">内容已分为 B站动态、站点订阅、小红书笔记三库，首页使用独立浏览索引。</p>
-                        <p class="field-copy" x-text="dataUpgrade.backup?.latest ? `最近数据库备份：${dataUpgrade.backup.latest.created_at}（不含媒体）` : '尚无完整数据库备份'"></p>
-                        <p class="field-copy" role="alert" x-show="dataUpgrade.backup?.last_attempt?.ok === false" x-text="`最近备份失败：${dataUpgrade.backup?.last_attempt?.error || ''}`"></p>
-                        <p class="field-copy" x-show="dataUpgrade.result?.ignored_duplicates" x-text="`已排除 ${dataUpgrade.result?.ignored_duplicates || 0} 条站点去重记录`"></p>
-                        <div class="button-row">
-                            <button type="button" class="secondary-button" @click="startDataUpgrade('check')" :disabled="dataUpgradeSubmitting">检查数据</button>
-                            <button type="button" class="secondary-button" @click="startDataUpgrade('backup')" :disabled="dataUpgradeSubmitting">立即备份数据库</button>
-                            <button type="button" class="secondary-button" data-testid="data-repair-start" x-show="dataUpgrade.result?.missing_assets > 0" @click="startDataUpgrade('repair')" :disabled="dataUpgradeSubmitting">重新检查并修复缺失</button>
-                            <button type="button" class="secondary-button" x-show="dataUpgrade.result && dataUpgrade.action !== 'backup'" @click="loadDataCheckReport()" :disabled="dataUpgradeSubmitting">查看检查明细</button>
-                            <button type="button" class="primary-button" data-testid="data-upgrade-start" @click="startDataUpgrade()" :disabled="dataUpgradeSubmitting || !dataUpgrade.dirty" x-text="dataUpgradeSubmitting ? '准备升级…' : '升级数据结构并迁移 data'"></button>
-                        </div>
-                        <div x-show="dataCheckReport" style="max-height:360px;overflow:auto" x-cloak>
-                            <p class="field-copy" x-show="dataCheckReport?.needs_check">尚无完整明细，请先检查数据。</p>
-                            <p class="field-copy" x-show="dataCheckReport?.recovered_files" x-text="`已恢复 ${dataCheckReport?.recovered_files || 0} 个原文件，仍有 ${dataCheckReport?.missing_files || 0} 个原文件需要处理`"></p>
-                            <template x-for="(item, index) in dataCheckReportRows()" :key="`${item.table}-${item.id}`">
-                                <p class="field-copy" style="overflow-wrap:anywhere"><span x-text="item.rel_path || '无效路径'"></span><br><span x-text="item.status === 'recovered' ? '已恢复' : (item.error || item.reason)"></span></p>
-                            </template>
-                            <div class="button-row" x-show="(dataCheckReport?.items?.length || 0) > 50">
-                                <button type="button" class="secondary-button" @click="dataCheckReportPage--" :disabled="dataCheckReportPage <= 1">上一页</button>
-                                <span class="field-copy" x-text="`${dataCheckReportPage} / ${Math.max(1, Math.ceil((dataCheckReport?.items?.length || 0) / 50))}`"></span>
-                                <button type="button" class="secondary-button" @click="dataCheckReportPage++" :disabled="dataCheckReportPage * 50 >= (dataCheckReport?.items?.length || 0)">下一页</button>
-                            </div>
-                        </div>
-                    </article>
+                    <details class="settings-card danger-settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance" data-testid="danger-operations-drawer" @toggle="collapseDangerOperations($el)">
+                        <summary class="heading-with-help">危险操作<button type="button" class="help-button" @click.stop aria-label="危险操作总说明" data-tooltip="集中收纳会改动媒体或数据库的三类操作：数据检查与备份、内容校验、清空内容。总抽屉与内部抽屉都默认收起，需要逐项展开并二次确认才会执行；收起总抽屉会同时收起内部抽屉，并取消未完成的确认。与 Immich 等外部图库共用同一目录时，内容校验与清空内容都可能造成无法恢复的删除。">?</button></summary>
 
-                    <details class="settings-card danger-settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
-                        <summary class="heading-with-help">内容校验<button type="button" class="help-button" @click.stop aria-label="内容校验说明" data-tooltip="检查当前资料库里的动态是否缺图、是否存在重复素材。发现重复会清重，发现缺失会重新拉取该动态。">?</button></summary>
-                        <div class="button-row confirm-row" x-show="validateConfirmStep === 0">
-                            <button class="secondary-button confirm-anchor" @click="askValidateContent()" x-text="validateButtonLabel()"></button>
-                        </div>
-                        <div class="button-row confirm-row" x-show="validateConfirmStep === 1" x-cloak>
-                            <button class="primary-button confirm-anchor" @click="confirmValidateContent()">确认开始校验</button>
-                        </div>
+                        <details class="settings-card danger-sub-card" data-testid="data-upgrade-maintenance">
+                            <summary class="heading-with-help">数据检查与备份<button type="button" class="help-button" @click.stop aria-label="数据检查与备份说明" data-tooltip="检查会验证数据库与原始媒体引用；已标为 duplicate 的去重记录不算缺失。修复会寻找原文件或补下可用原文件，不覆盖已有文件。升级会先保存完整数据库备份，按 B站动态、站点订阅、小红书笔记分库，并校验每张表；已完成 v2 的媒体目录无需再搬迁。维护期间所有页面暂停访问，中断后可继续。升级前后及手动备份保留在 config/backups；自动备份每24小时执行，保留至少最近3代完整备份。数据库备份不含媒体，请另行备份完整 config 与 data，并预留数据库副本、事务日志和主库压缩所需空间。">?</button></summary>
+                            <p class="field-copy" role="status" x-text="dataUpgrade.current_version ? (dataUpgrade.dirty ? '旧版数据（脏） · 待升级' : '数据结构已是最新版本') : '正在检查数据版本…'"></p>
+                            <p class="field-copy" x-show="dataUpgrade.result && dataUpgrade.action !== 'backup'" x-text="`上次检查 ${dataUpgrade.result?.checked_assets || 0} 个媒体引用，缺失 ${dataUpgrade.result?.missing_assets || 0} 个`"></p>
+                            <p class="field-copy" x-show="dataUpgrade.result && dataUpgrade.action !== 'backup' && !dataUpgrade.result.check_version">旧规则结果，待重新检查</p>
+                            <p class="field-copy" x-show="dataUpgrade.content_shards">内容已分为 B站动态、站点订阅、小红书笔记三库，首页使用独立浏览索引。</p>
+                            <p class="field-copy" x-text="dataUpgrade.backup?.latest ? `最近数据库备份：${dataUpgrade.backup.latest.created_at}（不含媒体）` : '尚无完整数据库备份'"></p>
+                            <p class="field-copy" role="alert" x-show="dataUpgrade.backup?.last_attempt?.ok === false" x-text="`最近备份失败：${dataUpgrade.backup?.last_attempt?.error || ''}`"></p>
+                            <p class="field-copy" x-show="dataUpgrade.result?.ignored_duplicates" x-text="`已排除 ${dataUpgrade.result?.ignored_duplicates || 0} 条站点去重记录`"></p>
+                            <div class="button-row">
+                                <button type="button" class="secondary-button" @click="startDataUpgrade('check')" :disabled="dataUpgradeSubmitting">检查数据</button>
+                                <button type="button" class="secondary-button" @click="startDataUpgrade('backup')" :disabled="dataUpgradeSubmitting">立即备份数据库</button>
+                                <button type="button" class="secondary-button" data-testid="data-repair-start" x-show="dataUpgrade.result?.missing_assets > 0" @click="startDataUpgrade('repair')" :disabled="dataUpgradeSubmitting">重新检查并修复缺失</button>
+                                <button type="button" class="secondary-button" x-show="dataUpgrade.result && dataUpgrade.action !== 'backup'" @click="loadDataCheckReport()" :disabled="dataUpgradeSubmitting">查看检查明细</button>
+                                <button type="button" class="primary-button" data-testid="data-upgrade-start" @click="startDataUpgrade()" :disabled="dataUpgradeSubmitting || !dataUpgrade.dirty" x-text="dataUpgradeSubmitting ? '准备升级…' : '升级数据结构并迁移 data'"></button>
+                            </div>
+                            <div x-show="dataCheckReport" style="max-height:360px;overflow:auto" x-cloak>
+                                <p class="field-copy" x-show="dataCheckReport?.needs_check">尚无完整明细，请先检查数据。</p>
+                                <p class="field-copy" x-show="dataCheckReport?.recovered_files" x-text="`已恢复 ${dataCheckReport?.recovered_files || 0} 个原文件，仍有 ${dataCheckReport?.missing_files || 0} 个原文件需要处理`"></p>
+                                <template x-for="(item, index) in dataCheckReportRows()" :key="`${item.table}-${item.id}`">
+                                    <p class="field-copy" style="overflow-wrap:anywhere"><span x-text="item.rel_path || '无效路径'"></span><br><span x-text="item.status === 'recovered' ? '已恢复' : (item.error || item.reason)"></span></p>
+                                </template>
+                                <div class="button-row" x-show="(dataCheckReport?.items?.length || 0) > 50">
+                                    <button type="button" class="secondary-button" @click="dataCheckReportPage--" :disabled="dataCheckReportPage <= 1">上一页</button>
+                                    <span class="field-copy" x-text="`${dataCheckReportPage} / ${Math.max(1, Math.ceil((dataCheckReport?.items?.length || 0) / 50))}`"></span>
+                                    <button type="button" class="secondary-button" @click="dataCheckReportPage++" :disabled="dataCheckReportPage * 50 >= (dataCheckReport?.items?.length || 0)">下一页</button>
+                                </div>
+                            </div>
+                        </details>
+
+                        <details class="settings-card danger-sub-card" @toggle="if (!$el.open) cancelValidateContent()">
+                            <summary class="heading-with-help">内容校验<button type="button" class="help-button" @click.stop aria-label="内容校验说明" data-tooltip="逐条比对订阅动态：缺图会先尝试从原动态补下，补齐则保持原样；发现重复会清重。补不齐时该贴文会被整条删除（连同目录内其余文件），并转入待审核，待审核不含媒体，只能重新抓取才能恢复。需要前置条件：哔哩哔哩 Cookie 登录有效、原动态仍然存在。与 Immich 等外部图库共用同一目录时请勿使用本功能，应改用“检查数据”核对缺失，再用“重新检查并修复缺失”处理，两者都不会删除文件。任务进度与结果可在任务队列查看。">?</button></summary>
+                            <div class="button-row" x-show="!validateActionsRevealed">
+                                <button type="button" class="secondary-button" @click="revealValidateActions()">显示校验操作</button>
+                            </div>
+                            <div class="button-row confirm-row" x-show="validateActionsRevealed && validateConfirmStep === 0" x-cloak>
+                                <button class="secondary-button danger-button confirm-anchor" @click="askValidateContent()" x-text="validateButtonLabel()"></button>
+                            </div>
+                            <div class="button-row confirm-row" x-show="validateActionsRevealed && validateConfirmStep === 1" x-cloak>
+                                <button class="primary-button danger-confirm confirm-anchor" @click="confirmValidateContent()">确认开始校验</button>
+                            </div>
+                        </details>
+
+                        <details class="settings-card danger-sub-card">
+                            <summary class="heading-with-help">清空内容<button type="button" class="help-button" @click.stop aria-label="清空内容说明" data-tooltip="会清空资料库、待审核、过滤日志、任务记录、垃圾桶和黑名单，但会保留当前 Cookie 登录状态与设置。">?</button></summary>
+                            <div class="button-row confirm-row" x-show="clearDataConfirmStep === 0">
+                                <button class="secondary-button danger-button confirm-anchor" @click="askClearAllData()" x-text="clearDataButtonLabel()"></button>
+                            </div>
+                            <div class="button-row confirm-row" x-show="clearDataConfirmStep > 0 && clearDataConfirmStep < 3" x-cloak>
+                                <button class="secondary-button danger-button confirm-anchor" @click="askClearAllData()" x-text="clearDataButtonLabel()"></button>
+                            </div>
+                            <div class="button-row confirm-row" x-show="clearDataConfirmStep >= 3" x-cloak>
+                                <button class="primary-button danger-confirm confirm-anchor" @click="confirmClearAllData()">确认清空全部内容</button>
+                            </div>
+                        </details>
                     </details>
 
                     <article class="settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
@@ -1168,23 +1189,10 @@
                             <button class="secondary-button danger-button" @click="cleanupStorageTrash()" :disabled="storageCleanupRunning || !(storageStats.trash_files > 0)" x-text="storageCleanupRunning ? '提交中' : '清理垃圾文件'"></button>
                         </div>
                     </article>
-
-                    <details class="settings-card danger-settings-card" x-show="settingsGroup === 'maintenance'" data-settings-group="maintenance">
-                        <summary class="heading-with-help">危险操作：清空内容<button type="button" class="help-button" @click.stop aria-label="危险操作：清空内容说明" data-tooltip="会清空资料库、待审核、过滤日志、任务记录、垃圾桶和黑名单，但会保留当前 Cookie 登录状态与设置。">?</button></summary>
-                        <div class="button-row confirm-row" x-show="clearDataConfirmStep === 0">
-                            <button class="secondary-button danger-button confirm-anchor" @click="askClearAllData()" x-text="clearDataButtonLabel()"></button>
-                        </div>
-                        <div class="button-row confirm-row" x-show="clearDataConfirmStep > 0 && clearDataConfirmStep < 3" x-cloak>
-                            <button class="secondary-button danger-button confirm-anchor" @click="askClearAllData()" x-text="clearDataButtonLabel()"></button>
-                        </div>
-                        <div class="button-row confirm-row" x-show="clearDataConfirmStep >= 3" x-cloak>
-                            <button class="primary-button danger-confirm confirm-anchor" @click="confirmClearAllData()">确认清空全部内容</button>
-                        </div>
-                    </details>
                 </div>
             </section>
 
-            <section class="panel-view subscription-overview-pane" data-testid="section-subscription-overview" x-show="currentView === 'subscriptions' && subscriptionPanel === 'overview'" x-cloak>
+            <section class="panel-view subscription-overview-pane" data-testid="section-subscription-overview" x-show="currentView === 'subscriptions' && subscriptionPanel === 'overview'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'subscriptions' && subscriptionPanel === 'overview')" :aria-hidden="!(currentView === 'subscriptions' && subscriptionPanel === 'overview')">
                 <div class="section-heading subscription-sticky-head page-toolbar">
 
                     <div class="button-row">
@@ -1243,7 +1251,7 @@
                 </div>
             </section>
 
-            <section class="panel-view" data-testid="section-subscriptions" x-show="currentView === 'subscriptions' && subscriptionPanel === 'up'" x-cloak>
+            <section class="panel-view" data-testid="section-subscriptions" x-show="currentView === 'subscriptions' && subscriptionPanel === 'up'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'subscriptions' && subscriptionPanel === 'up')" :aria-hidden="!(currentView === 'subscriptions' && subscriptionPanel === 'up')">
                 <div class="section-heading page-toolbar">
 
                     <div class="button-row">
@@ -1344,7 +1352,7 @@
                 </div>
             </section>
 
-            <section class="panel-view" data-testid="section-xhs" x-show="currentView === 'subscriptions' && subscriptionPanel === 'xhs'" x-cloak>
+            <section class="panel-view" data-testid="section-xhs" x-show="currentView === 'subscriptions' && subscriptionPanel === 'xhs'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'subscriptions' && subscriptionPanel === 'xhs')" :aria-hidden="!(currentView === 'subscriptions' && subscriptionPanel === 'xhs')">
                 <div class="section-heading page-toolbar"><div class="button-row">
                         <div class="segmented-pill subscription-segmented" role="group" aria-label="订阅页面切换">
                             <span class="segmented-pill-indicator" :style="subscriptionPanelIndicatorStyle()"></span>
@@ -1454,7 +1462,7 @@
                 </div>
             </section>
 
-            <section class="panel-view site-pane" data-testid="section-sites" x-show="currentView === 'subscriptions' && subscriptionPanel === 'site'" x-cloak>
+            <section class="panel-view site-pane" data-testid="section-sites" x-show="currentView === 'subscriptions' && subscriptionPanel === 'site'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'subscriptions' && subscriptionPanel === 'site')" :aria-hidden="!(currentView === 'subscriptions' && subscriptionPanel === 'site')">
                 <div class="section-heading page-toolbar">
 
                     <div class="button-row">
@@ -1710,6 +1718,7 @@
                     </div>
                 </div>
             </section>
+            </div>
         </main>
 
         <div class="detail-backdrop" data-testid="detail-backdrop" data-modal-layer="detail" role="dialog" :aria-label="detail.folder?.title || '动态详情'" tabindex="-1" x-show="detail.open || detailClosing" :class="{ open: detail.open && !detailClosing, closing: detailClosing }" @click.self="closeDetail()" @wheel.prevent.stop @touchmove.prevent.self x-cloak>
@@ -1844,8 +1853,8 @@
             </section>
         </div>
 
-        <div class="xhs-video-backdrop" data-testid="xhs-video-backdrop" data-modal-layer="video-note" role="dialog" aria-modal="true" aria-label="视频播放器" tabindex="-1" x-show="videoNote.open" :class="{ 'video-feed-active': narrowViewport }" @click.self="closeVideoNote()" @touchstart.passive="startVideoFeedGesture($event)" @touchmove="moveVideoFeedGesture($event)" @touchend="endVideoFeedGesture($event)" @touchcancel="videoFeedGesture = null" x-cloak>
-            <section class="xhs-video-shell" :data-media-menu-folder="videoNote.folder?.folder_name" :style="`--feed-direction: ${videoFeedDirection}`">
+        <div x-transition.opacity.duration.180ms class="xhs-video-backdrop" data-testid="xhs-video-backdrop" data-modal-layer="video-note" role="dialog" aria-modal="true" aria-label="视频播放器" tabindex="-1" x-show="videoNote.open" :class="{ 'video-feed-active': narrowViewport }" @click.self="closeVideoNote()" @touchstart.passive="startVideoFeedGesture($event)" @touchmove="moveVideoFeedGesture($event)" @touchend="endVideoFeedGesture($event)" @touchcancel="videoFeedGesture = null" x-cloak>
+            <section class="xhs-video-shell" :class="{ 'is-switching': videoFeedSwitching }" :data-media-menu-folder="videoNote.folder?.folder_name" :style="`--feed-direction: ${videoFeedDirection}`">
                 <header class="xhs-video-head">
                     <div><h3 x-text="videoNote.folder?.title || '视频笔记'"></h3>
                         <p class="viewer-kicker"><span x-text="displayDate(videoNote.folder?.pub_time)"></span><span> - </span><a class="creator-link" x-show="creatorProfileUrl(videoNote.folder)" :href="creatorProfileUrl(videoNote.folder) || null" target="_blank" rel="noopener noreferrer" x-text="creatorName(videoNote.folder)"></a><span x-show="!creatorProfileUrl(videoNote.folder)" x-text="creatorName(videoNote.folder)"></span></p>
@@ -1863,28 +1872,28 @@
                                 <button type="button" class="primary-button danger-button danger-confirm" data-testid="video-delete-confirm" @click="trashFolderCard(videoNote.folder?.folder_name)" :aria-label="videoNote.folder?.folder_name?.startsWith('xhs_') ? '确认删除视频并取消点赞' : '确认移入垃圾桶'">确认删除</button>
                             </template>
                         </div>
+                        <button type="button" class="secondary-button" @click="toggleVideoNoteFullscreen()" :aria-label="videoNoteFullscreen ? '退出视频全屏' : '视频全屏（保留标题和序号）'" x-text="videoNoteFullscreen ? '退出全屏' : '全屏'"></button>
                         <button type="button" class="secondary-button" data-modal-close @click="closeVideoNote()">关闭</button>
                     </div>
                 </header>
                 <template x-if="videoNote.open && videoNote.loading">
                     <div class="xhs-video-loading" role="status">正在读取视频详情…</div>
                 </template>
-                <template x-if="videoNote.open && videoNote.video">
-                    <video x-ref="xhsNoteVideo" :src="videoNote.video.url" :poster="videoNote.video.cover_url || ''" :loop="settings.video_default_loop !== false" :muted="Number(settings.video_default_volume || 0) <= 0" controls autoplay playsinline preload="metadata" @error="videoNote.error = '视频无法播放，请检查归档文件或重试媒体。'"></video>
+                <template x-for="player in videoNotePlayers()" :key="player.key">
+                    <video data-video-player :class="{ 'is-current': player.key === videoNotePlayerKey(), 'is-retiring': player.key === videoFeedRetiring?.key }" :src="player.video.url" :poster="player.video.cover_url || ''" :loop="settings.video_default_loop !== false" :muted="player.key !== videoNotePlayerKey() || Number(settings.video_default_volume || 0) <= 0" :controls="player.key === videoNotePlayerKey()" :aria-hidden="player.key !== videoNotePlayerKey()" :tabindex="player.key === videoNotePlayerKey() ? 0 : -1" playsinline preload="auto" @loadeddata="videoNotePlayerReady(player)" @canplay="videoNotePlayerReady(player)" @error="videoNotePlayerFailed(player)"></video>
                 </template>
                 <p class="field-copy" role="status" x-show="videoNote.error" x-text="videoNote.error"></p>
-                <div class="video-feed-caption" x-show="narrowViewport" x-cloak>
+                <div class="video-feed-caption">
                     <p class="video-creator-meta"><span x-text="displayDate(videoNote.folder?.pub_time)"></span><span> - </span><a class="creator-link" x-show="creatorProfileUrl(videoNote.folder)" :href="creatorProfileUrl(videoNote.folder) || null" target="_blank" rel="noopener noreferrer" x-text="creatorName(videoNote.folder)"></a><span x-show="!creatorProfileUrl(videoNote.folder)" x-text="creatorName(videoNote.folder)"></span></p>
                     <h3 x-text="videoNote.folder?.title || '视频'"></h3>
+                    <small class="video-feed-counter" role="status" aria-label="当前视频序号" x-show="videoFeed.active" x-text="videoFeedPositionText()"></small>
                 </div>
                 <nav class="video-feed-navigation" aria-label="切换视频" x-show="!narrowViewport && videoFeed.active" x-cloak>
-                    <button type="button" class="video-feed-step" aria-label="上一条视频" :disabled="videoFeed.busy || videoFeed.index <= 0" @click="stepVideoFeed(-1)"><svg class="video-switch-icon" aria-hidden="true"><use href="#icon-previous"></use></svg></button>
-                    <small class="video-feed-position" x-text="`${videoFeed.index + 1} / ${videoFeed.items.length}${videoFeed.page < videoFeed.totalPages ? '+' : ''}`"></small>
-                    <button type="button" class="video-feed-step" aria-label="下一条视频" :disabled="videoFeed.busy || (videoFeed.index >= videoFeed.items.length - 1 && videoFeed.page >= videoFeed.totalPages)" @click="stepVideoFeed(1)"><svg class="video-switch-icon" aria-hidden="true"><use href="#icon-next"></use></svg></button>
+                    <button type="button" class="video-feed-step" aria-label="上一条视频" :disabled="videoNote.loading || videoFeed.busy || videoFeed.index <= 0" @click="stepVideoFeed(-1)"><svg class="video-switch-icon" aria-hidden="true"><use href="#icon-previous"></use></svg></button>
+                    <button type="button" class="video-feed-step" aria-label="下一条视频" :disabled="videoNote.loading || videoFeed.busy || (videoFeed.index >= videoFeed.items.length - 1 && videoFeed.page >= videoFeed.totalPages)" @click="stepVideoFeed(1)"><svg class="video-switch-icon" aria-hidden="true"><use href="#icon-next"></use></svg></button>
                 </nav>
-                <div class="video-feed-status" role="status" aria-live="polite" x-show="narrowViewport && videoFeed.active && (videoFeedHintVisible || videoFeed.busy || videoFeedMessage)" x-transition.opacity.duration.400ms x-cloak>
+                <div class="video-feed-status" role="status" aria-live="polite" x-show="videoFeed.active && (videoFeed.busy || videoFeedMessage || (narrowViewport && videoFeedHintVisible))" x-transition.opacity.duration.400ms x-cloak>
                     <span x-text="videoFeed.busy ? '正在加载下一条…' : (videoFeedMessage || '上下滑动切换视频')"></span>
-                    <small x-text="`${videoFeed.index + 1} / ${videoFeed.items.length}${videoFeed.page < videoFeed.totalPages ? '+' : ''}`"></small>
                 </div>
             </section>
         </div>

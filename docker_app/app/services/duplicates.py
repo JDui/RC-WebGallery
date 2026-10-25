@@ -21,7 +21,7 @@ MAX_HASH_DISTANCE = 32
 MAX_ASPECT_LOG_DISTANCE = 0.24
 LOW_CONTRAST_LIMIT = 12
 LOW_CONTRAST_COLOR_DISTANCE = 36
-DUPLICATE_CACHE_VERSION = 6
+DUPLICATE_CACHE_VERSION = 7
 
 
 @dataclass
@@ -278,7 +278,7 @@ class DuplicateService:
         images = {int(row["id"]): row for row in rows if row.get("media_type") == "image"}
         checked: set[int] = set()
         for target in targets:
-            for key, fingerprint_key in (("asset_id", "fingerprint"), ("keep_asset_id", "keep_fingerprint")):
+            for key in ("asset_id", "keep_asset_id"):
                 asset_id = int(target[key])
                 if asset_id in checked:
                     continue
@@ -286,14 +286,11 @@ class DuplicateService:
                 path = self.storage.resolve_storage_path(row.get("rel_path")) if row else None
                 if not path or not path.is_file():
                     raise RuntimeError("待清理图片或对应保留图片已缺失，请重新检测后再处理")
+                # 计划生成时已验证两张原图相似，此处确认原图仍与计划一致即可。
+                # 缩略图是可重建的派生文件，不能与旧索引指纹逐字比较来判断原图是否变化。
                 source_key = "source_fingerprint" if key == "asset_id" else "keep_source_fingerprint"
                 if image_fingerprint(path) != target[source_key]:
                     raise RuntimeError("待清理原图或对应保留原图已变化，请重新检测后再处理")
-                fingerprint_path = self.storage.resolve_storage_path(
-                    row.get("small_thumb_rel_path") or row.get("thumb_rel_path") or row.get("rel_path")
-                )
-                if not fingerprint_path or image_fingerprint(fingerprint_path) != target[fingerprint_key]:
-                    raise RuntimeError("待清理图片或对应保留图片已变化，请重新检测后再处理")
                 checked.add(asset_id)
         self._require_fresh_cache()
 
@@ -428,18 +425,20 @@ class DuplicateService:
             self._background_checkpoint()
             if row.get("media_type") != "image" or row.get("folder_name") not in folders:
                 continue
-            fingerprint = str(row.get("duplicate_fingerprint") or "")
-            parsed = parse_fingerprint(fingerprint)
-            if parsed is None:
-                # 独立于展示链的文件优先级：感知哈希取“最小可分辨文件路径”，非 URL。
-                fingerprint_rel_path = row.get("small_thumb_rel_path") or row.get("thumb_rel_path") or row.get("rel_path")
-                path = self.storage.resolve_storage_path(fingerprint_rel_path)
+            # 主动检测必须读取当前文件；旧索引指纹可能来自原图或重建前的缩略图。
+            # 从最小派生图开始尝试，路径失效或解码失败时回退，避免反复检测仍复用旧值。
+            fingerprint = None
+            candidates = dict.fromkeys((row.get("small_thumb_rel_path"), row.get("thumb_rel_path"), row.get("rel_path")))
+            for relative in candidates:
+                path = self.storage.resolve_storage_path(relative) if relative else None
                 fingerprint = image_fingerprint(path) if path else None
-                parsed = parse_fingerprint(fingerprint)
-                if fingerprint and row.get("id"):
-                    fingerprint_updates[int(row["id"])] = fingerprint
+                if fingerprint:
+                    break
+            parsed = parse_fingerprint(fingerprint)
             if not fingerprint or parsed is None:
                 continue
+            if fingerprint != row.get("duplicate_fingerprint") and row.get("id"):
+                fingerprint_updates[int(row["id"])] = fingerprint
             hash_bits, color, contrast = parsed
             tile = self._asset_tile(row)
             source_path = self.storage.resolve_storage_path(row.get("rel_path"))

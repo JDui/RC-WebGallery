@@ -965,27 +965,36 @@ html.is-interacting .detail-backdrop {
 .settings-pane,
 .gallery-stage {
     min-width: 0;
-    animation: view-fade-in var(--duration-fast) var(--ease-soft);
     backface-visibility: hidden;
     transform: none;
 }
 
+.view-stack {
+    position: relative;
+    min-width: 0;
+    min-height: calc(100dvh - var(--layout-topbar-reserve, 158px) - 40px);
+}
+.view-stack > .view-leave {
+    position: absolute;
+    inset: 0 0 auto;
+    width: 100%;
+    pointer-events: none;
+}
+
 .view-enter,
 .view-leave {
-    transition: opacity var(--duration-base) var(--ease-soft), transform var(--duration-slow) var(--ease-fluid);
-    will-change: opacity, transform;
+    transition: opacity 180ms var(--ease-soft);
+    will-change: opacity;
 }
 
 .view-enter-start,
 .view-leave-end {
     opacity: 0;
-    transform: translate3d(0, 12px, 0);
 }
 
 .view-enter-end,
 .view-leave-start {
     opacity: 1;
-    transform: translate3d(0, 0, 0);
 }
 
 .gallery-layout {
@@ -5597,6 +5606,20 @@ details.settings-card > summary::after { content: "⌄"; margin-left: auto; }
 details.settings-card[open] > summary { margin-bottom: 16px; }
 details.settings-card[open] > summary::after { content: "⌃"; }
 
+/* 危险操作总抽屉里的子抽屉：卡片套卡片时收敛内边距，去掉叠层的玻璃底与悬浮位移，只保留折叠箭头和危险描边。 */
+.settings-card .settings-card.danger-sub-card {
+    padding: 14px 16px;
+    margin: 0 0 10px;
+    background: transparent;
+    box-shadow: none;
+    border: 1px solid rgba(185, 94, 115, .38);
+}
+
+.settings-card .settings-card.danger-sub-card:last-child { margin-bottom: 0; }
+.settings-card .settings-card.danger-sub-card:hover { transform: none; box-shadow: none; }
+.settings-card .settings-card.danger-sub-card[open] > summary { margin-bottom: 12px; }
+.settings-grid .settings-card .settings-card.danger-sub-card { margin-bottom: 10px; }
+
 .detail-sticky-bar { position: sticky; top: -18px; height: 0; z-index: 30; }
 .detail-compact-bar {
     position: absolute; inset: 0 -2px auto;
@@ -5715,9 +5738,9 @@ details.settings-card[open] > summary::after { content: "⌃"; }
     font: inherit;
     vertical-align: baseline;
 }
-/* 来源颜色用于标识平台，保留固定语义色。 */
-.detail-creator-link.source-up { color: rgb(216 93 135); }
-.detail-creator-link.source-xhs { color: rgb(159 51 70); }
+/* 来源颜色用于标识平台，保留固定语义色：B 站偏粉，小红书偏深红。 */
+.detail-creator-link.source-up { color: rgb(238 72 138); }
+.detail-creator-link.source-xhs { color: rgb(155 12 34); }
 .detail-creator-link.source-site { color: rgb(53 118 191); }
 .detail-compact-delete-confirm { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .detail-compact-bar .detail-compact-confirm { width: auto; min-height: 30px; padding: 5px 8px; font-size: 12px; white-space: nowrap; }

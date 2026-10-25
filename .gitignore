@@ -24,6 +24,7 @@ docker_app/checks/*
 !docker_app/checks/test_duplicates.py
 !docker_app/checks/test_xhs_login_viewer.py
 !docker_app/checks/viewer_interactions.test.cjs
+!docker_app/checks/navigation_motion.test.cjs
 docker_app/scripts/test_*.py
 temp/
 tmp/
@@ -32,6 +33,11 @@ tmp/
 *.sha256
 docker_app/dist/
 docker_app/review/
+
+# Local audit/report artifacts
+docs/motion-audit/
+docs/motion-audit.md
+docs/collection-pacing-review.md
 
 # Local databases
 *.db

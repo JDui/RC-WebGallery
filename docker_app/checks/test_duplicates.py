@@ -97,6 +97,63 @@ def test_first_scan_fingerprints_do_not_expire_its_own_cache(library):
     assert not library[2].list_groups(force=True)["cache_stale"]
 
 
+def test_rescan_refreshes_fingerprints_after_thumbnail_generation(library):
+    add_folder(library, "A", [1], published=1)
+    add_folder(library, "B", [1], published=2)
+    db, storage, service = library
+    service.list_groups(force=True)
+    old_fingerprint = image_fingerprint(storage.root / "A-1.png")
+    for name in ("A", "B"):
+        thumb = storage.root / f"{name}-thumb.webp"
+        with Image.open(storage.root / f"{name}-1.png") as image:
+            image.resize((34, 32)).save(thumb, quality=50)
+        assert image_fingerprint(thumb) != old_fingerprint
+        with db.connect() as conn:
+            conn.execute("update assets set small_thumb_rel_path = ? where folder_name = ?", (thumb.name, name))
+
+    result = service.list_groups(force=True)
+    assert not result["cache_stale"]
+    group = result["items"][0]
+    for row in db.list_assets_for_folders(["A", "B"]):
+        assert row["duplicate_fingerprint"] == image_fingerprint(storage.root / row["small_thumb_rel_path"])
+    targets = service.cleanup_plan(group["signature"])["targets"]
+    assert targets
+    service.validate_cleanup_targets(group["signature"], targets)
+
+
+@pytest.mark.parametrize("remove_thumbnail", [False, True])
+def test_queued_cleanup_accepts_rebuilt_or_removed_thumbnail(library, remove_thumbnail):
+    add_folder(library, "A", [1], published=1)
+    add_folder(library, "B", [1], published=2)
+    db, storage, service = library
+    thumb = storage.root / "thumb.png"
+    thumb.write_bytes((storage.root / "B-1.png").read_bytes())
+    with db.connect() as conn:
+        conn.execute("update assets set small_thumb_rel_path = ? where folder_name = 'B'", (thumb.name,))
+    group = service.list_groups(force=True)["items"][0]
+    targets = service.cleanup_plan(group["signature"])["targets"]
+    assert targets
+    if remove_thumbnail:
+        thumb.unlink()
+    else:
+        with Image.open(thumb) as image:
+            image.resize((34, 32)).save(thumb)
+    # 派生图变化不影响已经复核的原图；重启后载入的排队计划也应可执行。
+    DuplicateService(db, storage).validate_cleanup_targets(group["signature"], targets)
+
+
+def test_detection_falls_back_to_original_when_thumbnail_is_missing(library):
+    add_folder(library, "A", [1], published=1, fingerprint=False)
+    add_folder(library, "B", [1], published=2, fingerprint=False)
+    db, _, service = library
+    with db.connect() as conn:
+        conn.execute("update assets set small_thumb_rel_path = 'missing.webp'")
+    group = service.list_groups(force=True)["items"][0]
+    targets = service.cleanup_plan(group["signature"])["targets"]
+    assert targets
+    service.validate_cleanup_targets(group["signature"], targets)
+
+
 def test_chain_cleanup_keeps_a_direct_survivor_for_every_target(library):
     add_folder(library, "A", [1], published=1)
     add_folder(library, "B", [1, 2], published=2)
@@ -225,7 +282,7 @@ def test_scan_changed_during_build_is_marked_stale(library, monkeypatch):
 @pytest.mark.parametrize("operation", ["cleanup", "resolve"])
 def test_background_tasks_abort_before_deletion_on_failed_validation(operation):
     # 隔离执行真实任务方法，避免启动依赖已移除旧下载脚本的整套采集服务。
-    tree = ast.parse((Path(__file__).parents[1] / "app/services/puller.py").read_text())
+    tree = ast.parse((Path(__file__).parents[1] / "app/services/puller.py").read_text(encoding="utf-8"))
     manager_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PullManager")
     method_name = f"_run_duplicate_{operation}"
     method = next(node for node in manager_class.body if isinstance(node, ast.FunctionDef) and node.name == method_name)
