@@ -21,6 +21,19 @@
     animation: none;
 }
 .viewer-stage-image { transition: transform var(--duration-base) var(--ease-fluid), opacity 280ms ease-out; }
+.hover-preview-video { transition: opacity 180ms ease-out; }
 
 .photo-card .asset-visual img[data-progressive-image].hidden,
 .detail-card .detail-thumb img[data-progressive-image].hidden { opacity: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+    .viewer-stage-image,
+    .viewer-stage-preview,
+    .viewer-video-frame,
+    .viewer-video,
+    .hover-preview-video { transition: none; }
+    .viewer-stage-wrap.switch-up,
+    .viewer-stage-wrap.switch-down,
+    .photo-card.is-appearing,
+    .detail-card.is-appearing { animation: none; }
+}

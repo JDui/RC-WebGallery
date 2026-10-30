@@ -1885,6 +1885,59 @@ html.is-interacting .detail-card {
     line-height: 1.6;
 }
 
+.card-byline {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+    margin-top: 8px;
+    color: var(--muted, #506175);
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: nowrap;
+}
+
+.card-byline .card-creator {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 45%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.card-byline .card-date {
+    container: card-date / inline-size;
+    flex: 1 0 5ch;
+    min-width: 5ch;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.card-date-format { display: none; }
+.card-date-format-3 { display: inline; }
+
+/* Pick a format using the date's remaining space, including long author names. */
+@container card-date (min-width: 8ch) {
+    .card-date-format-3 { display: none; }
+    .card-date-format-2 { display: inline; }
+}
+@container card-date (min-width: 10ch) {
+    .card-date-format-2 { display: none; }
+    .card-date-format-1 { display: inline; }
+}
+@container card-date (min-width: 16ch) {
+    .card-date-format-1 { display: none; }
+    .card-date-format-0 { display: inline; }
+}
+
+@media (min-width: 1101px) and (min-aspect-ratio: 11/10) {
+    .gallery-item-card .card-byline { padding-right: 26px; }
+}
+
+@media (max-width: 760px), (max-width: 1100px) and (orientation: portrait) {
+    .gallery-page .card-byline { font-size: 10px; gap: 4px; }
+}
+
 .photo-stats {
     display: flex;
     gap: 10px;
@@ -3506,10 +3559,16 @@ html.is-interacting .detail-card {
     align-items: flex-start;
 }
 
+.viewer-current-frame {
+    position: absolute;
+    inset: 0;
+}
+
 .viewer-stage-neighbor,
 .viewer-stage-handoff,
 .viewer-stage-preview,
 .viewer-stage-image,
+.viewer-video-frame,
 .viewer-video {
     position: absolute;
     inset: 0;
@@ -3609,6 +3668,7 @@ html.is-interacting .detail-card {
 
 .viewer-media.stage.dragging .viewer-stage-preview,
 .viewer-media.stage.dragging .viewer-stage-image,
+.viewer-media.stage.dragging .viewer-video-frame,
 .viewer-media.stage.dragging .viewer-video {
     transition-property: opacity;
 }
@@ -3616,6 +3676,9 @@ html.is-interacting .detail-card {
 .viewer-video {
     background: transparent;
 }
+
+.viewer-video-frame { pointer-events: none; }
+.viewer-video.awaiting-frame { visibility: hidden; }
 
 .hover-preview-image.hidden {
     opacity: 0;

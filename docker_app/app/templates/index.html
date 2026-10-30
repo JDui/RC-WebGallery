@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-5-detail-preload-2-trackpad-hint-3-responsive-swipe-4-xhs-login-recovery-2-gallery-instant-injection-1-motion-2-detail-close-1-viewer-indicators-1' %}
+    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-5-detail-preload-2-trackpad-hint-3-responsive-swipe-4-xhs-login-recovery-2-gallery-instant-injection-1-motion-2-detail-close-1-viewer-indicators-1-image-handoff-1-card-dates-1' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -105,7 +105,7 @@
                         <button class="sidebar-link" :class="{ active: currentView === 'gallery' && selectedSubscriptionUids.length === 1 && selectedSubscriptionUids[0] === item.uid }" :aria-current="(currentView === 'gallery' && selectedSubscriptionUids.length === 1 && selectedSubscriptionUids[0] === item.uid) ? 'page' : null" :title="item.uname || item.uid" @click="selectSubscription(item.uid)">
                             <span class="link-badge subscription-link-badge" :class="{ image: subscriptionIconUrl(item) }" :style="subscriptionIconTinyStyle(item)">
                                 <template x-if="subscriptionIconUrl(item)">
-                                    <img :src="subscriptionIconUrl(item)" :alt="item.uname || item.uid" loading="lazy" decoding="async" @load="fadeLoadedImage($event)" @error="handleSubscriptionIconError(item)">
+                                    <img x-progressive-src.swap="subscriptionIconUrl(item)" :alt="item.uname || item.uid" loading="lazy" decoding="async" @progressive-error="handleSubscriptionIconError(item)">
                                 </template>
                                 <template x-if="!subscriptionIconUrl(item)">
                                     <span x-text="subscriptionBadgeText(item)"></span>
@@ -303,6 +303,8 @@
                                 <template x-for="item in galleryWindowItems()" :key="galleryItemKey(item)">
                                             <article
                                                 class="photo-card gallery-item-card"
+                                                x-init="claimCardAppearance(item)"
+                                                @animationend.self="item.__appearing = false"
                                                 data-testid="photo-card"
                                                 :data-gallery-key="galleryItemKey(item)"
                                                 :data-media-menu-folder="item.__deleted_placeholder ? null : item.folder_name"
@@ -322,14 +324,13 @@
                                                     <div x-show="!item.__deleted_placeholder">
                                                     <div class="photo-visual" x-show="item.preview_tiles?.length">
                                                     <div class="photo-collage" :class="`tiles-${Math.min(galleryPreviewTiles(item).length, 4) || 1}`" :style="galleryCoverStyle(item)">
-                                                        <template x-for="tile in galleryPreviewTiles(item)" :key="tile.id">
+                                                        <template x-for="(tile, tileIndex) in galleryPreviewTiles(item)" :key="tileIndex">
                                                             <div class="photo-collage-tile">
                                                                 <img loading="lazy" decoding="async" x-progressive-src="galleryTileUrl(tile)" :alt="item.title" :width="tile.width || null" :height="tile.height || null">
                                                             </div>
                                                         </template>
                                                     </div>
                                                     <div class="photo-badges">
-                                                        <span class="photo-badge" :title="item.pub_time" x-text="displayDate(item.pub_time, true)"></span>
                                                         <span class="photo-badge date-warning" x-show="futureDate(item.pub_time)" title="来源日期晚于当前时间，请核对原帖">来源日期待核实</span>
                                                     </div>
                                                     <span class="photo-badge live photo-badge-corner" x-show="item.has_livephoto">Live Photo</span>
@@ -354,8 +355,15 @@
                                                     <div class="photo-meta">
                                                     <h4 :title="item.title || item.text_prefix" x-text="cardPrimaryText(item)"></h4>
                                                     <button class="card-open-button" type="button" @click.stop="openFolder(item.folder_name)" :aria-label="`打开动态：${item.title || item.text_prefix || item.folder_name}`"></button>
+                                                    <div class="card-byline">
+                                                        <span class="card-creator" :title="creatorName(item)" x-text="creatorName(item)"></span>
+                                                        <span class="card-date" :title="item.pub_time || '未知时间'" :aria-label="item.pub_time || '未知时间'">
+                                                            <template x-for="(date, index) in cardDateFormats(item.pub_time)" :key="index">
+                                                                <span :class="`card-date-format card-date-format-${index}`" x-text="date" aria-hidden="true"></span>
+                                                            </template>
+                                                        </span>
+                                                    </div>
                                                     <div class="photo-stats">
-                                                        <span x-text="creatorName(item)"></span>
                                                         <span x-show="item.image_count > 0 && !item.video_count" x-text="`${item.image_count} 张照片`"></span>
                                                         <span x-show="item.video_count > 0" x-text="`${item.video_count} 条视频`"></span>
                                                         <span x-show="item.livephoto_count > 0" x-text="`${item.livephoto_count} 条 Live Photo`"></span>
@@ -455,22 +463,25 @@
                                         <article class="photo-card recent-update-card" @click="openFolder(item.folder_name)">
                                             <div class="photo-visual">
                                                 <div class="photo-collage" :class="`tiles-${Math.min(galleryPreviewTiles(item).length, 4) || 1}`" :style="galleryCoverStyle(item)">
-                                                    <template x-for="tile in galleryPreviewTiles(item)" :key="tile.id">
+                                                    <template x-for="(tile, tileIndex) in galleryPreviewTiles(item)" :key="tileIndex">
                                                         <div class="photo-collage-tile">
-                                                            <img loading="lazy" decoding="async" :src="galleryTileUrl(tile)" :alt="cardPrimaryText(item)" @load="fadeLoadedImage($event); scheduleRecentUpdatesMeasure()">
+                                                            <img loading="lazy" decoding="async" x-progressive-src="galleryTileUrl(tile)" :alt="cardPrimaryText(item)" @load="scheduleRecentUpdatesMeasure()">
                                                         </div>
                                                     </template>
-                                                </div>
-                                                <div class="photo-badges">
-                                                    <span class="photo-badge" x-text="item.pub_time || '未知时间'"></span>
                                                 </div>
                                             </div>
                                             <div class="photo-meta recent-update-card-meta">
                                                 <h4 :title="item.title || item.text_prefix" x-text="cardPrimaryText(item)"></h4>
                                                     <button class="card-open-button" type="button" @click.stop="openFolder(item.folder_name)" :aria-label="`打开动态：${item.title || item.text_prefix || item.folder_name}`"></button>
+                                                <div class="card-byline">
+                                                    <span class="card-creator" :title="creatorName(item)" x-text="creatorName(item)"></span>
+                                                    <span class="card-date" :title="item.pub_time || '未知时间'" :aria-label="item.pub_time || '未知时间'">
+                                                        <template x-for="(date, index) in cardDateFormats(item.pub_time)" :key="index">
+                                                            <span :class="`card-date-format card-date-format-${index}`" x-text="date" aria-hidden="true"></span>
+                                                        </template>
+                                                    </span>
+                                                </div>
                                                 <div class="photo-stats">
-                                                    <span x-text="creatorName(item)"></span>
-                                                    <span x-text="item.pub_time || '未知发布时间'"></span>
                                                     <span x-text="recentUpdateImageText(item)"></span>
                                                 </div>
                                             </div>
@@ -547,21 +558,28 @@
                                 <article class="photo-card duplicate-post-card" :class="{ selected: duplicateKeepSelection(group.signature) === item.folder_name }" x-transition.opacity.duration.160ms @click="openFolder(item.folder_name)">
                                     <div class="photo-visual" x-show="item.preview_tiles?.length">
                                         <div class="photo-collage" :class="`tiles-${Math.min(galleryPreviewTiles(item).length, 4) || 1}`" :style="galleryCoverStyle(item)">
-                                            <template x-for="tile in galleryPreviewTiles(item)" :key="tile.id">
+                                            <template x-for="(tile, tileIndex) in galleryPreviewTiles(item)" :key="tileIndex">
                                                 <div class="photo-collage-tile">
-                                                    <img loading="lazy" decoding="async" :src="galleryTileUrl(tile)" :alt="item.title" :width="tile.width || null" :height="tile.height || null" @load="fadeLoadedImage($event)">
+                                                    <img loading="lazy" decoding="async" x-progressive-src="galleryTileUrl(tile)" :alt="item.title" :width="tile.width || null" :height="tile.height || null">
                                                 </div>
                                             </template>
                                         </div>
-                                        <div class="photo-badges"><span class="photo-badge" :title="item.pub_time" x-text="displayDate(item.pub_time, true)"></span>
+                                        <div class="photo-badges">
                                                         <span class="photo-badge date-warning" x-show="futureDate(item.pub_time)" title="来源日期晚于当前时间，请核对原帖">来源日期待核实</span></div>
                                         <div class="photo-count-badge" x-text="`${item.image_count} 张`"></div>
                                     </div>
                                     <div class="photo-meta duplicate-post-meta">
                                         <h4 x-text="item.title || item.folder_name"></h4>
                                         <p x-text="item.text_prefix || '无正文摘要'"></p>
+                                        <div class="card-byline">
+                                            <span class="card-creator" :title="creatorName(item)" x-text="creatorName(item)"></span>
+                                            <span class="card-date" :title="item.pub_time || '未知时间'" :aria-label="item.pub_time || '未知时间'">
+                                                <template x-for="(date, index) in cardDateFormats(item.pub_time)" :key="index">
+                                                    <span :class="`card-date-format card-date-format-${index}`" x-text="date" aria-hidden="true"></span>
+                                                </template>
+                                            </span>
+                                        </div>
                                         <div class="photo-stats">
-                                            <span x-text="creatorName(item)"></span>
                                             <span x-text="`${item.duplicate_match_count} 张命中`"></span>
                                             <span class="duplicate-ratio" x-text="`重复内容占比 ${item.duplicate_ratio}%`"></span>
                                         </div>
@@ -596,12 +614,12 @@
                             <div class="duplicate-match-list">
                                 <template x-for="(match, matchIndex) in group.matches" :key="`${group.signature}-${matchIndex}`">
                                     <div class="duplicate-match-row">
-                                        <img :src="match.left_url" :alt="match.left_folder_name" loading="lazy" decoding="async" @load="fadeLoadedImage($event)">
+                                        <img x-progressive-src.swap="match.left_url" :alt="match.left_folder_name" loading="lazy" decoding="async">
                                         <div>
                                             <strong x-text="`${match.similarity}%`"></strong>
                                             <span>相似</span>
                                         </div>
-                                        <img :src="match.right_url" :alt="match.right_folder_name" loading="lazy" decoding="async" @load="fadeLoadedImage($event)">
+                                        <img x-progressive-src.swap="match.right_url" :alt="match.right_folder_name" loading="lazy" decoding="async">
                                     </div>
                                 </template>
                             </div>
@@ -795,7 +813,7 @@
                             <div class="panel-card-main subscription-card-main">
                                 <span class="link-badge subscription-link-badge trash-group-icon" :class="{ image: trashGroupIconUrl(group) }">
                                     <template x-if="trashGroupIconUrl(group)">
-                                        <img :src="trashGroupIconUrl(group)" :alt="group.name" loading="lazy" decoding="async" @load="fadeLoadedImage($event)">
+                                        <img x-progressive-src.swap="trashGroupIconUrl(group)" :alt="group.name" loading="lazy" decoding="async">
                                     </template>
                                     <template x-if="!trashGroupIconUrl(group)">
                                         <span x-text="group.is_site ? '站' : 'UP'"></span>
@@ -1059,7 +1077,7 @@
                             <button class="secondary-button" @click="logout()">退出登录</button>
                         </div>
                         <div class="qr-box" x-show="qr.image_data_url" x-cloak>
-                            <img :src="qr.image_data_url" alt="登录二维码" @load="fadeLoadedImage($event)">
+                            <img x-progressive-src.swap="qr.image_data_url" alt="登录二维码">
                             <p x-text="qr.message || '请使用哔哩哔哩客户端扫码登录'"></p>
                         </div>
                     </article>
@@ -1233,7 +1251,7 @@
                                 <button class="subscription-icon-tile" :data-tooltip="`${item.uname || item.name || item.uid} · ${subscriptionOverviewDateText(item)} · ${subscriptionSyncText(item)} · ${item.uid}`" @click="openSubscriptionOverviewItem(item)">
                                     <span class="link-badge subscription-link-badge subscription-card-icon" :class="{ image: subscriptionIconUrl(item) }" :style="subscriptionIconTinyStyle(item)">
                                         <template x-if="subscriptionIconUrl(item)">
-                                            <img :src="subscriptionIconUrl(item)" :alt="item.uname || item.name || item.uid" loading="lazy" decoding="async" @load="fadeLoadedImage($event)" @error="handleSubscriptionIconError(item)">
+                                            <img x-progressive-src.swap="subscriptionIconUrl(item)" :alt="item.uname || item.name || item.uid" loading="lazy" decoding="async" @progressive-error="handleSubscriptionIconError(item)">
                                         </template>
                                         <template x-if="!subscriptionIconUrl(item)">
                                             <span x-text="subscriptionBadgeText(item)"></span>
@@ -1284,7 +1302,7 @@
                             <div class="panel-card-main subscription-card-main">
                                 <span class="link-badge subscription-link-badge subscription-card-icon" :class="{ image: subscriptionIconUrl(item) }" :style="subscriptionIconTinyStyle(item)">
                                     <template x-if="subscriptionIconUrl(item)">
-                                            <img :src="subscriptionIconUrl(item)" :alt="item.uname || item.uid" loading="lazy" decoding="async" @load="fadeLoadedImage($event)" @error="handleSubscriptionIconError(item)">
+                                            <img x-progressive-src.swap="subscriptionIconUrl(item)" :alt="item.uname || item.uid" loading="lazy" decoding="async" @progressive-error="handleSubscriptionIconError(item)">
                                     </template>
                                     <template x-if="!subscriptionIconUrl(item)">
                                         <span x-text="subscriptionBadgeText(item)"></span>
@@ -1384,7 +1402,7 @@
                             </div>
                             <div class="field-copy" x-show="xhsLoginSession" x-cloak>
                                 <div class="xhs-qr-panel">
-                                    <img class="xhs-qr-image" x-show="xhsQr?.image_data_url" :src="xhsQr?.image_data_url" alt="小红书登录二维码" @load="fadeLoadedImage($event)">
+                                    <img class="xhs-qr-image" x-show="xhsQr?.image_data_url" x-progressive-src.swap="xhsQr?.image_data_url" alt="小红书登录二维码">
                                     <div class="xhs-qr-placeholder" x-show="!xhsQr?.image_data_url" x-cloak>
                                         <span x-text="xhsQrText(xhsQr?.phase)"></span>
                                     </div>
@@ -1554,7 +1572,7 @@
                                 <div class="panel-card-main subscription-card-main">
                                     <span class="link-badge subscription-link-badge subscription-card-icon" :class="{ image: siteSourceIconUrl(source) }" :style="siteSourceIconTinyStyle(source)">
                                         <template x-if="siteSourceIconUrl(source)">
-                                            <img :src="siteSourceIconUrl(source)" :alt="source.name" loading="lazy" decoding="async" @load="fadeLoadedImage($event)" @error="iconLoadFailures = { ...iconLoadFailures, [`site:${source.id}`]: true }">
+                                            <img x-progressive-src.swap="siteSourceIconUrl(source)" :alt="source.name" loading="lazy" decoding="async" @progressive-error="iconLoadFailures = { ...iconLoadFailures, [`site:${source.id}`]: true }">
                                         </template>
                                         <template x-if="!siteSourceIconUrl(source)">
                                             <span>站</span>
@@ -1795,6 +1813,8 @@
                     <template x-for="pair in detailWindowItems()" :key="detailPairKey(pair)">
                         <article
                             class="detail-card"
+                            x-init="claimCardAppearance(pair)"
+                            @animationend.self="pair.__appearing = false"
                             data-testid="detail-card"
                             :data-detail-key="detailPairKey(pair)"
                             :data-media-menu-folder="pair.placeholder ? null : detail.folder?.folder_name"
@@ -1950,10 +1970,10 @@
                     </div>
                 </div>
                 <div class="viewer-position-hint" data-testid="viewer-position-hint" role="status" aria-label="当前图片序号" x-show="viewer.open && viewerPositionHintVisible && !viewerToolbarOpen" x-transition.opacity.duration.220ms x-text="viewerPositionText()" x-cloak></div>
-                <div class="viewer-original-loading" data-testid="viewer-original-loading" role="progressbar" aria-label="原图加载进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="viewerImageProgress" :aria-valuetext="viewerImageProgress === null ? '正在加载原图' : viewerOriginalProgressLabel()" x-show="viewerShouldShowOriginalLoading()" x-transition.opacity.duration.280ms x-cloak>
+                <div class="viewer-original-loading" data-testid="viewer-original-loading" role="progressbar" :aria-label="viewerPendingEntry ? '切换图片加载进度' : '原图加载进度'" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="viewerLoadingProgress()" :aria-valuetext="viewerLoadingProgress() === null ? '正在加载图片' : viewerOriginalProgressLabel()" x-show="viewerShouldShowOriginalLoading()" x-transition.opacity.duration.280ms x-cloak>
                     <svg class="viewer-original-loading-ring" viewBox="0 0 36 36" aria-hidden="true">
                         <circle class="viewer-original-loading-track" cx="18" cy="18" r="15"></circle>
-                        <circle class="viewer-original-loading-value" cx="18" cy="18" r="15" pathLength="100" :class="{ indeterminate: viewerImageProgress === null }" :stroke-dasharray="viewerImageProgress === null ? '24 100' : `${viewerImageProgress} 100`"></circle>
+                        <circle class="viewer-original-loading-value" cx="18" cy="18" r="15" pathLength="100" :class="{ indeterminate: viewerLoadingProgress() === null }" :stroke-dasharray="viewerLoadingProgress() === null ? '24 100' : `${viewerLoadingProgress()} 100`"></circle>
                     </svg>
                     <span class="viewer-original-loading-label" aria-hidden="true" x-text="viewerOriginalProgressLabel()"></span>
                 </div>
@@ -1972,18 +1992,20 @@
                         <template x-for="direction in [-1, 1]" :key="direction">
                             <div class="viewer-stage-neighbor" :data-neighbor="direction" :style="viewerNeighborStyle(direction)" x-show="viewerVerticalDragging && viewerZoom <= 1.02 && viewerNeighborUrl(direction)" aria-hidden="true"></div>
                         </template>
-                        <div class="viewer-stage-handoff" :style="viewerHandoffStyle()" x-show="viewerHandoff?.url && !(viewer.showVideo && viewer.pair?.livephoto)" aria-hidden="true"></div>
-                        <template x-for="preview in viewer.pair?.image && !viewerPreviewRetired && viewerPreviewUrl() ? [{ url: viewerPreviewUrl(), token: viewerToken }] : []" :key="preview.token + ':' + preview.url">
-                            <img x-retire-image class="viewer-stage-preview" fetchpriority="high" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) }" :src="preview.url" :data-viewer-token="preview.token" alt="" decoding="async" loading="eager" draggable="false" @load="viewerPreviewLoaded($event)" @error="$el.dataset.previewReady = '0'">
+                        <div class="viewer-current-frame">
+                        <div class="viewer-stage-handoff" :style="viewerHandoffStyle()" x-show="viewerHandoff?.url" aria-hidden="true"></div>
+                        <template x-for="preview in viewer.pair && !viewerPreviewRetired && viewerPreviewUrl() ? [{ url: viewerPreviewUrl(), token: viewerToken }] : []" :key="preview.token + ':' + preview.url">
+                            <img x-retire-image class="viewer-stage-preview" fetchpriority="high" :style="viewerMediaStyle()" :src="preview.url" :data-viewer-token="preview.token" alt="" decoding="async" loading="eager" draggable="false" @load="viewerPreviewLoaded($event)" @error="$el.dataset.previewReady = '0'">
                         </template>
                         <template x-for="original in viewer.pair?.image && viewerImageSource ? [{ url: viewerImageSource, token: viewerToken }] : []" :key="original.token + ':' + original.url">
-                            <img x-retire-image class="viewer-stage-image" :style="viewerMediaStyle()" :class="{ hidden: (viewer.showVideo && viewer.pair?.livephoto) || !viewerImageReady }" :src="original.url" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片'" :data-viewer-token="original.token" decoding="async" loading="eager" fetchpriority="auto" draggable="false" @load="viewerMediaLoaded('image', $event)" @error="viewerMediaFailed('image', $event)" @transitionend.self="viewerOriginalTransitionEnded($event)">
+                            <img x-retire-image class="viewer-stage-image" :style="viewerMediaStyle()" :class="{ hidden: !viewerImageReady }" :src="original.url" :alt="viewer.pair ? `图片 ${viewer.pair.pair_index}` : '图片'" :data-viewer-token="original.token" decoding="async" loading="eager" fetchpriority="auto" draggable="false" @load="viewerMediaLoaded('image', $event)" @error="viewerMediaFailed('image', $event)" @transitionend.self="viewerOriginalTransitionEnded($event)">
                         </template>
+                        <canvas class="viewer-video-frame" width="0" height="0" :style="viewerMediaStyle()" x-show="viewerVideoFrameReady" aria-hidden="true" x-cloak></canvas>
                         <template x-if="viewer.pair?.livephoto">
                             <video
                                 x-retire-video class="viewer-video"
                                 :style="viewerMediaStyle()"
-                                :class="{ hidden: !viewer.showVideo }"
+                                :class="{ hidden: !viewer.showVideo, 'awaiting-frame': !viewer.showVideo && viewerVideoFrameReady }"
                                 playsinline
                                 muted
                                 :poster="livephotoViewerPoster()"
@@ -1991,9 +2013,12 @@
                                 :data-forward="viewer.pair?.livephoto?.url"
                                 :data-reverse="viewer.pair?.livephoto?.reverse_url"
                                 :data-has-image="viewer.pair?.image ? '1' : '0'"
-                                @loadeddata="viewerMediaLoaded('video', $event); applyPlaybackMode($el)"
+                                @loadeddata="viewerMediaLoaded('video', $event); viewerVideoReady($el)"
+                                @playing="viewerVideoReady($el)"
+                                @error="viewerVideoFailed($el)"
                             ></video>
                         </template>
+                        </div>
                     </div>
                 </article>
             </div>

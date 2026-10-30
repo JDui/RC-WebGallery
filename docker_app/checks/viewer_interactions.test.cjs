@@ -19,14 +19,14 @@ function wideGestureState(windowOverrides = {}) {
 }
 
 
-function responsiveViewerState() {
+function responsiveViewerState(windowOverrides = {}) {
   let id=0;const timers=new Map();
-  const state=app({window:{innerWidth:1400,innerHeight:900,setTimeout:fn=>{timers.set(++id,fn);return id;},clearTimeout:key=>timers.delete(key),requestAnimationFrame:fn=>fn()},document:{querySelector:()=>null,querySelectorAll:()=>[]}});
+  const state=app({window:{innerWidth:1400,innerHeight:900,setTimeout:fn=>{timers.set(++id,fn);return id;},clearTimeout:key=>timers.delete(key),requestAnimationFrame:fn=>fn(),...windowOverrides},document:{querySelector:()=>null,querySelectorAll:()=>[]}});
   for(const key of ['pauseCurrentViewerMedia','cancelDeleteViewerPair','setInteracting','syncBodyLock','scheduleIdleWork'])state[key]=()=>{};
   state.$nextTick=fn=>fn();
   state.viewerSequence=Array.from({length:4},(_,i)=>({folder:{folder_name:'demo'},pair:{item_key:`demo::${i+1}`,pair_index:i+1,image:{url:`original-${i+1}`,small_thumb_url:`thumb-${i+1}`}}}));
-  state.openViewerEntry(state.viewerSequence[0]);
-  return {state,timers};
+  const opened=state.openViewerEntry(state.viewerSequence[0]);
+  return {state,timers,opened};
 }
 
 function pointerEvent(x,y,type='pointermove') {
@@ -324,12 +324,8 @@ test('back hint keeps its identity while fading after a completed menu gesture',
 });
 
 
-test('a prepared neighbor stays visible until the new preview has decoded and reached a frame', async () => {
-  const {state}=responsiveViewerState();const frames=[];
-  state.showNextPair(true);
-  assert.equal(state.viewerHandoff.url,'thumb-2');
-  assert.equal(state.viewerHandoff.key,'demo::2');
-  const token=state.viewerToken;
+test('a decoded handoff stays visible until the mounted preview has decoded and reached a frame', async () => {
+  const frames=[];const token=7;
   let decoded;const target={dataset:{viewerToken:String(token)},decode:()=>new Promise(resolve=>decoded=resolve)};
   // Use a separate state to control frame delivery without relying on browser timers.
   const managed=app({window:{requestAnimationFrame:fn=>frames.push(fn)}});
@@ -338,6 +334,179 @@ test('a prepared neighbor stays visible until the new preview has decoded and re
   decoded();await Promise.resolve();assert.equal(target.dataset.previewReady,'1');
   assert.equal(managed.viewerHandoff.url,'thumb-2');
   frames.shift()();assert.equal(managed.viewerHandoff,null);
+});
+
+test('cold viewer navigation retains the displayed entry until a cancellable thumbnail preparation completes', async () => {
+  const requests=[];
+  const resources={warm(){},prepare(url){let resolve;const promise=new Promise(done=>resolve=done);
+    const task={url,resolve,promise,cancel(){this.cancelled=true;resolve(false);}};requests.push(task);
+    return {promise,cancel:()=>task.cancel()};}};
+  const {state,opened}=responsiveViewerState({galleryImageResources:resources});
+  requests[0].resolve(true);await opened;const token=state.viewerToken;
+  const changing=state.showNextPair();assert.equal(state.viewer.pair.pair_index,1);assert.equal(state.viewerIndex,0);
+  assert.equal(state.viewerToken,token);assert.equal(state.viewerPendingEntry.pair.pair_index,2);
+  requests[1].resolve(true);await changing;
+  assert.equal(state.viewer.pair.pair_index,2);assert.equal(state.viewerIndex,1);
+  assert.equal(state.viewerHandoff.url,'thumb-2');assert.equal(state.viewerImageReady,false);
+});
+
+test('rapid pending navigation cancels stale work, and close prevents a late frame reopening the viewer', async () => {
+  const requests=[];const resources={warm(){},prepare(url){let resolve;const promise=new Promise(done=>resolve=done);
+    const task={url,resolve,cancelled:false};requests.push(task);return{promise,cancel(){task.cancelled=true;resolve(false);}};}};
+  const {state,opened}=responsiveViewerState({galleryImageResources:resources});
+  requests[0].resolve(true);await opened;
+  state.showNextPair();const changing=state.showNextPair();assert.equal(requests[1].cancelled,true);
+  assert.equal(state.viewerPendingEntry.pair.pair_index,3);assert.equal(state.viewer.pair.pair_index,1);
+  requests[2].resolve(true);await changing;
+  assert.equal(state.viewer.pair.pair_index,3);
+  state.viewerNavigationLockedUntil=0;const closing=state.showNextPair();state.closeViewer(true);
+  requests[3].resolve(true);await closing;
+  assert.equal(state.viewer.open,false);assert.equal(state.viewerPendingEntry,null);
+});
+
+test('failed preview and original preparation leave the last displayed frame and navigation index intact', async () => {
+  const requests=[];const resources={warm(){},prepare(url){let resolve;const promise=new Promise(done=>resolve=done);
+    requests.push({url,resolve});return{promise,cancel(){resolve(false);}};}};
+  const {state,opened}=responsiveViewerState({galleryImageResources:resources});
+  requests[0].resolve(true);await opened;state.notify=()=>{};const changing=state.showNextPair();
+  requests[1].resolve(false);await new Promise(setImmediate);requests[2].resolve(false);await changing;
+  assert.equal(state.viewer.pair.pair_index,1);assert.equal(state.viewerIndex,0);
+  assert.equal(state.viewerPendingEntry,null);
+});
+
+test('virtual remount consumes entrance animation even if the first mount ended early', () => {
+  const state=app();const item={__appearing:true};
+  state.claimCardAppearance(item);assert.equal(item.__appearing,true);
+  state.claimCardAppearance(item);assert.equal(item.__appearing,false);
+});
+
+test('Live Photo keeps the static frame until current video data is ready and ignores stale readiness', () => {
+  const state=app();state.viewerToken=3;state.playbackMode='once';
+  state.viewer={open:true,showVideo:false,pair:{image:{small_thumb_url:'still'},livephoto:{url:'video'}}};
+  const video={dataset:{viewerToken:'3',forward:'video'},readyState:0};
+  state.viewerVideoReady(video);assert.equal(state.viewer.showVideo,false);
+  assert.equal(state.livephotoViewerPoster(),'still');
+  video.readyState=2;state.viewerVideoReady(video);assert.equal(state.viewer.showVideo,true);
+  state.viewerVideoFailed(video);assert.equal(state.viewer.showVideo,false);
+  video.dataset.viewerToken='2';state.viewerVideoReady(video);assert.equal(state.viewer.showVideo,false);
+});
+
+test('Escape during the first pending viewer entry cancels loading without a late reopen', async () => {
+  let resolve,cancelled=false;
+  const resources={warm(){},prepare(){return {promise:new Promise(done=>resolve=done),cancel(){cancelled=true;resolve(false);}};}};
+  const {state,opened}=responsiveViewerState({galleryImageResources:resources});
+  state.currentFullscreenElement=()=>null;state.handleEscape();
+  resolve(true);await opened;assert.equal(cancelled,true);assert.equal(state.viewer.open,false);
+  assert.equal(state.viewerPendingEntry,null);
+});
+
+test('pending navigation keeps the displayed position and shows indeterminate progress', async () => {
+  const requests=[];const resources={warm(){},prepare(){let resolve;const promise=new Promise(done=>resolve=done);
+    requests.push(resolve);return{promise,cancel(){resolve(false);}};}};
+  const {state,opened}=responsiveViewerState({galleryImageResources:resources});
+  requests[0](true);await opened;state.viewerImageProgress=100;state.viewerImageLoading=false;
+  const changing=state.showNextPair();assert.equal(state.viewerPositionText(),'1 / 4');
+  assert.equal(state.viewerShouldShowOriginalLoading(),true);assert.equal(state.viewerLoadingProgress(),null);
+  requests[1](true);await changing;assert.equal(state.viewerPositionText(),'2 / 4');
+});
+
+test('a video URL preview waits for a decoded first-frame still before changing the displayed entry', async () => {
+  const prepared=[];const resources={warm(){},prepare(url){prepared.push(url);return{promise:Promise.resolve(true),cancel(){}};}};
+  const {state,opened}=responsiveViewerState({galleryImageResources:resources});await opened;
+  state.viewerSequence[1].pair={pair_index:2,preview_url:'/video.mp4',livephoto:{url:'/video.mp4'}};
+  let ready;state.prepareViewerVideoFrame=url=>{assert.equal(url,'/video.mp4');return{promise:new Promise(resolve=>ready=resolve),cancel(){ready('');}};};
+  const changing=state.showNextPair();assert.equal(state.viewer.pair.pair_index,1);
+  assert.equal(state.viewerPendingEntry.pair.pair_index,2);assert.deepEqual(prepared,['thumb-1']);
+  ready('data:image/jpeg;base64,frame');await changing;
+  assert.equal(state.viewer.pair.pair_index,2);assert.equal(state.viewerIndex,1);
+  assert.equal(state.viewerPreviewUrl(),'data:image/jpeg;base64,frame');
+  assert.equal(state.livephotoViewerPoster(),'data:image/jpeg;base64,frame');
+  assert.deepEqual(prepared,['thumb-1','data:image/jpeg;base64,frame']);
+});
+
+test('failed cover falls back to video, and failed or cancelled video preparation preserves the old entry', async () => {
+  const resources={warm(){},prepare(url){return{promise:Promise.resolve(url!=='bad-cover'),cancel(){}};}};
+  const {state,opened}=responsiveViewerState({galleryImageResources:resources});await opened;
+  state.viewerSequence[1].pair={pair_index:2,livephoto:{url:'video',cover_url:'bad-cover'}};
+  const frames=[];state.prepareViewerVideoFrame=()=>{let ready;const promise=new Promise(resolve=>ready=resolve);
+    const frame={ready,cancelled:false};frames.push(frame);return{promise,cancel(){frame.cancelled=true;ready('');}};};
+  let failed=0;state.notify=()=>failed++;
+  const failure=state.showNextPair();await new Promise(setImmediate);frames[0].ready('');await failure;
+  assert.equal(failed,1);assert.equal(state.viewer.pair.pair_index,1);assert.equal(state.viewerIndex,0);
+  const cancelled=state.showNextPair();await new Promise(setImmediate);
+  const next=state.showNextPair();assert.equal(frames[1].cancelled,true);
+  await next;frames[1].ready('late-frame');await cancelled;
+  assert.equal(state.viewer.pair.pair_index,3);assert.equal(state.viewerIndex,2);
+});
+
+test('temporary video preparation releases decoding resources on readiness, cancellation, error and timeout', async () => {
+  const videos=[],timers=new Map();let id=0,draws=0;
+  const state=app({window:{setTimeout:fn=>{timers.set(++id,fn);return id;},clearTimeout:key=>timers.delete(key)},
+    document:{createElement(kind){
+      if(kind==='canvas')return{getContext:()=>({drawImage(video,x,y,width,height){draws++;assert.equal(width,1600);assert.equal(height,900);}}),toDataURL:()=> 'data:image/jpeg;base64,frame'};
+      const video={readyState:0,videoWidth:3840,videoHeight:2160,pause(){this.paused=true;},removeAttribute(){this.removed=true;},load(){this.loads=(this.loads||0)+1;}};
+      videos.push(video);return video;
+    }}});
+  const ready=state.prepareViewerVideoFrame('video');videos[0].onloadeddata();assert.equal(draws,0);
+  videos[0].readyState=2;videos[0].onloadeddata();assert.equal(await ready.promise,'data:image/jpeg;base64,frame');
+  const cancelled=state.prepareViewerVideoFrame('cancel');cancelled.cancel();assert.equal(await cancelled.promise,'');
+  const error=state.prepareViewerVideoFrame('error');videos[2].onerror();assert.equal(await error.promise,'');
+  const timeout=state.prepareViewerVideoFrame('timeout');timers.values().next().value();assert.equal(await timeout.promise,'');
+  assert.equal(timers.size,0);assert.equal(draws,1);
+  for(const video of videos){assert.equal(video.paused,true);assert.equal(video.removed,true);assert.equal(video.onloadeddata,null);assert.equal(video.onerror,null);assert.equal(video.loads,2);}
+});
+
+test('gesture exit waits for its decoded neighbor and closing during the slide cannot reopen the viewer', async () => {
+  const requests=[];const resources={warm(){},prepare(url){let resolve;const promise=new Promise(done=>resolve=done);
+    requests.push({url,resolve});return{promise,cancel(){resolve(false);}};}};
+  const {state,opened}=responsiveViewerState({galleryImageResources:resources});requests[0].resolve(true);await opened;
+  const slides=[];state.animatePreparedViewerSwipe=(direction,url)=>new Promise(resolve=>{
+    slides.push({direction,url});state.viewerSwipeResolve=resolve;state.viewerSwipeFinish=()=>state.cancelViewerSwipe();
+  });
+  state.viewerOffsetY=-160;const changing=state.finishViewerVerticalSwipe(1);
+  assert.equal(state.viewerOffsetY,0);assert.equal(state.viewer.pair.pair_index,1);assert.equal(slides.length,0);
+  requests[1].resolve(true);await new Promise(setImmediate);
+  assert.deepEqual(slides,[{direction:1,url:'thumb-2'}]);assert.equal(state.viewer.pair.pair_index,1);
+  state.viewerSwipeFinish();await changing;assert.equal(state.viewer.pair.pair_index,2);
+  const closing=state.finishViewerVerticalSwipe(1);requests[2].resolve(true);await new Promise(setImmediate);
+  state.closeViewer(true);await closing;assert.equal(state.viewer.open,false);assert.equal(state.viewerPendingEntry,null);
+});
+
+test('pingpong holds the displayed video frame across a cold source change and releases it on pause', async () => {
+  const order=[];const canvas={getContext:()=>({drawImage(){order.push('capture');}})};
+  const state=app({document:{querySelector:()=>canvas}});state.viewerToken=1;state.playbackMode='pingpong';
+  state.viewer={open:true,showVideo:true,pair:{image:{url:'still'},livephoto:{url:'forward'}}};
+  const video={dataset:{viewerToken:'1',forward:'forward',reverse:'reverse',hasImage:'1'},src:'forward',readyState:4,
+    videoWidth:3840,videoHeight:2160,play:()=>Promise.resolve(),load(){order.push(`load:${this.src}`);this.readyState=0;},
+    pause(){},removeAttribute(){this.src='';},getAttribute:()=> 'still',setAttribute(){}};
+  state.applyPlaybackMode(video);await Promise.resolve();video.onended();
+  assert.deepEqual(order,['capture','load:reverse']);assert.equal(state.viewerVideoFrameReady,true);
+  assert.equal(canvas.width,1600);assert.equal(canvas.height,900);assert.equal(state.viewer.showVideo,false);
+  state.viewerVideoReady(video);assert.equal(state.viewer.showVideo,false);
+  video.readyState=2;state.viewerVideoReady(video);assert.equal(state.viewer.showVideo,true);
+  state.playbackMode='pause';state.applyPlaybackMode(video);assert.equal(state.viewerVideoFrameReady,false);
+  assert.equal(canvas.width,0);assert.equal(canvas.height,0);
+});
+
+test('a rejected superseded play promise cannot hide a newer ready video', async () => {
+  const state=app();state.viewerToken=1;state.playbackMode='once';
+  state.viewer={open:true,showVideo:false,pair:{livephoto:{url:'video'}}};
+  const plays=[];const video={dataset:{viewerToken:'1',forward:'video'},readyState:2,
+    play(){return new Promise((resolve,reject)=>plays.push({resolve,reject}));}};
+  state.playReadyViewerVideo(video);state.playReadyViewerVideo(video);
+  plays[1].resolve();await new Promise(setImmediate);assert.equal(state.viewer.showVideo,true);
+  plays[0].reject(Error('superseded'));await new Promise(setImmediate);assert.equal(state.viewer.showVideo,true);
+});
+
+test('preview retirement never removes the underlay while the original is still transparent', () => {
+  let opacity='0';const state=app({window:{getComputedStyle:()=>({opacity,visibility:'visible'}),clearTimeout(){}}});
+  state.viewer.open=true;state.viewerToken=1;state.viewerImageReady=true;
+  state.viewerHandoff={url:'ready-thumb'};
+  const target={complete:true,naturalWidth:600,isConnected:true,dataset:{viewerToken:'1'}};
+  state.retireViewerPreview(target,1);assert.equal(state.viewerPreviewRetired,false);
+  opacity='0.6';state.retireViewerPreview(target,1);assert.equal(state.viewerPreviewRetired,false);
+  opacity='1';state.retireViewerPreview(target,1);assert.equal(state.viewerPreviewRetired,true);
+  assert.equal(state.viewerHandoff,null);
 });
 
 test('trackpad commits on deceleration without waiting through the inertial tail', () => {

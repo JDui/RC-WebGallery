@@ -1659,7 +1659,7 @@ body[data-intranet-access="local"] .intranet-current-status { color: #167b61; }
     .gallery-page .photo-meta { padding: 7px 8px 8px; }
     .gallery-page .photo-meta h4 { font-size: 12px; line-height: 1.4; min-height: 0; -webkit-line-clamp: 2; }
     .gallery-page .photo-stats { gap: 4px; font-size: 10px; padding-right: 28px; }
-    .gallery-page .photo-stats > span:not(:first-child), .gallery-page .photo-meta > p { display: none; }
+    .gallery-page .photo-meta > .photo-stats, .gallery-page .photo-meta > p { display: none; }
     .gallery-page .photo-badges { display: none; }
     .gallery-page .photo-badge-corner { top: 6px; bottom: auto; left: 6px; padding: 3px 5px; font-size: 9px; }
     .gallery-page .photo-count-badge { bottom: 6px; right: 6px; padding: 2px 5px; font-size: 9px; }

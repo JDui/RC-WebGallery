@@ -41,7 +41,7 @@
       seenUrls.set(url, true);
       if (seenUrls.size > 512) seenUrls.delete(seenUrls.keys().next().value);
     }
-    function preload(url) {
+    function preload(url, priority = false) {
       const image = new env.Image();
       let resolve, settled = false, started = false, timer = null;
       const promise = new Promise((done) => { resolve = done; });
@@ -73,7 +73,7 @@
         image.src = url;
         if (image.complete && image.naturalWidth > 0) image.onload();
       }};
-      waiting.push(job);
+      if (priority) waiting.unshift(job); else waiting.push(job);
       pump();
       return {promise, cancel: () => finish(false)};
     }
@@ -81,7 +81,7 @@
     const exposure = env.IntersectionObserver ? new env.IntersectionObserver(entries => {
       for (const entry of entries) controllers.get(entry.target)?.setVisible(entry.isIntersecting);
     }, {rootMargin: "100% 0px", threshold: 0}) : null;
-    function attach(image) {
+    function attach(image, {transition = true} = {}) {
       let latest = "", committed = "", failed = "", epoch = 0, disposed = false, suspended = false, committing = false;
       let loading = false, pending = null, old = null, animation = null, finishTimer = null;
       let visible = true, pageHidden = false;
@@ -110,10 +110,16 @@
         const candidate = await task.promise;
         if (pending === task) pending = null;
         if (disposed || token !== epoch || suspended) { if (candidate) retire(candidate); return; }
-        if (!candidate) { loading = false; failed = url; return; }
+        if (!candidate) {
+          loading = false;
+          failed = url;
+          // A failed replacement must leave a usable previous image in place.
+          if (!committed && env.CustomEvent) image.dispatchEvent(new env.CustomEvent("progressive-error"));
+          return;
+        }
         const previous = committed;
         let snapshot = null;
-        if (previous) {
+        if (previous && transition) {
           snapshot = new env.Image();
           snapshot.className = "progressive-image-old";
           snapshot.alt = "";
@@ -134,7 +140,7 @@
         committing = true;
         old = snapshot;
         if (old) image.before(old);
-        image.style.opacity = "0";
+        if (transition) image.style.opacity = "0";
         // Visibility and concurrency are managed above; native lazy loading can defer decode.
         image.loading = "eager";
         image.src = url;
@@ -154,7 +160,8 @@
         loading = false;
         image.dataset.progressiveReady = "1";
         image.style.removeProperty("opacity");
-        const duration = seenUrls.has(url) || env.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? 0 : 260;
+        const duration = !transition || env.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+          || (!previous && seenUrls.has(url)) ? 0 : 260;
         remember(url);
         if (!duration || !image.animate) { finishFade(); return; }
         image.dataset.imageTransition = "1";
@@ -217,7 +224,7 @@
       };
       active.add(controller);
       controllers.set(image, controller);
-      if (exposure && image.closest?.(".gallery-item-card, .detail-card")) {
+      if (exposure && (image.loading === "lazy" || image.closest?.(".gallery-item-card, .detail-card"))) {
         controller.setVisible(false);
         exposure.observe(image);
       }
@@ -229,14 +236,22 @@
       if (candidate) retire(candidate);
       return !!candidate;
     }
-    return {attach, retire, warm, flush, dispose, dirty, active};
+    function prepare(url) {
+      const task = preload(url, true);
+      return {cancel: task.cancel, promise: task.promise.then(candidate => {
+        if (candidate) retire(candidate);
+        return !!candidate;
+      })};
+    }
+    return {attach, retire, warm, prepare, flush, dispose, dirty, active};
   }
   if (typeof module !== "undefined" && module.exports) { module.exports = {createManager}; return; }
   const manager = createManager(root);
-  root.galleryImageResources = {warm: manager.warm};
+  root.galleryImageResources = {warm: manager.warm, prepare: manager.prepare};
   document.addEventListener("alpine:init", () => {
-    root.Alpine.directive("progressive-src", (element, {expression}, {evaluateLater, effect, cleanup}) => {
-      const controller = manager.attach(element);
+    root.Alpine.directive("progressive-src", (element, {expression, modifiers}, {evaluateLater, effect, cleanup}) => {
+      // Small icons/QR codes keep their existing layout and swap decoded pixels atomically.
+      const controller = manager.attach(element, {transition: !modifiers.includes("swap")});
       const evaluate = evaluateLater(expression);
       effect(() => evaluate((url) => controller.setSource(url)));
       cleanup(() => controller.dispose());
