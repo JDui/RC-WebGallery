@@ -82,3 +82,78 @@ test('animated close keeps a paused frame until the backdrop finishes fading',()
   timers.get(app.videoNoteCloseTimer)();
   assert.equal(app.videoNoteClosing,false); assert.equal(app.videoNote.video,null);
 });
+
+test('panel loading distinguishes first load, failure and empty success while keeping cached rows', async()=>{
+  const {app}=state(); let resolve;
+  app.api=()=>new Promise(done=>{resolve=done;});
+  assert.equal(app.panelEmptyReady('review'),false);
+  const pending=app.refreshReview();
+  assert.equal(app.panelLoading.review,true);
+  assert.equal(app.panelEmptyReady('review'),false);
+  resolve({items:[{id:1}]}); await pending;
+  app.api=async()=>{throw Error('offline');};
+  await assert.rejects(app.refreshReview(),/offline/);
+  assert.equal(app.reviewItems[0].id,1);
+  assert.equal(app.panelLoading.review,false);
+  assert.equal(app.panelEmptyReady('review'),false);
+  app.api=async()=>({items:[]}); await app.refreshReview();
+  assert.equal(app.panelErrors.review,'');
+  assert.equal(app.panelEmptyReady('review'),true);
+  app.api=()=>new Promise(done=>{resolve=done;});
+  const refresh=app.refreshReview();
+  assert.equal(app.panelEmptyReady('review'),true);
+  resolve({items:[]}); await refresh;
+});
+
+test('out-of-order panel responses cannot restore stale rows or end the latest loading state',async()=>{
+  const {app}=state(); const pending=[];
+  app.api=()=>new Promise(resolve=>pending.push(resolve));
+  const first=app.refreshReview(), second=app.refreshReview();
+  pending[0]({items:[{id:1}]}); await first;
+  assert.equal(app.panelLoading.review,true);
+  pending[1]({items:[{id:2}]}); await second;
+  assert.equal(app.reviewItems[0].id,2);
+  const third=app.refreshReview(), fourth=app.refreshReview();
+  pending[3]({items:[{id:4}]}); await fourth;
+  pending[2]({items:[{id:3}]}); await third;
+  assert.equal(app.reviewItems[0].id,4);
+});
+
+test('closing task details invalidates both successful and failed late responses',async()=>{
+  for (const fail of [false,true]) {
+    const {app}=state(); let finish;
+    app.syncBodyLock=()=>{};
+    app.api=()=>new Promise((resolve,reject)=>{finish=fail ? reject : resolve;});
+    const pending=app.openTaskInspector({id:1,task_type:'pull'});
+    app.closeTaskInspector();
+    finish(fail ? Error('offline') : {item:{id:1}}); await pending;
+    assert.equal(app.taskInspector.open,false);
+    assert.equal(app.taskInspectorLoading,false);
+  }
+});
+
+test('switching task inspector to another task or live status discards the older request',async()=>{
+  const {app}=state(); const pending=[];
+  app.syncBodyLock=()=>{}; app.formatTaskDetail=item=>String(item.id);
+  app.api=()=>new Promise(resolve=>pending.push(resolve));
+  const first=app.openTaskInspector({id:1,task_type:'pull'});
+  const second=app.openTaskAddedItems({id:2});
+  pending[0]({item:{id:1}}); await first;
+  assert.match(app.taskInspector.title,/#2/);
+  assert.equal(app.taskInspectorLoading,true);
+  app.openCurrentTaskInspector(); const live=app.taskInspector;
+  pending[1]({item:{id:2,details:{added_items:[]}}}); await second;
+  assert.equal(app.taskInspector,live);
+});
+
+test('settings refresh preserves edits made while the request is pending',async()=>{
+  const {app}=state(); let finish;
+  app.settings={download_sleep:1}; app.keywordText='';
+  app.settingsBaseline=app.settingsFingerprint(); app.lazyLoaded.settings=true;
+  app.api=url=>url==='/api/settings' ? new Promise(resolve=>{finish=resolve;}) : Promise.resolve({});
+  app.checkDataUpgrade=async()=>{}; app.applyThemeSpec=()=>{};
+  const pending=app.loadSettings(); app.settings.download_sleep=7;
+  finish({download_sleep:2}); await pending;
+  assert.equal(app.settings.download_sleep,7);
+  assert.equal(app.settingsDirty(),true);
+});

@@ -75,7 +75,8 @@
   }
 
   function currentSection() {
-    return sections.find(visible) || null;
+    // Alpine keeps the outgoing view visible until its leave transition ends.
+    return sections.find(section => !section.inert && section.getAttribute("aria-hidden") !== "true" && visible(section)) || null;
   }
 
   function cancelAnimations() {
@@ -96,10 +97,14 @@
     cancelAnimations();
     if (!section || reducedMotion?.matches) return;
     const lowPerformance = root.dataset.performanceMode === "low";
-    animate(section, [{ opacity: 0.45 }, { opacity: 1 }], {
-      duration: lowPerformance ? 180 : 280,
-      easing: "cubic-bezier(.2,.75,.25,1)",
-    });
+    // The view's CSS transition already owns its opacity. A second animation
+    // overrides it and can flash the outgoing or incoming panel.
+    if (!section.hasAttribute('x-transition:enter')) {
+      animate(section, [{ opacity: 0.45 }, { opacity: 1 }], {
+        duration: lowPerformance ? 180 : 280,
+        easing: "cubic-bezier(.2,.75,.25,1)",
+      });
+    }
     const heading = section.querySelector(".section-heading > div:first-child");
     const copy = [
       document.querySelector(".topbar-label"),

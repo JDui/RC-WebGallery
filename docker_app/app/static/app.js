@@ -19,19 +19,19 @@ function pickThumbUrl(sources, levels = THUMB_LEVELS, originalLast = false) {
 
 // 界面配色的前端镜像：算法与 app/theme.py 保持一致，只负责设置页的实时预览，
 // 真正生效的色板仍由服务端 /theme/*.css 派生。预览有偏差也不会影响最终样式。
-const UI_THEME_DEFAULTS = { hue: 337, saturation: 0.5, value: 1 };
+const UI_THEME_DEFAULTS = { hue: 215, saturation: 0.65, value: 1 };
 const UI_THEME_BOUNDS = { hue: [0, 359.9], saturation: [0, 1.5], value: [0.55, 1.45] };
 // 基准色板取自 liquid-glass.css 的 :root（它在 app.css 之后加载，同名变量以它为准）。
 const UI_THEME_BASE_COLORS = {
-  text: "#172842",
-  muted: "#65758e",
-  accent: "#426ee3",
-  accent2: "#199caa",
-  accentWarm: "#b77e38",
-  danger: "#c74260",
-  line: "#465f88",
-  surface: "#f5f8fd",
-  page: "#eaf0f8",
+  text: "#292929",
+  muted: "#696969",
+  accent: "#365fa1",
+  accent2: "#4c6da2",
+  accentWarm: "#986b36",
+  danger: "#b43f51",
+  line: "#282828",
+  surface: "#ffffff",
+  page: "#f4f4f2",
 };
 const UI_THEME_ENGINE = {
   HUE_MIN: 170,
@@ -207,6 +207,7 @@ function galleryApp(initialSettings = {}) {
   let detailResizeObserver = null;
   let galleryFetchController = null;
   let detailFetchController = null;
+  const folderMutationQueues = new Map();
   let webkitFullscreenVideo = null;
   let mediaLongPressTimer = null;
   let mediaLongPressStart = null;
@@ -214,7 +215,12 @@ function galleryApp(initialSettings = {}) {
   let mediaMenuAnchor = null;
   let settingsGroupAnimation = null;
   let settingsGroupToken = 0;
+  const panelRequestTokens = {};
+  let taskInspectorToken = 0;
   return {
+    panelLoading: {},
+    panelErrors: {},
+    panelLoaded: {},
     currentView: "gallery",
     navigationView: "gallery",
     touchBackGesture: null,
@@ -578,6 +584,13 @@ function galleryApp(initialSettings = {}) {
     resetSiteIconsRunning: false,
     resetXhsIconsConfirmStep: 0,
     resetXhsIconsRunning: false,
+    themePresets: [
+      { name: "雾蓝", hue: 215, saturation: 0.65, value: 1 },
+      { name: "松绿", hue: 155, saturation: 0.55, value: 1 },
+      { name: "陶土", hue: 20, saturation: 0.6, value: 1 },
+      { name: "烟紫", hue: 270, saturation: 0.4, value: 1 },
+      { name: "石墨", hue: 215, saturation: 0, value: 1 },
+    ],
     themeDraft: { ...UI_THEME_DEFAULTS },
     themeSaved: { ...UI_THEME_DEFAULTS },
     themeSavedRevision: "",
@@ -604,7 +617,13 @@ function galleryApp(initialSettings = {}) {
     queuedCancelConfirmId: null,
     deletePairConfirmKey: null,
     deletePairConfirmStep: 0,
-    pairDeletingKey: null,
+    pairDeletingKeys: {},
+    deletedFolders: {},
+    deletedPairs: {},
+    galleryMutationRevision: 0,
+    galleryHasLocalEdits: false,
+    postMutationRefreshTimer: null,
+    postMutationRefreshExtras: {},
     taskInspector: { open: false, title: "", subtitle: "", body: "" },
     sourcePreview: { open: false, url: "", title: "", subtitle: "", reviewId: null },
     taskInspectorLoading: false,
@@ -650,7 +669,7 @@ function galleryApp(initialSettings = {}) {
       });
       this.updateViewportMode();
       this.installTouchNavigation();
-      ["videoNote.open", "detail.open", "viewer.open", "taskInspector.open", "sourcePreview.open", "mediaContextMenu.open"].forEach((key) => {
+      ["videoNote.open", "detail.open", "viewer.open", "taskInspector.open", "sourcePreview.open", "mediaContextMenu.open", "sidebarDrawerOpen", "compactViewport"].forEach((key) => {
         this.$watch(key, () => this.$nextTick(() => this.syncModalAccessibility()));
       });
       window.addEventListener("beforeunload", (event) => {
@@ -1480,6 +1499,32 @@ function galleryApp(initialSettings = {}) {
       return this.galleryMinHeight > 0 ? `min-height: ${this.galleryMinHeight}px;` : "";
     },
 
+    async loadPanel(key, url, apply) {
+      const token = panelRequestTokens[key] = (panelRequestTokens[key] || 0) + 1;
+      this.panelLoading = { ...this.panelLoading, [key]: true };
+      this.panelErrors = { ...this.panelErrors, [key]: '' };
+      try {
+        const payload = await this.api(url);
+        if (panelRequestTokens[key] !== token) return;
+        apply(payload);
+        this.panelLoaded = { ...this.panelLoaded, [key]: true };
+      } catch (error) {
+        if (panelRequestTokens[key] === token) {
+          this.panelErrors = { ...this.panelErrors, [key]: error.message || '加载失败，请重试' };
+        }
+        throw error;
+      } finally {
+        if (panelRequestTokens[key] === token) {
+          this.panelLoading = { ...this.panelLoading, [key]: false };
+        }
+      }
+    },
+
+    panelEmptyReady(key) {
+      // An already loaded empty result is cached content too; keep it during refresh.
+      return !!this.panelLoaded[key] && !this.panelErrors[key];
+    },
+
     async api(url, options = {}) {
       const response = await fetch(url, {
         headers: { "Content-Type": "application/json" },
@@ -1813,11 +1858,12 @@ function galleryApp(initialSettings = {}) {
     },
 
     syncModalAccessibility() {
-      const layer = this.topOverlayLayer(false);
+      const layer = this.topOverlayLayer(false) || (this.compactViewport && this.sidebarDrawerOpen ? "sidebar" : "");
       const name = layer === "fullscreen"
         ? this.currentFullscreenElement()?.closest?.("[data-modal-layer]")?.dataset.modalLayer || ""
         : layer;
-      const active = name ? document.querySelector(`[data-modal-layer="${name}"]`) : null;
+      const active = name === "sidebar" ? document.querySelector(".sidebar")
+        : name ? document.querySelector(`[data-modal-layer="${name}"]`) : null;
       const stack = this.modalFocusStack;
       let restore = null;
       if (stack.length && stack[stack.length - 1].element !== active) {
@@ -1841,12 +1887,13 @@ function galleryApp(initialSettings = {}) {
         const main = shell.querySelector(":scope > main");
         if (main) main.inert = !!active && !main.contains(active);
         const sidebar = shell.querySelector(":scope > .sidebar");
-        if (sidebar) sidebar.inert = !!active || (this.compactViewport && !this.sidebarDrawerOpen);
+        if (sidebar) sidebar.inert = (!!active && active !== sidebar) || (this.compactViewport && !this.sidebarDrawerOpen);
       }
       if (restore?.isConnected && !restore.closest("[inert]")) restore.focus({preventScroll: true});
       else if (restore && !active) document.querySelector('.sidebar-link.active')?.focus({preventScroll: true});
       if (active && !active.contains(document.activeElement)) {
-        (name === 'viewer' ? active : active.querySelector('[data-modal-close]') || active).focus({preventScroll: true});
+        (name === 'sidebar' ? active.querySelector('button') || active
+          : name === 'viewer' ? active : active.querySelector('[data-modal-close]') || active).focus({preventScroll: true});
       }
     },
 
@@ -1957,7 +2004,7 @@ function galleryApp(initialSettings = {}) {
         this.api("/api/settings").then(settings => {
           // The settings page may already have loaded and accepted edits while
           // another bootstrap request is still pending.
-          if (this.lazyLoaded.settings || this.settingsDirty()) return;
+          if (this.lazyLoaded.settings || this.panelLoading.settings || this.settingsDirty()) return;
           this.settings = settings || {};
           this.savedGalleryDefaultRandom = settings?.gallery_default_random === true;
           this.settingsError = settings?.intranet_config_error || "";
@@ -2001,13 +2048,17 @@ function galleryApp(initialSettings = {}) {
     },
 
     schedulePostMutationRefresh(result, fallbackKeys = null, extras = {}) {
-      if (result?.sidebar_counts) {
-        this.applySidebarCounts(result.sidebar_counts);
-      }
-      this.scheduleIdleWork(() => {
+      // A burst of deletes needs one fresh count read, not out-of-order snapshots
+      // and a full set of background reads for every response.
+      this.postMutationRefreshExtras = { ...this.postMutationRefreshExtras, ...extras };
+      window.clearTimeout(this.postMutationRefreshTimer);
+      this.postMutationRefreshTimer = window.setTimeout(() => {
+        this.postMutationRefreshTimer = null;
+        const extras = this.postMutationRefreshExtras;
+        this.postMutationRefreshExtras = {};
         const tasks = [
           this.refreshMeta().catch(() => {}),
-          result?.sidebar_counts ? Promise.resolve() : this.refreshSidebarCounts(fallbackKeys).catch(() => {}),
+          this.refreshSidebarCounts().catch(() => {}),
         ];
         if (extras.trash || this.currentView === "trash" || this.lazyLoaded.trash) {
           tasks.push(this.refreshTrash().catch(() => {}));
@@ -2023,6 +2074,78 @@ function galleryApp(initialSettings = {}) {
         }
         Promise.all(tasks).catch(() => {});
       }, 1200);
+    },
+
+    async runFolderMutation(folderName, callback) {
+      // Accept clicks immediately; serialize only server writes to the same post
+      // so index rebuilds cannot overwrite each other's remaining assets.
+      const previous = folderMutationQueues.get(folderName) || Promise.resolve();
+      const task = previous.catch(() => {}).then(callback);
+      folderMutationQueues.set(folderName, task);
+      try {
+        return await task;
+      } finally {
+        if (folderMutationQueues.get(folderName) === task) folderMutationQueues.delete(folderName);
+      }
+    },
+
+    beginGalleryDeletion(folderName, pairIndex = null) {
+      this.galleryHasLocalEdits = true;
+      for (const placeholderKey of Object.keys(this.deletedGalleryTimers)) {
+        window.clearTimeout(this.deletedGalleryTimers[placeholderKey]);
+        this.deletedGalleryTimers[placeholderKey] = window.setTimeout(() => this.removeDeletedPlaceholder(placeholderKey), 1500);
+      }
+      if (pairIndex === null) this.deletedFolders[folderName] = true;
+      else this.deletedPairs[this.pairDeleteKey(folderName, pairIndex)] = true;
+      this.clearLocalGalleryCaches();
+    },
+
+    isGalleryItemDeleted(item) {
+      return !!this.deletedFolders[item?.folder_name]
+        || !!this.deletedPairs[this.pairDeleteKey(item?.folder_name, item?.pair_index)];
+    },
+
+    filterDeletedGalleryItems(items) {
+      return (items || []).filter(item => item.__deleted_placeholder || !this.isGalleryItemDeleted(item));
+    },
+
+    restoreDeletedGalleryItems(snapshot, matches, requestId) {
+      // Navigation and later operations own the current page. Undo only this
+      // target, preserving every unrelated item object and its loaded image.
+      if (requestId !== this.galleryRequestId) return;
+      const items = (this.gallery.items || []).filter(item => !(item.__deleted_placeholder && matches(item)));
+      let restored = 0;
+      snapshot.forEach((item, index) => {
+        if (item.__deleted_placeholder || !matches(item) || this.isGalleryItemDeleted(item)) return;
+        if (items.some(current => this.galleryItemKey(current) === this.galleryItemKey(item))) return;
+        const next = snapshot.slice(index + 1).find(candidate => items.some(current => this.galleryItemKey(current) === this.galleryItemKey(candidate)));
+        const at = next ? items.findIndex(current => this.galleryItemKey(current) === this.galleryItemKey(next)) : items.length;
+        items.splice(at, 0, item);
+        restored += 1;
+      });
+      this.gallery = { ...this.gallery, items, total: Number(this.gallery.total || 0) + restored };
+    },
+
+    restoreDeletedDetailPair(payload, pair, delta) {
+      if (!payload?.folder || !pair || this.isGalleryItemDeleted({ folder_name: payload.folder.folder_name, pair_index: pair.pair_index })) return payload;
+      if ((payload.pairs || []).some(item => Number(item.pair_index) === Number(pair.pair_index))) return payload;
+      return {
+        ...payload,
+        pairs: [...(payload.pairs || []), pair].sort((a, b) => Number(a.pair_index) - Number(b.pair_index)),
+        folder: {
+          ...payload.folder,
+          image_count: Number(payload.folder.image_count || 0) + delta.images,
+          livephoto_count: Number(payload.folder.livephoto_count || 0) + delta.livephotos,
+          asset_count: Number(payload.folder.asset_count || 0) + delta.total,
+        },
+      };
+    },
+
+    refreshGalleryAfterTask() {
+      // Keep the user's deletion session and scroll window stable. Explicit
+      // navigation/refresh still loads current server data.
+      if (this.currentView !== "gallery" || this.galleryHasLocalEdits) return Promise.resolve();
+      return this.refreshGallery(true);
     },
 
     installFixedLayoutObservers() {
@@ -2534,14 +2657,15 @@ function galleryApp(initialSettings = {}) {
     },
 
     async loadSubscriptions() {
-      const payload = await this.api("/api/subscriptions");
-      const previousExpanded = { ...(this.subscriptionExpanded || {}) };
-      this.latestSubscriptionPullAt = payload.latest_pull_at || this.latestSubscriptionPullAt || "";
-      this.subscriptions = (payload.items || []).map((item) => this.normalizeSubscriptionItem(item));
-      this.sidebarCounts = { ...this.sidebarCounts, subscriptions: this.subscriptions.length };
-      this.subscriptionExpanded = Object.fromEntries(
-        this.subscriptions.map((item) => [String(item.uid), !!previousExpanded[String(item.uid)]]),
-      );
+      return this.loadPanel("subscriptions", "/api/subscriptions", (payload) => {
+        const previousExpanded = { ...(this.subscriptionExpanded || {}) };
+        this.latestSubscriptionPullAt = payload.latest_pull_at || this.latestSubscriptionPullAt || "";
+        this.subscriptions = (payload.items || []).map((item) => this.normalizeSubscriptionItem(item));
+        this.sidebarCounts = { ...this.sidebarCounts, subscriptions: this.subscriptions.length };
+        this.subscriptionExpanded = Object.fromEntries(
+          this.subscriptions.map((item) => [String(item.uid), !!previousExpanded[String(item.uid)]]),
+        );
+      });
     },
 
     normalizeSubscriptionItem(item) {
@@ -2577,14 +2701,14 @@ function galleryApp(initialSettings = {}) {
       if (panel === "xhs") {
         this.loadXhsSources();
       } else if (panel === "site") {
-        this.refreshSites();
+        this.refreshSites().catch(() => {});
         this.refreshSidebarCounts(["sites", "subscriptions"]).catch(() => {});
       } else if (panel === "overview") {
-        this.loadSubscriptions();
-        this.refreshSites();
+        this.loadSubscriptions().catch(() => {});
+        this.refreshSites().catch(() => {});
         this.refreshSidebarCounts(["sites", "subscriptions"]).catch(() => {});
       } else {
-        this.loadSubscriptions();
+        this.loadSubscriptions().catch(() => {});
         this.refreshSidebarCounts(["subscriptions"]).catch(() => {});
       }
     },
@@ -2836,6 +2960,8 @@ function galleryApp(initialSettings = {}) {
     },
 
     async refreshGallery(reset = false, targetPage = null, direction = "replace", anchor = null) {
+      const mutationRevision = this.galleryMutationRevision;
+      if (reset) this.galleryHasLocalEdits = false;
       galleryFetchController?.abort();
       galleryFetchController = typeof AbortController !== "undefined" ? new AbortController() : null;
       const fetchSignal = galleryFetchController?.signal;
@@ -2916,7 +3042,7 @@ function galleryApp(initialSettings = {}) {
       }
       try {
         const payload = await this.api(`/api/gallery/items?${params.toString()}`, { signal: fetchSignal });
-        if (requestId !== this.galleryRequestId) {
+        if (requestId !== this.galleryRequestId || (this.galleryHasLocalEdits && mutationRevision !== this.galleryMutationRevision)) {
           return;
         }
         if (searchSignature && this.searchActive() && searchSignature === this.searchSignature()) {
@@ -3044,7 +3170,7 @@ function galleryApp(initialSettings = {}) {
           this.galleryBatchTimer = null;
           return;
         }
-        const batch = this.galleryBatchQueue.splice(0, this.visibleGalleryBatchSize());
+        const batch = this.filterDeletedGalleryItems(this.galleryBatchQueue.splice(0, this.visibleGalleryBatchSize()));
         if (batch.length) {
           this.gallery = {
             ...this.gallery,
@@ -3067,7 +3193,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     applyGalleryPagePayload(payload, page, direction, token = this.galleryRenderToken) {
-      const incomingItems = payload.items || [];
+      const incomingItems = this.filterDeletedGalleryItems(payload.items);
       const sameMode = this.displayedGalleryViewMode === this.galleryViewMode;
       if (direction !== "next") {
         const fingerprint = JSON.stringify(incomingItems);
@@ -3145,9 +3271,11 @@ function galleryApp(initialSettings = {}) {
       }
       const lightPayload = {
         ...payload,
-        items: (payload.items || []).slice(0, Math.max(24, Number(payload.page_size || 24))),
+        items: this.filterDeletedGalleryItems(payload.items).slice(0, Math.max(24, Number(payload.page_size || 24))),
       };
+      const revision = this.galleryMutationRevision;
       this.scheduleIdleWork(() => {
+        if (revision !== this.galleryMutationRevision) return;
         try {
           localStorage.setItem(key, JSON.stringify({ payload: lightPayload, saved_at: Date.now() }));
           const entries = [];
@@ -3166,6 +3294,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     clearLocalGalleryCaches() {
+      this.galleryMutationRevision += 1;
       try {
         for (let index = localStorage.length - 1; index >= 0; index -= 1) {
           const key = localStorage.key(index);
@@ -3427,14 +3556,14 @@ function galleryApp(initialSettings = {}) {
       if (this.subscriptionPanel === "xhs") {
         this.loadXhsSources();
       } else if (this.subscriptionPanel === "site") {
-        this.refreshSites();
+        this.refreshSites().catch(() => {});
         this.refreshSidebarCounts(["subscriptions", "sites"]).catch(() => {});
       } else if (this.subscriptionPanel === "overview") {
-        this.loadSubscriptions();
-        this.refreshSites();
+        this.loadSubscriptions().catch(() => {});
+        this.refreshSites().catch(() => {});
         this.refreshSidebarCounts(["subscriptions", "sites"]).catch(() => {});
       } else {
-        this.loadSubscriptions();
+        this.loadSubscriptions().catch(() => {});
         this.refreshSidebarCounts(["subscriptions"]).catch(() => {});
       }
     },
@@ -3448,7 +3577,7 @@ function galleryApp(initialSettings = {}) {
       this.currentView = "settings";
       this.closeSidebarDrawer();
       this.scrollViewTop();
-      this.loadSettings();
+      this.loadSettings().catch(() => {});
       this.refreshTasks().catch(() => {});
     },
 
@@ -3457,7 +3586,7 @@ function galleryApp(initialSettings = {}) {
       this.currentView = "review";
       this.closeSidebarDrawer();
       this.scrollViewTop();
-      this.refreshReview();
+      this.refreshReview().catch(() => {});
       this.refreshSidebarCounts(["review"]).catch(() => {});
     },
 
@@ -3474,7 +3603,7 @@ function galleryApp(initialSettings = {}) {
       this.currentView = "logs";
       this.closeSidebarDrawer();
       this.scrollViewTop();
-      this.refreshLogs();
+      this.refreshLogs().catch(() => {});
       this.refreshSidebarCounts(["logs"]).catch(() => {});
     },
 
@@ -3975,6 +4104,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     async openFolder(folderName, previewOverride = null) {
+      if (this.deletedFolders[folderName]) return;
       this.cancelPendingViewerEntry();
       detailFetchController?.abort();
       detailFetchController = null;
@@ -4061,7 +4191,10 @@ function galleryApp(initialSettings = {}) {
         if (this.videoNote.open && this.videoNote.folder?.folder_name === folderName) {
           this.closeVideoNote();
         }
-        const detailPairs = this.normalizeDetailPairs(payload.pairs || [], false, this.detail.pairs || []);
+        const detailPairs = this.normalizeDetailPairs(
+          (payload.pairs || []).filter(pair => !this.isGalleryItemDeleted({ folder_name: folderName, pair_index: pair.pair_index })),
+          false, this.detail.pairs || [],
+        );
         if (!detailPairs.length) this.detailError = "当前动态没有可显示的图片。";
         const applyDetailPayload = () => {
           this.detail = {
@@ -4836,12 +4969,12 @@ function galleryApp(initialSettings = {}) {
     },
 
     cacheDetailPayload(folderName, payload) {
-      if (!folderName || !payload?.folder) {
+      if (!folderName || !payload?.folder || this.deletedFolders[folderName]) {
         return;
       }
       const nextCache = {
         ...this.detailCache,
-        [folderName]: this.cloneDetailPayload(payload),
+        [folderName]: this.cloneDetailPayload({ ...payload, pairs: (payload.pairs || []).filter(pair => !this.deletedPairs[this.pairDeleteKey(folderName, pair.pair_index)]) }),
       };
       const nextOrder = [...(this.detailCacheOrder || []).filter((key) => key !== folderName), folderName];
       while (nextOrder.length > this.detailCacheLimit) {
@@ -6357,10 +6490,11 @@ function galleryApp(initialSettings = {}) {
     },
 
     async refreshReview() {
-      const payload = await this.api("/api/review/items");
-      this.reviewItems = payload.items;
-      this.lazyLoaded.review = true;
-      this.sidebarCounts = { ...this.sidebarCounts, review: this.reviewItems.length };
+      return this.loadPanel("review", "/api/review/items", (payload) => {
+        this.reviewItems = payload.items;
+        this.lazyLoaded.review = true;
+        this.sidebarCounts = { ...this.sidebarCounts, review: this.reviewItems.length };
+      });
     },
 
     async refreshDuplicates(force = false) {
@@ -6652,14 +6786,15 @@ function galleryApp(initialSettings = {}) {
     },
 
     async refreshTasks() {
-      const payload = await this.api("/api/tasks/runs");
-      this.taskRuns = payload.items;
-      this.queuedTasks = payload.queue || [];
-      this.lazyLoaded.tasks = true;
-      this.sidebarCounts = { ...this.sidebarCounts, tasks: this.taskRuns.length };
-      if (this.queuedCancelConfirmId && !this.queuedTasks.some((item) => Number(item.queue_id) === this.queuedCancelConfirmId)) {
-        this.queuedCancelConfirmId = null;
-      }
+      return this.loadPanel("tasks", "/api/tasks/runs", (payload) => {
+        this.taskRuns = payload.items;
+        this.queuedTasks = payload.queue || [];
+        this.lazyLoaded.tasks = true;
+        this.sidebarCounts = { ...this.sidebarCounts, tasks: this.taskRuns.length };
+        if (this.queuedCancelConfirmId && !this.queuedTasks.some((item) => Number(item.queue_id) === this.queuedCancelConfirmId)) {
+          this.queuedCancelConfirmId = null;
+        }
+      });
     },
 
     async refreshRecentUpdates() {
@@ -6680,7 +6815,9 @@ function galleryApp(initialSettings = {}) {
         if (requestId !== this.recentUpdatesRequestId || requestKind !== this.sourceKind) {
           return;
         }
-        const groups = Array.isArray(payload?.groups) ? payload.groups : [];
+        const groups = (Array.isArray(payload?.groups) ? payload.groups : [])
+          .map(group => ({ ...group, items: this.filterDeletedGalleryItems(group.items) }))
+          .filter(group => group.items.length);
         this.reconcileRecentUpdateDisclosure(groups);
         this.recentUpdates = {
           groups,
@@ -7065,6 +7202,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     openCurrentTaskInspector() {
+      taskInspectorToken += 1;
       this.taskInspector = {
         open: true,
         title: this.pullStatus.running ? "当前运行任务" : "当前状态",
@@ -7076,6 +7214,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     openCurrentAddedItems() {
+      taskInspectorToken += 1;
       const items = this.pullStatus?.stats?.added_items || [];
       this.taskInspector = {
         open: true,
@@ -7088,6 +7227,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     async openTaskInspector(item) {
+      const token = ++taskInspectorToken;
       this.taskInspectorLoading = true;
       this.taskInspector = {
         open: true,
@@ -7098,6 +7238,7 @@ function galleryApp(initialSettings = {}) {
       this.syncBodyLock();
       try {
         const payload = await this.api(`/api/tasks/${item.id}`);
+        if (token !== taskInspectorToken || !this.taskInspector.open) return;
         const task = payload.item || item;
         this.taskInspector = {
           open: true,
@@ -7106,6 +7247,7 @@ function galleryApp(initialSettings = {}) {
           body: this.formatTaskDetail(task),
         };
       } catch (error) {
+        if (token !== taskInspectorToken || !this.taskInspector.open) return;
         this.taskInspector = {
           open: true,
           title: `${item.task_type} #${item.id}`,
@@ -7113,11 +7255,12 @@ function galleryApp(initialSettings = {}) {
           body: `加载任务详情失败：${error.message}`,
         };
       } finally {
-        this.taskInspectorLoading = false;
+        if (token === taskInspectorToken) this.taskInspectorLoading = false;
       }
     },
 
     async openTaskAddedItems(item) {
+      const token = ++taskInspectorToken;
       this.taskInspectorLoading = true;
       this.taskInspector = {
         open: true,
@@ -7128,6 +7271,7 @@ function galleryApp(initialSettings = {}) {
       this.syncBodyLock();
       try {
         const payload = await this.api(`/api/tasks/${item.id}`);
+        if (token !== taskInspectorToken || !this.taskInspector.open) return;
         const task = payload.item || item;
         const items = task?.details?.added_items || [];
         this.taskInspector = {
@@ -7137,6 +7281,7 @@ function galleryApp(initialSettings = {}) {
           body: this.formatAddedItems(items),
         };
       } catch (error) {
+        if (token !== taskInspectorToken || !this.taskInspector.open) return;
         this.taskInspector = {
           open: true,
           title: `任务 #${item.id} 的新增内容`,
@@ -7144,11 +7289,12 @@ function galleryApp(initialSettings = {}) {
           body: `加载新增内容失败：${error.message}`,
         };
       } finally {
-        this.taskInspectorLoading = false;
+        if (token === taskInspectorToken) this.taskInspectorLoading = false;
       }
     },
 
     openQueuedTaskInspector(item) {
+      taskInspectorToken += 1;
       this.taskInspector = {
         open: true,
         title: `排队任务 #${item.queue_id}`,
@@ -7168,7 +7314,9 @@ function galleryApp(initialSettings = {}) {
     },
 
     closeTaskInspector() {
-      this.taskInspector = { open: false, title: "", subtitle: "", body: "" };
+      taskInspectorToken += 1;
+      // Retain the outgoing contents during the backdrop's leave transition.
+      this.taskInspector = { ...this.taskInspector, open: false };
       this.taskInspectorLoading = false;
       this.syncBodyLock();
     },
@@ -7321,14 +7469,15 @@ function galleryApp(initialSettings = {}) {
     },
 
     async refreshTrash() {
-      const payload = await this.api("/api/trash/items");
-      this.trashItems = payload.items;
-      this.lazyLoaded.trash = true;
-      this.sidebarCounts = { ...this.sidebarCounts, trash: this.trashItems.length };
-      const previousExpanded = { ...(this.trashGroupExpanded || {}) };
-      this.trashGroupExpanded = Object.fromEntries(
-        this.trashGroups().map((group) => [group.key, previousExpanded[group.key] ?? false]),
-      );
+      return this.loadPanel("trash", "/api/trash/items", (payload) => {
+        this.trashItems = payload.items;
+        this.lazyLoaded.trash = true;
+        this.sidebarCounts = { ...this.sidebarCounts, trash: this.trashItems.length };
+        const previousExpanded = { ...(this.trashGroupExpanded || {}) };
+        this.trashGroupExpanded = Object.fromEntries(
+          this.trashGroups().map((group) => [group.key, previousExpanded[group.key] ?? false]),
+        );
+      });
     },
 
     trashGroupKey(item) {
@@ -7461,23 +7610,19 @@ function galleryApp(initialSettings = {}) {
 
     async confirmDeletePair(folderName, pairIndex) {
       const key = this.pairDeleteKey(folderName, pairIndex);
-      if (!folderName || !pairIndex || this.deletePairConfirmKey !== key || this.deletePairConfirmStep < 1 || this.pairDeletingKey) {
+      if (!folderName || !pairIndex || this.deletePairConfirmKey !== key || this.deletePairConfirmStep < 1 || this.pairDeletingKeys[key] || this.isGalleryItemDeleted({ folder_name: folderName, pair_index: pairIndex })) {
         return;
       }
-      this.pairDeletingKey = key;
+      this.pairDeletingKeys[key] = true;
+      this.beginGalleryDeletion(folderName, pairIndex);
+      const galleryRequestId = this.galleryRequestId;
       const currentIndex = this.viewerIndex;
-      const previousDetail = {
-        open: this.detail.open,
-        pairs: [...(this.detail.pairs || [])],
-        folder: this.detail.folder ? { ...this.detail.folder } : null,
-        videos: [...(this.detail.videos || [])],
-      };
       const previousGallery = {
         items: [...(this.gallery.items || [])],
         total: this.gallery.total || 0,
       };
       const previousCache = this.detailCache[folderName] ? this.cloneDetailPayload(this.detailCache[folderName]) : null;
-      const removedPair = (this.detail.pairs || []).find((pair) => Number(pair.pair_index) === Number(pairIndex))
+      const removedPair = (this.detail.folder?.folder_name === folderName ? this.detail.pairs || [] : []).find((pair) => Number(pair.pair_index) === Number(pairIndex))
         || (previousCache?.pairs || []).find((pair) => Number(pair.pair_index) === Number(pairIndex))
         || (this.gallery.items || []).find((item) => item.folder_name === folderName && Number(item.pair_index) === Number(pairIndex));
       const delta = this.pairAssetDelta(removedPair);
@@ -7521,50 +7666,38 @@ function galleryApp(initialSettings = {}) {
       }
       this.notify("info", "已提交删除", "");
       try {
-        const result = await this.api(`/api/gallery/folders/${encodeURIComponent(folderName)}/pairs/${pairIndex}/delete`, {
+        const result = await this.runFolderMutation(folderName, () => this.api(`/api/gallery/folders/${encodeURIComponent(folderName)}/pairs/${pairIndex}/delete`, {
           method: "POST",
-        });
+        }));
         this.clearLocalGalleryCaches();
         if (result.remove_empty_folder) {
+          this.deletedFolders[folderName] = true;
           this.removeFolderFromGallery(folderName);
           this.invalidateDetailCache(folderName);
-          if (this.detail.folder?.folder_name === folderName && !nextDetailPairs.length) {
+          if (this.detail.folder?.folder_name === folderName && !this.detail.pairs.length) {
             this.closeDetail();
           }
         }
         this.schedulePostMutationRefresh(result, ["all", "favorites", "livephoto", "trash", "tasks"]);
       } catch (error) {
+        delete this.deletedPairs[key];
+        this.clearLocalGalleryCaches();
         const placeholderKey = this.pairPlaceholderKey(folderName, pairIndex);
         if (this.deletedGalleryTimers[placeholderKey]) {
           window.clearTimeout(this.deletedGalleryTimers[placeholderKey]);
           delete this.deletedGalleryTimers[placeholderKey];
         }
-        this.detail = previousDetail;
-        if (previousCache) {
-          this.cacheDetailPayload(folderName, previousCache);
-        } else {
-          this.invalidateDetailCache(folderName);
+        if (this.detail.folder?.folder_name === folderName) {
+          this.detail = this.restoreDeletedDetailPair(this.detail, removedPair, delta);
         }
-        this.gallery = {
-          ...this.gallery,
-          items: previousGallery.items,
-          total: previousGallery.total,
-        };
-        if (!this.viewer.open) {
-          const fallbackSequence = (previousDetail.pairs || []).map((pair) => ({ pair, folder: previousDetail.folder }));
-          const fallbackIndex = fallbackSequence.findIndex((entry) => Number(entry.pair?.pair_index) === Number(pairIndex));
-          if (fallbackIndex >= 0) {
-            this.viewerSource = "detail";
-            this.viewerSequence = fallbackSequence;
-            this.viewerIndex = fallbackIndex;
-            this.openViewerEntry(fallbackSequence[fallbackIndex], true, false);
-          }
+        if (this.detailCache[folderName]) {
+          this.cacheDetailPayload(folderName, this.restoreDeletedDetailPair(this.detailCache[folderName], removedPair, delta));
         }
+        this.restoreDeletedGalleryItems(previousGallery.items,
+          item => item.folder_name === folderName && Number(item.pair_index) === Number(pairIndex), galleryRequestId);
         this.notify("error", "删除失败", error.message || "后台删除失败，页面内容已恢复。");
       } finally {
-        if (this.pairDeletingKey === key) {
-          this.pairDeletingKey = null;
-        }
+        delete this.pairDeletingKeys[key];
       }
     },
 
@@ -8047,10 +8180,11 @@ function galleryApp(initialSettings = {}) {
     },
 
     async refreshLogs() {
-      const payload = await this.api("/api/filter/logs");
-      this.logs = payload.items;
-      this.lazyLoaded.logs = true;
-      this.sidebarCounts = { ...this.sidebarCounts, logs: this.logs.length };
+      return this.loadPanel("logs", "/api/filter/logs", (payload) => {
+        this.logs = payload.items;
+        this.lazyLoaded.logs = true;
+        this.sidebarCounts = { ...this.sidebarCounts, logs: this.logs.length };
+      });
     },
 
     clearFilterLogsButtonLabel() {
@@ -8093,15 +8227,18 @@ function galleryApp(initialSettings = {}) {
 
     async loadSettings() {
       if (this.settingsDirty()) return;
-      const settings = await this.api("/api/settings");
-      this.settings = settings;
-      this.savedGalleryDefaultRandom = settings.gallery_default_random === true;
-      this.settingsError = settings.intranet_config_error || "";
-      document.title = settings.app_title || document.title;
-      this.keywordText = (settings.ad_filter_keywords || []).join("\n");
-      this.syncThemeState(settings);
-      this.settingsBaseline = this.settingsFingerprint();
-      this.lazyLoaded.settings = true;
+      const fingerprint = this.settingsFingerprint();
+      await this.loadPanel("settings", "/api/settings", (settings) => {
+        if (this.settingsSaving || this.settingsDirty() || fingerprint !== this.settingsFingerprint()) return;
+        this.settings = settings;
+        this.savedGalleryDefaultRandom = settings.gallery_default_random === true;
+        this.settingsError = settings.intranet_config_error || "";
+        document.title = settings.app_title || document.title;
+        this.keywordText = (settings.ad_filter_keywords || []).join("\n");
+        this.syncThemeState(settings);
+        this.settingsBaseline = this.settingsFingerprint();
+        this.lazyLoaded.settings = true;
+      });
       // Secondary maintenance statistics never hold the settings form hostage.
       await Promise.allSettled([
         this.api("/api/health").then(health => { this.galleryIndexStatus = health.gallery_index || {}; }),
@@ -8639,17 +8776,32 @@ function galleryApp(initialSettings = {}) {
         text: tint("text"),
         muted: tint("muted"),
         accent,
-        accentSoft: UI_THEME_ENGINE.rgba(accent, 0.12),
+        accentSoft: UI_THEME_ENGINE.rgba(accent, 0.09),
         accent2: tint("accent2"),
         accentWarm: tint("accentWarm"),
         danger: tint("danger"),
-        line: UI_THEME_ENGINE.rgba(tint("line"), 0.14),
-        lineStrong: UI_THEME_ENGINE.rgba(tint("line"), 0.24),
+        line: UI_THEME_ENGINE.rgba(tint("line"), 0.10),
+        lineStrong: UI_THEME_ENGINE.rgba(tint("line"), 0.20),
         surface: tint("surface"),
         page: tint("page"),
         onAccent: "#ffffff",
       };
       this.themeContrastRatio = UI_THEME_ENGINE.contrast("#ffffff", accent);
+    },
+
+    selectThemePreset(preset) {
+      if (this.themeSaving) return;
+      this.themeDraft = UI_THEME_ENGINE.normalize(preset);
+      this.themeResetConfirmStep = 0;
+      this.refreshThemeSwatches();
+    },
+
+    themePresetActive(preset) {
+      return UI_THEME_ENGINE.revision(preset) === UI_THEME_ENGINE.revision(this.themeDraft);
+    },
+
+    themePresetColor(preset) {
+      return UI_THEME_ENGINE.transformHex(UI_THEME_BASE_COLORS.accent, preset);
     },
 
     themeSwatchList() {
@@ -8711,7 +8863,9 @@ function galleryApp(initialSettings = {}) {
         return "有未保存的配色调整，点击「保存配色」后全站生效。";
       }
       const ratio = Number(this.themeContrastRatio || 0).toFixed(2);
-      return `白字压在主色上的对比度 ${ratio}:1，满足正文可读性要求。`;
+      return Number(ratio) >= 4.5
+        ? `已保存 · 按钮白字对比度 ${ratio}:1`
+        : `按钮白字对比度 ${ratio}:1，建议降低明度。`;
     },
 
     themeBound(key, index) {
@@ -8949,7 +9103,7 @@ function galleryApp(initialSettings = {}) {
           this.lazyLoaded.recentUpdates || this.currentView === "recent-updates" ? this.refreshRecentUpdates() : Promise.resolve(),
           this.lazyLoaded.trash || this.currentView === "trash" ? this.refreshTrash() : Promise.resolve(),
           this.lazyLoaded.sites || this.isSitePanelActive() ? this.refreshSites() : Promise.resolve(),
-          this.currentView === "gallery" ? this.refreshGallery(true) : Promise.resolve(),
+          this.refreshGalleryAfterTask(),
           this.currentView === "settings" ? this.loadSettings() : Promise.resolve(),
         ]);
       } else if (previousRunning && !this.pullStatus.running) {
@@ -8960,7 +9114,7 @@ function galleryApp(initialSettings = {}) {
           this.lazyLoaded.recentUpdates || this.currentView === "recent-updates" ? this.refreshRecentUpdates() : Promise.resolve(),
           this.lazyLoaded.duplicates || this.currentView === "duplicates" ? this.refreshDuplicates() : Promise.resolve(),
           this.lazyLoaded.sites || this.isSitePanelActive() ? this.refreshSites() : Promise.resolve(),
-          this.currentView === "gallery" ? this.refreshGallery(true) : Promise.resolve(),
+          this.refreshGalleryAfterTask(),
           this.currentView === "settings" ? this.loadSettings() : Promise.resolve(),
         ]);
       }
@@ -8972,7 +9126,7 @@ function galleryApp(initialSettings = {}) {
           this.lazyLoaded.recentUpdates || this.currentView === "recent-updates" ? this.refreshRecentUpdates() : Promise.resolve(),
           this.lazyLoaded.duplicates || this.currentView === "duplicates" ? this.refreshDuplicates() : Promise.resolve(),
           this.lazyLoaded.sites || this.isSitePanelActive() ? this.refreshSites() : Promise.resolve(),
-          this.currentView === "gallery" ? this.refreshGallery(true) : Promise.resolve(),
+          this.refreshGalleryAfterTask(),
         ]);
       }
     },
@@ -8982,7 +9136,7 @@ function galleryApp(initialSettings = {}) {
       this.currentView = "tasks";
       this.closeSidebarDrawer();
       this.scrollViewTop();
-      this.refreshTasks();
+      this.refreshTasks().catch(() => {});
       this.refreshSidebarCounts(["tasks"]).catch(() => {});
     },
 
@@ -8991,7 +9145,7 @@ function galleryApp(initialSettings = {}) {
       this.currentView = "trash";
       this.closeSidebarDrawer();
       this.scrollViewTop();
-      this.refreshTrash();
+      this.refreshTrash().catch(() => {});
       this.refreshSidebarCounts(["trash"]).catch(() => {});
     },
 
@@ -9144,6 +9298,13 @@ function galleryApp(initialSettings = {}) {
     },
 
     removeDeletedPlaceholder(placeholderKey) {
+      // Do not move the next delete button out from under the pointer while a
+      // confirmation or another write in the same burst is still active.
+      if (this.pendingTrashFolder || this.deletePairConfirmKey || folderMutationQueues.size || Object.keys(this.pairDeletingKeys).length) {
+        window.clearTimeout(this.deletedGalleryTimers[placeholderKey]);
+        this.deletedGalleryTimers[placeholderKey] = window.setTimeout(() => this.removeDeletedPlaceholder(placeholderKey), 1500);
+        return;
+      }
       this.animateGalleryReflow(() => {
         this.gallery = {
           ...this.gallery,
@@ -9159,98 +9320,50 @@ function galleryApp(initialSettings = {}) {
     },
 
     async trashCurrentFolder() {
-      const folderName = this.detail.folder?.folder_name;
-      if (!folderName || this.pendingTrashFolder !== folderName) {
-        return;
-      }
-      const previousGalleryItems = [...(this.gallery.items || [])];
-      const previousGalleryTotal = this.gallery.total || 0;
-      const previousRecentUpdates = this.cloneRecentUpdates();
-      const previousRecentUpdateDisclosure = this.cloneRecentUpdateDisclosure();
-      const previousDetail = {
-        open: this.detail.open,
-        pairs: [...(this.detail.pairs || [])],
-        folder: this.detail.folder ? { ...this.detail.folder } : null,
-        videos: [...(this.detail.videos || [])],
-      };
-      const previousCache = this.detailCache[folderName] ? this.cloneDetailPayload(this.detailCache[folderName]) : null;
-      this.pendingTrashFolder = null;
-      this.closeViewer();
-      this.closeDetail();
-      this.removeFolderFromGallery(folderName, { placeholder: true });
-      this.invalidateDetailCache(folderName);
-      this.clearLocalGalleryCaches();
-      this.notify("info", "已提交删除", "");
-      try {
-        const result = await this.api(`/api/gallery/folders/${encodeURIComponent(folderName)}/trash`, {
-          method: "POST",
-          body: JSON.stringify({ reason: "不喜欢" }),
-        });
-        this.schedulePostMutationRefresh(result, ["all", "favorites", "livephoto", "trash", "tasks"], { trash: true, tasks: true });
-      } catch (error) {
-        if (this.deletedGalleryTimers[folderName]) {
-          window.clearTimeout(this.deletedGalleryTimers[folderName]);
-          delete this.deletedGalleryTimers[folderName];
-        }
-        this.gallery = {
-          ...this.gallery,
-          items: previousGalleryItems,
-          total: previousGalleryTotal,
-        };
-        this.recentUpdates = previousRecentUpdates;
-        this.restoreRecentUpdateDisclosure(previousRecentUpdateDisclosure);
-        if (!this.viewer.open && !this.detail.open && previousDetail.folder?.folder_name === folderName) {
-          this.detail = previousDetail;
-        }
-        if (previousCache) {
-          this.cacheDetailPayload(folderName, previousCache);
-        }
-        this.syncBodyLock();
-        this.notify("error", "移入垃圾桶失败", error.message || "后端删除没有成功，内容已恢复。");
-      }
+      return this.trashFolderCard(this.detail.folder?.folder_name);
     },
 
     async trashFolderCard(folderName) {
-      if (!folderName || this.pendingTrashFolder !== folderName) {
-        return;
-      }
-      const folder = (this.gallery.items || []).find((item) => item.folder_name === folderName);
+      if (!folderName || this.pendingTrashFolder !== folderName || this.deletedFolders[folderName]) return;
       const previousGalleryItems = [...(this.gallery.items || [])];
-      const previousGalleryTotal = this.gallery.total || 0;
+      const galleryRequestId = this.galleryRequestId;
       const previousRecentUpdates = this.cloneRecentUpdates();
-      const previousRecentUpdateDisclosure = this.cloneRecentUpdateDisclosure();
+      const recentRequestId = this.recentUpdatesRequestId;
       const previousCache = this.detailCache[folderName] ? this.cloneDetailPayload(this.detailCache[folderName]) : null;
+      this.beginGalleryDeletion(folderName);
       this.pendingTrashFolder = null;
-      if (this.videoNote.folder?.folder_name === folderName) {
-        this.closeVideoNote();
-      }
-      if (this.detail.folder?.folder_name === folderName) {
-        this.closeDetail();
-      }
+      if (this.videoNote.folder?.folder_name === folderName) this.closeVideoNote();
+      if (this.viewer.folder?.folder_name === folderName) this.closeViewer();
+      if (this.detail.folder?.folder_name === folderName) this.closeDetail();
       this.removeFolderFromGallery(folderName, { placeholder: true });
       this.invalidateDetailCache(folderName);
-      this.clearLocalGalleryCaches();
       this.notify("info", "已提交删除", "");
       try {
-        const result = await this.api(`/api/gallery/folders/${encodeURIComponent(folderName)}/trash`, {
+        const result = await this.runFolderMutation(folderName, () => this.api(`/api/gallery/folders/${encodeURIComponent(folderName)}/trash`, {
           method: "POST",
           body: JSON.stringify({ reason: "不喜欢" }),
-        });
+        }));
+        this.clearLocalGalleryCaches();
         this.schedulePostMutationRefresh(result, ["all", "favorites", "livephoto", "trash", "tasks"], { trash: true, tasks: true });
       } catch (error) {
-        this.gallery = {
-          ...this.gallery,
-          items: previousGalleryItems,
-          total: previousGalleryTotal,
-        };
-        this.recentUpdates = previousRecentUpdates;
-        this.restoreRecentUpdateDisclosure(previousRecentUpdateDisclosure);
-        if (previousCache) {
-          this.cacheDetailPayload(folderName, previousCache);
+        delete this.deletedFolders[folderName];
+        this.clearLocalGalleryCaches();
+        window.clearTimeout(this.deletedGalleryTimers[folderName]);
+        delete this.deletedGalleryTimers[folderName];
+        this.restoreDeletedGalleryItems(previousGalleryItems, item => item.folder_name === folderName, galleryRequestId);
+        if (recentRequestId === this.recentUpdatesRequestId) {
+          const groups = [...(this.recentUpdates.groups || [])];
+          for (const previous of previousRecentUpdates.groups || []) {
+            const restored = this.filterDeletedGalleryItems(previous.items).filter(item => item.folder_name === folderName);
+            if (!restored.length) continue;
+            const group = groups.find(item => this.recentUpdateGroupKey(item) === this.recentUpdateGroupKey(previous));
+            if (group) group.items = this.mergeGalleryItems(group.items || [], restored);
+            else groups.push({ ...previous, items: restored });
+          }
+          this.recentUpdates = { ...this.recentUpdates, groups,
+            total_groups: groups.length, total_items: groups.reduce((count, group) => count + group.items.length, 0) };
         }
-        if (folder && !this.gallery.items.find((item) => item.folder_name === folderName)) {
-          this.gallery = { ...this.gallery, items: [folder, ...(this.gallery.items || [])] };
-        }
+        if (previousCache) this.cacheDetailPayload(folderName, previousCache);
         this.notify("error", "移入垃圾桶失败", error.message || "后端删除没有成功，内容已恢复。");
       }
     },
@@ -9330,6 +9443,7 @@ function galleryApp(initialSettings = {}) {
 
     async restoreTrash(itemId, repullNow) {
       const previousTrash = [...(this.trashItems || [])];
+      const restoredFolder = previousTrash.find(item => Number(item.id) === Number(itemId))?.folder_name;
       this.pendingRestoreTrashId = null;
       this.trashItems = (this.trashItems || []).filter((item) => Number(item.id) !== Number(itemId));
       this.notify("info", "正在恢复内容", repullNow ? "页面已先更新，后台会继续尝试立即拉取。" : "页面已先更新，后台正在恢复。");
@@ -9338,6 +9452,13 @@ function galleryApp(initialSettings = {}) {
           method: "POST",
           body: JSON.stringify({ repull_now: !!repullNow }),
         });
+        if (restoredFolder) {
+          delete this.deletedFolders[restoredFolder];
+          for (const key of Object.keys(this.deletedPairs)) {
+            if (key.startsWith(`${restoredFolder}::`)) delete this.deletedPairs[key];
+          }
+        }
+        this.clearLocalGalleryCaches();
         await Promise.all([this.refreshTrash(), this.refreshMeta(), this.refreshGallery(true), this.refreshTasks()]);
         this.notify("success", "恢复完成", result.message);
       } catch (error) {
@@ -9389,21 +9510,22 @@ function galleryApp(initialSettings = {}) {
     },
 
     async loadSiteSources() {
-      const payload = await this.api("/api/site-sources");
-      const nextSources = (payload.items || []).filter((source) => source.source_type !== "xhs_likes");
-      const previousDrafts = { ...(this.siteSourceDrafts || {}) };
-      const previousExpanded = { ...(this.siteSourceExpanded || {}) };
-      this.siteSourceDrafts = Object.fromEntries(
-        nextSources.map((source) => [
-          String(source.id),
-          previousDrafts[String(source.id)] || this.siteSourceDraftFromSource(source),
-        ]),
-      );
-      this.siteSourceExpanded = Object.fromEntries(
-        nextSources.map((source) => [String(source.id), !!previousExpanded[String(source.id)]]),
-      );
-      this.siteSources = nextSources;
-      this.sidebarCounts = { ...this.sidebarCounts, sites: nextSources.length };
+      return this.loadPanel("sites", "/api/site-sources", (payload) => {
+        const nextSources = (payload.items || []).filter((source) => source.source_type !== "xhs_likes");
+        const previousDrafts = { ...(this.siteSourceDrafts || {}) };
+        const previousExpanded = { ...(this.siteSourceExpanded || {}) };
+        this.siteSourceDrafts = Object.fromEntries(
+          nextSources.map((source) => [
+            String(source.id),
+            previousDrafts[String(source.id)] || this.siteSourceDraftFromSource(source),
+          ]),
+        );
+        this.siteSourceExpanded = Object.fromEntries(
+          nextSources.map((source) => [String(source.id), !!previousExpanded[String(source.id)]]),
+        );
+        this.siteSources = nextSources;
+        this.sidebarCounts = { ...this.sidebarCounts, sites: nextSources.length };
+      });
     },
 
     async syncAllXhs() {
@@ -9789,8 +9911,9 @@ function galleryApp(initialSettings = {}) {
     },
 
     async loadSiteLogs() {
-      const payload = await this.api("/api/site-filter/logs");
-      this.siteLogs = payload.items || [];
+      return this.loadPanel("siteLogs", "/api/site-filter/logs", (payload) => {
+        this.siteLogs = payload.items || [];
+      });
     },
 
     resetSiteSourceForm() {

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-5-detail-preload-2-trackpad-hint-3-responsive-swipe-4-xhs-login-recovery-2-gallery-instant-injection-1-motion-2-detail-close-1-viewer-indicators-1-image-handoff-1-card-dates-1' %}
+    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-5-detail-preload-2-trackpad-hint-3-responsive-swipe-4-xhs-login-recovery-2-gallery-instant-injection-1-motion-2-detail-close-1-viewer-indicators-1-image-handoff-1-card-dates-1-ui-state-3-paper-palette-1' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -46,8 +46,8 @@
         </defs>
     </svg>
     <div class="shell" x-ref="shell" :class="{ 'sidebar-collapsed': sidebarCollapsed && !compactViewport, 'compact-layout': compactViewport, 'sidebar-drawer-open': sidebarDrawerOpen }">
-        <div class="sidebar-backdrop" x-show="compactViewport && sidebarDrawerOpen" x-transition.opacity @click="closeSidebarDrawer()" x-cloak></div>
-        <aside id="gallery-sidebar" class="sidebar" x-ref="sidebar" aria-label="相簿导航" :inert="compactViewport && !sidebarDrawerOpen" :class="{ collapsed: sidebarCollapsed && !compactViewport, open: sidebarDrawerOpen, compact: compactViewport }">
+        <div class="sidebar-backdrop" x-show="compactViewport && sidebarDrawerOpen" x-transition.opacity @click="closeSidebarDrawer()" @wheel.prevent @touchmove.prevent x-cloak></div>
+        <aside id="gallery-sidebar" class="sidebar" x-ref="sidebar" aria-label="相簿导航" tabindex="-1" :role="compactViewport ? 'dialog' : 'navigation'" :aria-modal="compactViewport && sidebarDrawerOpen" :inert="compactViewport && !sidebarDrawerOpen" :class="{ collapsed: sidebarCollapsed && !compactViewport, open: sidebarDrawerOpen, compact: compactViewport }">
             <div class="sidebar-head">
                 <button class="icon-button mobile-only" @click="toggleSidebar()" aria-label="切换边栏">
                     <span></span>
@@ -630,9 +630,14 @@
             </section>
 
             <section class="panel-view" data-testid="section-review" x-show="currentView === 'review'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'review')" :aria-hidden="!(currentView === 'review')">
+                <div class="panel-load-status" x-show="(!panelLoaded.review && panelLoading.review) || panelErrors.review" x-cloak>
+                    <span role="status" x-show="panelLoading.review">正在加载待审核…</span>
+                    <span role="alert" x-show="panelErrors.review" x-text="panelErrors.review"></span>
+                    <button type="button" class="secondary-button" x-show="panelErrors.review && !panelLoading.review" @click="refreshReview().catch(() => {})">重试</button>
+                </div>
                 <div class="section-heading page-toolbar">
 
-                    <button class="secondary-button" @click="refreshReview()">刷新</button>
+                    <button class="secondary-button" @click="refreshReview().catch(() => {})" :disabled="panelLoading.review" x-text="panelLoading.review ? '加载中…' : '刷新'"></button>
                 </div>
                 <template x-for="item in reviewItems" :key="item.id">
                     <article
@@ -656,16 +661,21 @@
                         </div>
                     </article>
                 </template>
-                <div class="empty-state" x-show="reviewItems.length === 0" x-cloak>
+                <div class="empty-state" x-show="panelEmptyReady('review') && reviewItems.length === 0" x-cloak>
                     <strong>没有待审核动态</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="命中过滤规则的内容会出现在这里。">?</button>
                 </div>
             </section>
 
             <section class="panel-view" data-testid="section-logs" x-show="currentView === 'logs'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'logs')" :aria-hidden="!(currentView === 'logs')">
+                <div class="panel-load-status" x-show="(!panelLoaded.logs && panelLoading.logs) || panelErrors.logs" x-cloak>
+                    <span role="status" x-show="panelLoading.logs">正在加载过滤日志…</span>
+                    <span role="alert" x-show="panelErrors.logs" x-text="panelErrors.logs"></span>
+                    <button type="button" class="secondary-button" x-show="panelErrors.logs && !panelLoading.logs" @click="refreshLogs().catch(() => {})">重试</button>
+                </div>
                 <div class="section-heading page-toolbar">
 
                     <div class="button-row">
-                        <button class="secondary-button" @click="refreshLogs()">刷新</button>
+                        <button class="secondary-button" @click="refreshLogs().catch(() => {})" :disabled="panelLoading.logs" x-text="panelLoading.logs ? '加载中…' : '刷新'"></button>
                         <div class="button-row confirm-row" x-show="clearFilterLogsConfirmStep === 0">
                             <button class="secondary-button confirm-anchor" @click="askClearFilterLogs()" x-text="clearFilterLogsButtonLabel()"></button>
                         </div>
@@ -688,18 +698,23 @@
                         <div class="decision-pill" x-text="item.decision === 'review' ? '进入待审核' : '已放行'"></div>
                     </article>
                 </template>
-                <div class="empty-state" x-show="logs.length === 0" x-cloak>
+                <div class="empty-state" x-show="panelEmptyReady('logs') && logs.length === 0" x-cloak>
                     <strong>还没有过滤记录</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="当拉取过程中命中广告过滤规则，这里会记录原因。">?</button>
                 </div>
             </section>
 
             <section class="panel-view" data-testid="section-tasks" x-show="currentView === 'tasks'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'tasks')" :aria-hidden="!(currentView === 'tasks')">
+                <div class="panel-load-status" x-show="(!panelLoaded.tasks && panelLoading.tasks) || panelErrors.tasks" x-cloak>
+                    <span role="status" x-show="panelLoading.tasks">正在加载任务记录…</span>
+                    <span role="alert" x-show="panelErrors.tasks" x-text="panelErrors.tasks"></span>
+                    <button type="button" class="secondary-button" x-show="panelErrors.tasks && !panelLoading.tasks" @click="refreshTasks().catch(() => {})">重试</button>
+                </div>
                 <div class="section-heading page-toolbar">
                     <div>
                         <p class="field-copy" x-text="`运行 ${pullStatus.running ? 1 : 0} · 等待 ${queuedTasks.length} · 历史 ${sidebarCounts.tasks || taskRuns.length}`"></p>
                     </div>
                     <div class="button-row">
-                        <button class="secondary-button" @click="refreshTasks()">刷新</button>
+                        <button class="secondary-button" @click="refreshTasks().catch(() => {})" :disabled="panelLoading.tasks" x-text="panelLoading.tasks ? '加载中…' : '刷新'"></button>
                         <div class="button-row confirm-row" x-show="clearTaskLogsConfirmStep === 0">
                             <button class="secondary-button confirm-anchor" @click="askClearTaskLogs()" x-text="clearTaskLogsButtonLabel()"></button>
                         </div>
@@ -763,6 +778,9 @@
                         </div>
                     </div>
                 </article>
+                <div class="task-history-toggle" x-show="taskHistoryExpanded || hasHiddenTaskRuns()" x-cloak>
+                    <button class="secondary-button" :aria-expanded="taskHistoryExpanded" @click="taskHistoryExpanded = !taskHistoryExpanded" x-text="taskHistoryExpanded ? '收起历史，仅显示待处理与最近成功任务' : `展开全部 ${taskRuns.length} 条历史`"></button>
+                </div>
                 <template x-for="item in visibleTaskRuns()" :key="item.id">
                     <article class="panel-card">
                         <div class="panel-card-main">
@@ -784,20 +802,19 @@
                         </div>
                     </article>
                 </template>
-                <div class="task-history-toggle" x-show="hasHiddenTaskRuns()" x-cloak>
-                    <button class="secondary-button" @click="taskHistoryExpanded = true" x-text="`展开全部 ${taskRuns.length} 条历史`"></button>
-                </div>
-                <div class="task-history-toggle" x-show="taskHistoryExpanded && taskRuns.length > 3" x-cloak>
-                    <button class="secondary-button" @click="taskHistoryExpanded = false">仅显示待处理与最近成功任务</button>
-                </div>
             </section>
 
             <section class="panel-view" data-testid="section-trash" x-show="currentView === 'trash'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'trash')" :aria-hidden="!(currentView === 'trash')">
+                <div class="panel-load-status" x-show="(!panelLoaded.trash && panelLoading.trash) || panelErrors.trash" x-cloak>
+                    <span role="status" x-show="panelLoading.trash">正在加载垃圾桶…</span>
+                    <span role="alert" x-show="panelErrors.trash" x-text="panelErrors.trash"></span>
+                    <button type="button" class="secondary-button" x-show="panelErrors.trash && !panelLoading.trash" @click="refreshTrash().catch(() => {})">重试</button>
+                </div>
                 <div class="section-heading trash-toolbar page-toolbar">
                     <input class="ui-field trash-search" type="search" x-model="trashSearch" placeholder="搜索标题、来源或删除日期" aria-label="搜索垃圾桶">
                     <div class="button-row">
                         <button type="button" class="help-button" aria-label="垃圾桶恢复说明" data-tooltip="移入后阻止再次采集并清理本地媒体。这里只保留记录；解除拦截后需重新拉取，原帖失效时可能无法找回。">?</button>
-                        <button class="secondary-button" @click="refreshTrash()">刷新</button>
+                        <button class="secondary-button" @click="refreshTrash().catch(() => {})" :disabled="panelLoading.trash" x-text="panelLoading.trash ? '加载中…' : '刷新'"></button>
                     </div>
                 </div>
                 <p role="status" x-show="trashSearch && !trashGroups().length">没有匹配的已移除内容。</p>
@@ -848,23 +865,28 @@
                         </div>
                     </article>
                 </template>
-                <div class="empty-state" x-show="trashItems.length === 0" x-cloak>
+                <div class="empty-state" x-show="panelEmptyReady('trash') && trashItems.length === 0" x-cloak>
                     <strong>垃圾桶是空的</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="移入垃圾桶后，本地媒体会被清理，此处保留记录供解除拦截和重新采集。">?</button>
                 </div>
             </section>
 
             <section class="panel-view settings-pane" data-testid="section-settings" x-show="currentView === 'settings'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'settings')" :aria-hidden="!(currentView === 'settings')">
+                <div class="panel-load-status" x-show="(!panelLoaded.settings && panelLoading.settings) || panelErrors.settings" x-cloak>
+                    <span role="status" x-show="panelLoading.settings">正在加载设置…</span>
+                    <span role="alert" x-show="panelErrors.settings" x-text="panelErrors.settings"></span>
+                    <button type="button" class="secondary-button" x-show="panelErrors.settings && !panelLoading.settings" @click="loadSettings().catch(() => {})">重试</button>
+                </div>
                 <div class="settings-save-bar">
                     <nav class="settings-groups" aria-label="设置分组">
                         <template x-for="group in [{key:'sync',name:'同步',label:'同步与来源'},{key:'network',name:'网络',label:'网络与内网访问'},{key:'filter',name:'过滤',label:'过滤与重复'},{key:'media',name:'界面',label:'界面与媒体'},{key:'account',name:'账号',label:'账号'},{key:'maintenance',name:'维护',label:'维护与清理'}]" :key="group.key">
                             <button class="chip-button" :aria-label="group.label" :data-tooltip="group.label" :aria-pressed="settingsGroup === group.key" :class="{active:settingsGroup === group.key}" @click="setSettingsGroup(group.key)" x-text="group.name"></button>
                         </template>
                     </nav>
-                    <span class="settings-save-state" role="status" x-text="settingsSaving ? '保存中…' : settingsDirty() ? '未保存' : '已保存'"></span>
-                    <button class="primary-button" :disabled="settingsSaving || !settingsDirty()" @click="saveSettings()">保存</button>
+                    <span class="settings-save-state" role="status" x-text="!lazyLoaded.settings ? (panelErrors.settings ? '加载失败' : '加载中…') : settingsSaving ? '保存中…' : settingsDirty() ? '未保存' : '已保存'"></span>
+                    <button class="primary-button" :disabled="!lazyLoaded.settings || settingsSaving || !settingsDirty()" @click="saveSettings()">保存</button>
                 </div>
                 <p class="settings-error" role="alert" x-show="settingsError" x-text="settingsError"></p>
-                <div class="settings-grid" :inert="settingsSaving">
+                <div class="settings-grid" x-show="lazyLoaded.settings" :inert="settingsSaving" x-cloak>
                     <article class="settings-card" x-show="settingsGroup === 'sync'" data-settings-group="sync">
                         <h4 class="heading-with-help">同步策略<button type="button" class="help-button" aria-label="同步策略说明" data-tooltip="各 UP 的内容类型在订阅管理中设置。全量拉取会重新扫描当前账号可见动态，用于补齐旧内容。">?</button></h4>
                         <div class="button-row">
@@ -1006,14 +1028,14 @@
                     </article>
 
                     <article class="settings-card" x-show="settingsGroup === 'media'" data-settings-group="media">
-                        <h4 class="heading-with-help">界面配色<button type="button" class="help-button" aria-label="界面配色说明" data-tooltip="整套界面色板由主色色相、饱和度与明度三个参数自动派生，改动会即时反映在预览区；保存后写入服务端，所有页面与设备都会沿用，可随时恢复默认。">?</button></h4>
+                        <h4 class="heading-with-help">界面配色<button type="button" class="help-button" aria-label="界面配色说明" data-tooltip="纸白底色与石墨文字保持中性，主色用于按钮、选中项与进度。可选预设，再自定义色相、饱和度和明度；预览仅在此处生效，保存后所有设备沿用。已有自定义配色保留，可恢复默认雾蓝。">?</button></h4>
                         <div class="settings-theme-body">
                             <div class="settings-theme-preview" :style="`background:${themeSwatches.surface || 'transparent'};border-color:${themeSwatches.lineStrong || 'transparent'}`">
                                 <div class="settings-theme-preview-head">
                                     <span class="settings-theme-badge" :style="`background:${themeSwatches.accentSoft || 'transparent'};color:${themeSwatches.accent || 'inherit'}`">订阅</span>
                                     <strong :style="`color:${themeSwatches.text || 'inherit'}`">RC-WebGallery</strong>
                                 </div>
-                                <p :style="`color:${themeSwatches.muted || 'inherit'}`">主色会同步套用按钮、标签、链接与描边，底色与文字保持足够对比。</p>
+                                <p :style="`color:${themeSwatches.muted || 'inherit'}`">配色预览</p>
                                 <div class="settings-theme-chips">
                                     <span class="settings-theme-chip" :style="`background:${themeSwatches.accent || 'transparent'};color:${themeSwatches.onAccent || '#fff'}`">主要按钮</span>
                                     <span class="settings-theme-chip ghost" :style="`border-color:${themeSwatches.lineStrong || 'transparent'};color:${themeSwatches.accent || 'inherit'}`">次要按钮</span>
@@ -1030,6 +1052,13 @@
                                 </div>
                             </div>
                             <div class="settings-theme-controls">
+                                <div class="settings-theme-presets" role="group" aria-label="配色预设">
+                                    <template x-for="preset in themePresets" :key="preset.name">
+                                        <button type="button" class="theme-preset" :class="{ active: themePresetActive(preset) }" :aria-pressed="themePresetActive(preset)" :disabled="themeSaving" @click="selectThemePreset(preset)">
+                                            <i :style="`background:${themePresetColor(preset)}`" aria-hidden="true"></i><span x-text="preset.name"></span>
+                                        </button>
+                                    </template>
+                                </div>
                                 <div class="settings-theme-field">
                                     <span class="settings-theme-field-label">主色取色器<button type="button" class="help-button" aria-label="主色取色器说明" data-tooltip="挑选一个色相即可，整套色板会按它重新派生；这里的颜色只是取样，不会原样使用。">?</button></span>
                                     <div class="settings-theme-field-row">
@@ -1055,7 +1084,7 @@
                                 <p class="settings-theme-hint" x-text="themeHintText()"></p>
                                 <div class="button-row" x-show="themeResetConfirmStep === 0">
                                     <button type="button" class="primary-button" @click="saveTheme()" :disabled="themeSaving || !themeDraftChanged()" data-tooltip="写入服务端并刷新全站样式">保存配色</button>
-                                    <button type="button" class="secondary-button confirm-anchor" @click="askResetTheme()" :disabled="themeSaving" data-tooltip="恢复为默认粉白配色">恢复默认</button>
+                                    <button type="button" class="secondary-button confirm-anchor" @click="askResetTheme()" :disabled="themeSaving" data-tooltip="恢复为默认雾蓝配色">恢复默认</button>
                                 </div>
                                 <div class="button-row" x-show="themeResetConfirmStep === 1" x-cloak>
                                     <button type="button" class="secondary-button" @click="cancelResetTheme()">取消</button>
@@ -1154,7 +1183,7 @@
                             </div>
                         </details>
 
-                        <details class="settings-card danger-sub-card">
+                        <details class="settings-card danger-sub-card" @toggle="if (!$el.open) clearDataConfirmStep = 0">
                             <summary class="heading-with-help">清空内容<button type="button" class="help-button" @click.stop aria-label="清空内容说明" data-tooltip="会清空资料库、待审核、过滤日志、任务记录、垃圾桶和黑名单，但会保留当前 Cookie 登录状态与设置。">?</button></summary>
                             <div class="button-row confirm-row" x-show="clearDataConfirmStep === 0">
                                 <button class="secondary-button danger-button confirm-anchor" @click="askClearAllData()" x-text="clearDataButtonLabel()"></button>
@@ -1212,6 +1241,11 @@
             </section>
 
             <section class="panel-view subscription-overview-pane" data-testid="section-subscription-overview" x-show="currentView === 'subscriptions' && subscriptionPanel === 'overview'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'subscriptions' && subscriptionPanel === 'overview')" :aria-hidden="!(currentView === 'subscriptions' && subscriptionPanel === 'overview')">
+                <div class="panel-load-status" x-show="(!panelLoaded.subscriptions && panelLoading.subscriptions) || panelErrors.subscriptions" x-cloak>
+                    <span role="status" x-show="panelLoading.subscriptions">正在加载订阅…</span>
+                    <span role="alert" x-show="panelErrors.subscriptions" x-text="panelErrors.subscriptions"></span>
+                    <button type="button" class="secondary-button" x-show="panelErrors.subscriptions && !panelLoading.subscriptions" @click="loadSubscriptions().catch(() => {})">重试</button>
+                </div>
                 <div class="section-heading subscription-sticky-head page-toolbar">
 
                     <div class="button-row">
@@ -1265,12 +1299,17 @@
                         </div>
                     </section>
                 </template>
-                <div class="empty-state" x-show="subscriptionOverviewItems().length === 0" x-cloak>
+                <div class="empty-state" x-show="panelEmptyReady('subscriptions') && subscriptionOverviewItems().length === 0" x-cloak>
                     <strong>没有匹配的订阅</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="调整搜索关键词后再试。">?</button>
                 </div>
             </section>
 
             <section class="panel-view" data-testid="section-subscriptions" x-show="currentView === 'subscriptions' && subscriptionPanel === 'up'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'subscriptions' && subscriptionPanel === 'up')" :aria-hidden="!(currentView === 'subscriptions' && subscriptionPanel === 'up')">
+                <div class="panel-load-status" x-show="(!panelLoaded.subscriptions && panelLoading.subscriptions) || panelErrors.subscriptions" x-cloak>
+                    <span role="status" x-show="panelLoading.subscriptions">正在加载订阅…</span>
+                    <span role="alert" x-show="panelErrors.subscriptions" x-text="panelErrors.subscriptions"></span>
+                    <button type="button" class="secondary-button" x-show="panelErrors.subscriptions && !panelLoading.subscriptions" @click="loadSubscriptions().catch(() => {})">重试</button>
+                </div>
                 <div class="section-heading page-toolbar">
 
                     <div class="button-row">
@@ -1366,7 +1405,7 @@
                         </div>
                     </article>
                 </template>
-                <div class="empty-state" x-show="upSubscriptions().length === 0" x-cloak>
+                <div class="empty-state" x-show="panelEmptyReady('subscriptions') && upSubscriptions().length === 0" x-cloak>
                     <strong>暂无 UP 主订阅</strong><button type="button" class="help-button" aria-label="空状态说明" data-tooltip="输入 UID 后即可添加 UP 主动态订阅。">?</button>
                 </div>
             </section>
@@ -1482,6 +1521,11 @@
             </section>
 
             <section class="panel-view site-pane" data-testid="section-sites" x-show="currentView === 'subscriptions' && subscriptionPanel === 'site'" x-cloak x-transition:enter="view-enter" x-transition:enter-start="view-enter-start" x-transition:enter-end="view-enter-end" x-transition:leave="view-leave" x-transition:leave-start="view-leave-start" x-transition:leave-end="view-leave-end" :inert="!(currentView === 'subscriptions' && subscriptionPanel === 'site')" :aria-hidden="!(currentView === 'subscriptions' && subscriptionPanel === 'site')">
+                <div class="panel-load-status" x-show="(!panelLoaded.sites && panelLoading.sites) || panelErrors.sites" x-cloak>
+                    <span role="status" x-show="panelLoading.sites">正在加载站点来源…</span>
+                    <span role="alert" x-show="panelErrors.sites" x-text="panelErrors.sites"></span>
+                    <button type="button" class="secondary-button" x-show="panelErrors.sites && !panelLoading.sites" @click="loadSiteSources().catch(() => {})">重试</button>
+                </div>
                 <div class="section-heading page-toolbar">
 
                     <div class="button-row">
@@ -1494,7 +1538,7 @@
                         </div>
                         <span class="status-pill" x-show="siteStatus.running || !['空闲', ''].includes(siteStatus.message || '')" :class="{ running: siteStatus.running }" x-text="siteStatus.message || '空闲'"></span>
                     </div>
-                    <div class="subscription-pull-actions"><button type="button" class="secondary-button" @click="refreshSites()">刷新</button><button type="button" class="primary-button" data-testid="pull-site-subscriptions" @click="syncAllSites()">拉取站点订阅</button></div>
+                    <div class="subscription-pull-actions"><button type="button" class="secondary-button" @click="refreshSites().catch(() => {})">刷新</button><button type="button" class="primary-button" data-testid="pull-site-subscriptions" @click="syncAllSites()">拉取站点订阅</button></div>
                 </div>
 
                 <div class="site-stats-row">
@@ -1664,7 +1708,7 @@
                             </div>
                         </article>
                     </template>
-                    <p class="empty-state" x-show="!siteSources.length">暂无站点来源</p>
+                    <p class="empty-state" x-show="panelEmptyReady('sites') && !siteSources.length">暂无站点来源</p>
                 </div>
 
                 <div class="site-main-column">
@@ -1731,7 +1775,7 @@
                                         <small x-text="log.reason"></small>
                                     </div>
                                 </template>
-                                <p class="empty-state" x-show="!siteLogs.length">暂无站点过滤日志</p>
+                                <p class="empty-state" x-show="panelEmptyReady('siteLogs') && !siteLogs.length">暂无站点过滤日志</p>
                             </div>
                         </article>
                     </div>
@@ -1854,7 +1898,7 @@
                                     </template>
                                     <template x-if="pairDeletePending(detail.folder?.folder_name, pair.pair_index)">
                                         <div class="mini-confirm-row single-confirm">
-                                            <button class="mini-confirm-button danger" :disabled="pairDeletingKey === pairDeleteKey(detail.folder?.folder_name, pair.pair_index)" @click="confirmDeletePair(detail.folder?.folder_name, pair.pair_index)">确认</button>
+                                            <button class="mini-confirm-button danger" :disabled="pairDeletingKeys[pairDeleteKey(detail.folder?.folder_name, pair.pair_index)]" @click="confirmDeletePair(detail.folder?.folder_name, pair.pair_index)">确认</button>
                                         </div>
                                     </template>
                                 </div>

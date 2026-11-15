@@ -16,13 +16,13 @@
     margin-left: auto;
     justify-content: flex-end;
 }
-.workspace .page-toolbar > button {
+.workspace .page-toolbar > button:not(.help-button) {
     flex: 0 0 auto;
     width: auto;
     margin-left: auto;
 }
 .workspace .page-toolbar .field-copy { margin: 0; }
-.workspace .page-toolbar .button-row > button,
+.workspace .page-toolbar .button-row > button:not(.help-button),
 .workspace .page-toolbar .confirm-row { width: auto; }
 .workspace .panel-card-actions,
 .workspace .settings-card > .button-row,

@@ -38,7 +38,7 @@ SKIP_LINE_MARKER = ".intranet-edge"
 LUMA_ITERATIONS = 22
 CACHE_LIMIT = 32
 
-DEFAULT_THEME: dict[str, float] = {"hue": 337.0, "saturation": 0.5, "value": 1.0}
+DEFAULT_THEME: dict[str, float] = {"hue": 215.0, "saturation": 0.65, "value": 1.0}
 THEME_BOUNDS: dict[str, tuple[float, float]] = {
     "hue": (0.0, 359.9),
     "saturation": (0.0, 1.5),
@@ -168,7 +168,7 @@ def revision(theme: dict[str, float]) -> str:
 
 
 # 浏览器地址栏取色，基准与 liquid-glass.css 的 ``--bg-base`` 一致。
-PAGE_TINT_BASE = (0xEA, 0xF0, 0xF8)
+PAGE_TINT_BASE = (0xF4, 0xF4, 0xF2)
 
 
 def page_tint(theme: dict[str, float]) -> str:

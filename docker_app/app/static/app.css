@@ -974,6 +974,18 @@ html.is-interacting .detail-backdrop {
     min-width: 0;
     min-height: calc(100dvh - var(--layout-topbar-reserve, 158px) - 40px);
 }
+
+.panel-load-status {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 40px;
+    margin-bottom: 10px;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+.panel-load-status [role="alert"] { color: var(--danger); }
 .view-stack > .view-leave {
     position: absolute;
     inset: 0 0 auto;
@@ -5836,3 +5848,10 @@ details.settings-card[open] > summary::after { content: "⌃"; }
 .detail-creator-link.source-site { color: rgb(53 118 191); }
 .detail-compact-delete-confirm { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .detail-compact-bar .detail-compact-confirm { width: auto; min-height: 30px; padding: 5px 8px; font-size: 12px; white-space: nowrap; }
+
+/* Presets reuse the existing draft / save flow; custom controls remain available. */
+.settings-theme-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.theme-preset { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface-strong); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.theme-preset i { width: 12px; height: 12px; flex: 0 0 12px; border-radius: 50%; }
+.theme-preset:hover { border-color: var(--accent); }
+.theme-preset.active { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
