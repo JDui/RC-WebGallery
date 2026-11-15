@@ -81,11 +81,11 @@ Compose 中的关键环境变量如下：
 
 ### AMD64 NAS 使用预构建镜像
 
-v12.11 的 AMD64 镜像包不纳入 Git 工作树。请使用对应版本的本地交付 tar 镜像包和部署包；本地打包不代表已创建 Release。将镜像包和对应部署包解压到 NAS，保留其中的目录关系；部署包已包含默认 Compose 和浏览器沙箱配置。在部署目录执行：
+v12.12 为本地打包版本，AMD64 镜像包位于 `dist/zzs-bili-gallery_v12.12_amd64.tar`，不纳入 Git 工作树，也不创建新 Release。将镜像包复制到 NAS，并解压同目录的 `zzs-bili-gallery_v12.12_deploy.zip`，保留其中的目录关系；部署包已包含默认 Compose 和浏览器沙箱配置。在部署目录执行：
 
 ~~~bash
-docker load -i zzs-bili-gallery_v12.11_amd64.tar
-docker image inspect zzs-bili-gallery:12.11-amd64 --format '{{.Id}}'
+docker load -i zzs-bili-gallery_v12.12_amd64.tar
+docker image inspect zzs-bili-gallery:12.12-amd64 --format '{{.Id}}'
 ~~~
 
 启动前必须编辑 <code>docker_app/docker-compose.nas-amd64.yml</code> 的 <code>volumes</code>。文件中的示例宿主机路径是占位配置，请改成 NAS 上真实、可写的目录，并保留容器目标路径：
@@ -113,7 +113,7 @@ NAS Compose 已将容器端口 <code>7860</code> 映射到宿主机 <code>7860</
 docker compose -f docker_app/docker-compose.nas-amd64.yml down
 
 # 载入新 tar 后重建容器
-docker load -i zzs-bili-gallery_v12.11_amd64.tar
+docker load -i zzs-bili-gallery_v12.12_amd64.tar
 docker compose -f docker_app/docker-compose.nas-amd64.yml up -d
 ~~~
 
@@ -173,7 +173,7 @@ PYTHONPATH=. .venv/bin/pytest -q
 页面审查截图使用隔离占位数据。<code>review_capture.sh</code> 当前针对 macOS 的 Lima Docker 流程：需要本机已有可运行的 <code>limactl</code>、Lima 的 <code>lima-docker</code> context、Docker、Playwright 浏览器和审查镜像；脚本会在 <code>docker_app/review/&lt;时间戳&gt;/</code> 下生成临时运行目录与截图：
 
 ~~~bash
-bash docker_app/scripts/review_capture.sh zzs-bili-gallery:12.11-amd64
+bash docker_app/scripts/review_capture.sh zzs-bili-gallery:12.12-amd64
 ~~~
 
 脚本内部调用 <code>seed_review_data.py</code>，不会读取真实 <code>storage/</code>。如果只需要生成占位数据库和媒体，可单独执行：
@@ -183,7 +183,7 @@ docker_app/.venv/bin/python docker_app/scripts/seed_review_data.py \
   --storage-root /tmp/rc-webgallery-review
 ~~~
 
-当前应用版本由 <code>docker_app/app/version.py</code> 中的 <code>APP_VERSION = "12.11"</code> 定义；对应 NAS 镜像标签为 <code>zzs-bili-gallery:12.11-amd64</code>，镜像包文件名为 <code>zzs-bili-gallery_v12.11_amd64.tar</code>。
+当前应用版本由 <code>docker_app/app/version.py</code> 中的 <code>APP_VERSION = "12.12"</code> 定义；对应 NAS 镜像标签为 <code>zzs-bili-gallery:12.12-amd64</code>，镜像包文件名为 <code>zzs-bili-gallery_v12.12_amd64.tar</code>。
 
 ## 小红书个人点赞
 
@@ -193,7 +193,7 @@ docker_app/.venv/bin/python docker_app/scripts/seed_review_data.py \
 
 ### 开箱使用
 
-v12.11 主镜像内置浏览器。按前文使用默认 NAS Compose 启动即可，整个应用只有一个容器和网页端口 `7860`；不需要另外部署浏览器服务、创建密钥、映射登录端口或设置 SSH 转发。源码部署也使用默认的 `docker-compose.example.yml`。
+v12.12 主镜像内置浏览器。按前文使用默认 NAS Compose 启动即可，整个应用只有一个容器和网页端口 `7860`；不需要另外部署浏览器服务、创建密钥、映射登录端口或设置 SSH 转发。源码部署也使用默认的 `docker-compose.example.yml`。
 
 升级时导入新镜像，使用本版本部署包中的 `docker_app/docker-compose.nas-amd64.yml`，保留原来的两条配置、数据挂载路径，然后正常重建主容器。部署包中的 `docker_app/xhs_worker/seccomp_profile.json` 与 Compose 保持相对位置；默认配置会自动使用它启用 Chromium 沙箱。
 
@@ -252,7 +252,9 @@ Live Photo 以同序号的静态图和 MP4 视频分别保存，并在图库中�
   "intranet_use_proxy_host": false,
   "intranet_redirect_host": "192.168.31.221",
   "intranet_redirect_port": 7777,
-  "intranet_redirect_protocol": "http"
+  "intranet_redirect_protocol": "http",
+  "https_auto_http_enabled": false,
+  "https_redirect_http_port": 80
 }
 ```
 
@@ -261,7 +263,11 @@ Live Photo 以同序号的静态图和 MP4 视频分别保存，并在图库中�
 - `intranet_redirect_host`：独立设置目标 NAS 的内网 IP；支持 RFC1918 IPv4 和 IPv6 ULA。不能填写带协议、路径或端口的 URL，不能填写容器回环地址 `127.0.0.1`。
 - `intranet_redirect_port` 与 `intranet_redirect_protocol`：填写内网访问时实际使用的服务端口和 `http` / `https`。
 
-从其他地址访问时，浏览器先用无 Cookie 的健康探测确认目标是本应用，成功后保留路径、查询参数和锚点切换地址。已在目标内网地址时不会重复跳转。无法连接、服务身份不匹配或超过 1.5 秒时继续当前地址；配置缺失、格式无效或关闭时直接正常加载。仅健康探测接口允许跨域，不扩大业务 API 的跨域权限。
+v12.12 参考 VRB 的内网连接实现：浏览器并行请求 JSON 健康接口和 1×1 GIF 探测接口。JSON 核对服务标识，GIF 确认专用地址的小图片可加载，兼容部分跨域 fetch 失败的内置浏览器；GIF 不提供服务身份认证。任一路成功后保留路径、查询参数和锚点切换地址；两路失败或超过 1.5 秒继续当前地址。仅这两个探测接口允许跨域，不扩大业务 API 的跨域权限。
+
+每个窗口对同一目标只自动尝试一次，成功、失败和超时都会记录；刷新、切回页面不重复探测，也不再缓存成功结果后盲目跳转。新窗口可重新探测。设置页的“连接内网”始终可以按当前填写的目标直接在本窗口切换，不受自动开关或首次探测记录限制；连接失败可用浏览器返回键。已在目标地址时不自动跳转。
+
+“设置 → 网络 → 访问协议跳转”新增独立的“HTTPS 自动转 HTTP”开关（`https_auto_http_enabled`，默认 `false`）与 HTTP 服务端口（`https_redirect_http_port`，默认 `80`）。开启后先从 HTTPS 切换到同一主机的指定 HTTP 端口，再执行内网检测，保留 URL 中的页面位置。请填写外网入口实际可用的 HTTP 端口；它与内网端口独立。HTTP 传输不加密，若入口没有 HTTP 服务会连接失败，可用原 HTTPS 地址加 `?_gallery_skip_intranet=1` 临时跳过。反向代理、HSTS 或浏览器将地址升级回 HTTPS 时，URL 标记与短期会话记录防止循环降级；应用不能解除这些策略。
 
 浏览器可能限制从 HTTPS 页面探测 HTTP 内网或要求本地网络权限；被阻止时会继续使用原地址，不绕过浏览器保护。该功能不会修改系统代理、Clash 规则或 NAS 采集代理。不同访问地址的浏览器本地偏好独立保存，当前搜索、视图等未编码进 URL 的状态不会跨地址迁移。
 

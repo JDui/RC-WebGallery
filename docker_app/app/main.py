@@ -7,7 +7,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import BackgroundTasks, Body, FastAPI, HTTPException, Request
 from fastapi.middleware.gzip import GZipMiddleware
@@ -51,10 +51,11 @@ from app.services.utils import format_pub_time, loads_json
 from app.services.intranet import (
     DEFAULT_CONFIG as INTRANET_DEFAULTS,
     HEALTH_HEADERS,
+    HEALTH_GIF,
+    browser_config,
     ensure_config,
     is_local_host,
     read_config as read_intranet_config,
-    redirect_origin,
     save_config as save_intranet_config,
 )
 from app.version import APP_NAME, APP_TITLE, APP_VERSION
@@ -218,17 +219,22 @@ def index(request: Request) -> HTMLResponse:
     theme = resolve_ui_theme(settings)
     theme_rev = ui_theme_revision(theme)
     theme_color = ui_page_tint(theme)
-    origin = redirect_origin(config.config_dir, settings)
+    network = browser_config(config.config_dir, settings)
+    origin = network["origin"]
     target = urlparse(origin or "")
     current_port = request.url.port or (443 if request.url.scheme == "https" else 80)
     target_port = target.port or (443 if target.scheme == "https" else 80)
     is_target = request.url.scheme == target.scheme and request.url.hostname == target.hostname and current_port == target_port
-    if origin and not is_target and request.query_params.get("_gallery_skip_intranet") != "1":
+    needs_probe = (origin and network["auto"] and not is_target
+                   and request.cookies.get("gallery_intranet_checked") != quote(origin, safe=""))
+    needs_http = network["http_enabled"] and request.url.scheme == "https" and not is_target
+    if (needs_probe or needs_http) and request.query_params.get("_gallery_skip_intranet") != "1":
         fallback = request.url.include_query_params(_gallery_skip_intranet="1")
         return templates.TemplateResponse(
             request=request,
             name="intranet_preflight.html",
             context={"intranet_origin": origin, "app_version": APP_VERSION,
+                     "network_config": network,
                      "app_title": settings.get("app_title") or APP_NAME,
                      "theme_rev": theme_rev,
                      "theme_color": theme_color,
@@ -244,6 +250,7 @@ def index(request: Request) -> HTMLResponse:
             "app_version": APP_VERSION,
             "theme_rev": theme_rev,
             "theme_color": theme_color,
+            "network_config": network,
             "intranet_access": "local" if is_local_host(request.url.hostname or "") else "external",
             "initial_ui_settings": {
                 "wide_single_cover": bool(settings.get("wide_single_cover", False)),
@@ -263,6 +270,16 @@ def intranet_health() -> JSONResponse:
 
 @app.options("/intranet/health")
 def intranet_health_options() -> Response:
+    return Response(status_code=204, headers=HEALTH_HEADERS)
+
+
+@app.get("/intranet/health.gif")
+def intranet_health_gif() -> Response:
+    return Response(HEALTH_GIF, media_type="image/gif", headers=HEALTH_HEADERS)
+
+
+@app.options("/intranet/health.gif")
+def intranet_health_gif_options() -> Response:
     return Response(status_code=204, headers=HEALTH_HEADERS)
 
 

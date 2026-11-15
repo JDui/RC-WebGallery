@@ -16,6 +16,8 @@ DEFAULT_CONFIG = {
     "intranet_redirect_host": "",
     "intranet_redirect_port": 7777,
     "intranet_redirect_protocol": "http",
+    "https_auto_http_enabled": False,
+    "https_redirect_http_port": 80,
 }
 _config_lock = threading.RLock()
 
@@ -26,6 +28,7 @@ HEALTH_HEADERS = {
     "Access-Control-Allow-Private-Network": "true",
     "X-Content-Type-Options": "nosniff",
 }
+HEALTH_GIF = bytes.fromhex("47494638396101000100800000000000ffffff21f90401000000002c00000000010001000002024401003b")
 
 
 def ensure_config(config_dir: Path) -> None:
@@ -95,7 +98,7 @@ def save_config(config_dir: Path, updates: dict[str, Any], settings: dict[str, A
         raw = _read_document(config_dir)
         values = {**DEFAULT_CONFIG, **{key: value for key, value in raw.items() if key in DEFAULT_CONFIG},
                   **{key: value for key, value in updates.items() if key in DEFAULT_CONFIG}}
-        for key in ("intranet_auto_redirect_enabled", "intranet_use_proxy_host"):
+        for key in ("intranet_auto_redirect_enabled", "intranet_use_proxy_host", "https_auto_http_enabled"):
             if not isinstance(values[key], bool):
                 raise ValueError("内网开关必须是布尔值")
         if not isinstance(values["intranet_redirect_host"], str):
@@ -104,6 +107,9 @@ def save_config(config_dir: Path, updates: dict[str, Any], settings: dict[str, A
         protocol, port = _protocol_and_port(values)
         values["intranet_redirect_protocol"] = protocol
         values["intranet_redirect_port"] = port
+        _, values["https_redirect_http_port"] = _protocol_and_port({
+            "intranet_redirect_port": values["https_redirect_http_port"],
+        })
         if values["intranet_auto_redirect_enabled"]:
             configured_origin(values, settings)
         path = config_dir / "config.json"
@@ -125,6 +131,19 @@ def save_config(config_dir: Path, updates: dict[str, Any], settings: dict[str, A
             if temporary and temporary.exists():
                 temporary.unlink()
         return values
+
+
+def browser_config(config_dir: Path, settings: dict[str, Any]) -> dict[str, Any]:
+    """Expose only validated navigation settings, including manual connection when auto is off."""
+    result = {"origin": "", "auto": False, "http_enabled": False, "http_port": 80}
+    try:
+        values = read_config(config_dir)
+        _, port = _protocol_and_port({"intranet_redirect_port": values["https_redirect_http_port"]})
+        result.update(http_enabled=values["https_auto_http_enabled"] is True, http_port=port)
+        result.update(origin=configured_origin(values, settings), auto=values["intranet_auto_redirect_enabled"] is True)
+    except (ValueError, TypeError):
+        pass
+    return result
 
 
 def redirect_origin(config_dir: Path, settings: dict[str, Any]) -> str | None:

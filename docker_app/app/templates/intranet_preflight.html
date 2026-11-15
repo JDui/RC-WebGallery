@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-network-polish-2' %}
+    {% set ui_revision = app_version ~ '-network-vrb-3' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="{{ theme_color }}">
@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="/static/ui-tokens.css?v={{ ui_revision }}">
     <link rel="stylesheet" href="/theme/intranet.css?v={{ ui_revision }}&th={{ theme_rev }}">
 </head>
-<body data-intranet-origin="{{ intranet_origin }}">
+<body data-network-config="{{ network_config | tojson | forceescape }}" data-intranet-preflight="1">
     <main class="connection-card" aria-labelledby="connection-title">
         <header class="connection-brand">
             <span class="connection-mark" aria-hidden="true">
@@ -17,12 +17,12 @@
             </span>
             <span>{{ app_title }}</span>
         </header>
-        <h1 id="connection-title">正在检测内网</h1>
+        <h1 id="connection-title">正在连接</h1>
         <p class="connection-copy" role="status">连接成功后自动进入图库</p>
-        <div class="connection-target">
+        {% if intranet_origin %}<div class="connection-target">
             <span>内网地址</span>
             <bdi dir="ltr">{{ intranet_origin }}</bdi>
-        </div>
+        </div>{% endif %}
         <div class="connection-progress" aria-hidden="true"><span></span></div>
         <a class="connection-fallback" id="intranet-fallback" href="{{ fallback_url }}" title="无需等待检测，直接通过当前地址访问图库">使用当前地址<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a>
         <noscript><p class="connection-notice">自动跳转需要 JavaScript，请使用上方按钮继续。</p></noscript>

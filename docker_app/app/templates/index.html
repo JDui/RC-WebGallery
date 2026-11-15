@@ -5,13 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
-    <script>
-      if (new URL(window.location.href).searchParams.get("_gallery_skip_intranet") === "1") {
-        const page = new URL(window.location.href);
-        page.searchParams.delete("_gallery_skip_intranet");
-        window.history.replaceState(null, "", page.href);
-      }
-    </script>
+    <script defer src="/static/intranet.js?v={{ app_version }}-network-vrb-3"></script>
     <meta name="theme-color" content="{{ theme_color }}">
     <link rel="stylesheet" href="/static/ui-tokens.css?v={{ ui_revision }}">
     <link rel="stylesheet" href="/theme/app.css?v={{ ui_revision }}&th={{ theme_rev }}">
@@ -24,7 +18,7 @@
     <script defer src="/static/liquid-glass.js?v={{ ui_revision }}"></script>
     <script defer src="/static/vendor/alpinejs.min.js?v={{ app_version }}"></script>
 </head>
-<body x-data="galleryApp({{ initial_ui_settings | default({}) | tojson | forceescape }})" data-intranet-access="{{ intranet_access }}">
+<body x-data="galleryApp({{ initial_ui_settings | default({}) | tojson | forceescape }})" data-intranet-access="{{ intranet_access }}" data-network-config="{{ network_config | tojson | forceescape }}">
     <div class="touch-back-hint" data-testid="touch-back-hint" :class="{ visible: backGestureProgress() > 0 }" :style="{ '--back-progress': backGestureProgress() }" aria-hidden="true" x-cloak>
         <svg class="nav-icon"><use :href="backGestureLayer() === 'open-sidebar' ? '#icon-all' : '#icon-back'"></use></svg><span x-text="backGestureLayer() === 'open-sidebar' ? '菜单' : '返回'"></span>
         <span class="touch-back-hint-progress"></span>
@@ -921,7 +915,7 @@
                     </article>
 
                     <article class="settings-card intranet-settings-card" x-show="settingsGroup === 'network'" data-settings-group="network">
-                        <h4 class="heading-with-help">内网访问<button type="button" class="help-button" aria-label="内网访问说明" data-tooltip="设置写入 config.json；也可直接编辑该文件，刷新页面生效。默认关闭，无法直连时保留原地址。">?</button></h4>
+                        <h4 class="heading-with-help">内网访问<button type="button" class="help-button" aria-label="内网访问说明" data-tooltip="设置写入 config.json。每个窗口对同一目标只自动探测一次，健康接口与小图片并行检测，1.5 秒未成功则保留原地址。浏览器可能限制后台探测；可点击连接内网直接切换，失败时使用返回键。修改自动跳转设置后刷新生效。">?</button></h4>
                         <div class="intranet-current-status" data-tooltip="彩虹边缘表示当前地址为内网 IP，与自动跳转开关独立。">{{ '当前内网直连' if intranet_access == 'local' else '当前通过其他地址访问' }}</div>
                         <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.intranet_auto_redirect_enabled"> 自动跳转内网</label>
                         <label class="toggle-row switch-row" data-tooltip="使用本页的代理 IP，服务端口仍单独配置；取消共用后恢复独立内网 IP，原值不会丢失。"><input type="checkbox" x-model="settings.intranet_use_proxy_host"> 共用代理 IP</label>
@@ -929,6 +923,13 @@
                         <div class="shared-ip-line" x-show="settings.intranet_use_proxy_host" x-cloak><span>内网 IP</span><output aria-label="共用的内网 IP" x-text="settings.site_proxy_host || '未配置'"></output></div>
                         <label>服务端口 <input class="ui-field" type="number" min="1" max="65535" step="1" x-model.number="settings.intranet_redirect_port" :required="settings.intranet_auto_redirect_enabled" data-tooltip="填写 NAS 的网页访问端口，例如 7777，与代理端口独立。"></label>
                         <label>访问协议 <select class="ui-field" x-model="settings.intranet_redirect_protocol"><option value="http">HTTP</option><option value="https">HTTPS</option></select></label>
+                        <button type="button" class="secondary-button" @click="connectIntranet()">连接内网</button>
+                    </article>
+
+                    <article class="settings-card" x-show="settingsGroup === 'network'" data-settings-group="network">
+                        <h4 class="heading-with-help">访问协议跳转<button type="button" class="help-button" aria-label="HTTPS 自动转 HTTP 说明" data-tooltip="开启后从 HTTPS 页面自动切换到同一主机的 HTTP 端口，再进行内网检测；保留路径、查询参数和锚点。默认关闭，需确保该 HTTP 端口可访问，HTTP 传输不加密。若反向代理或浏览器强制 HTTPS，本次停止降级以避免循环。保存后刷新生效。">?</button></h4>
+                        <label class="toggle-row switch-row"><input type="checkbox" x-model="settings.https_auto_http_enabled"> HTTPS 自动转 HTTP</label>
+                        <label>HTTP 服务端口 <input class="ui-field" type="number" min="1" max="65535" step="1" x-model.number="settings.https_redirect_http_port"></label>
                     </article>
 
                     <article class="settings-card thumbnail-settings-card" x-show="settingsGroup === 'media'" data-settings-group="media">

@@ -66,7 +66,7 @@ class DataUpgradeMiddleware:
             await self.app(scope, receive, send)
             return
         path = scope.get('path', '')
-        if path.startswith('/static/') or path == '/intranet/health' or path in ('/api/settings/data-upgrade', '/api/settings/data-upgrade/start'):
+        if path.startswith('/static/') or path in ('/intranet/health', '/intranet/health.gif', '/api/settings/data-upgrade', '/api/settings/data-upgrade/start'):
             await self.app(scope, receive, send)
             return
         if not self.upgrade.enter():

@@ -8083,6 +8083,14 @@ function galleryApp(initialSettings = {}) {
       }
     },
 
+    connectIntranet() {
+      try {
+        window.galleryNetwork.connect(this.settings);
+      } catch (error) {
+        this.settingsError = error.message || "内网地址无效";
+      }
+    },
+
     async loadSettings() {
       if (this.settingsDirty()) return;
       const settings = await this.api("/api/settings");
