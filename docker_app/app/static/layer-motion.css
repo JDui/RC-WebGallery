@@ -1,0 +1,60 @@
+/* Managed layers have one transform owner; legacy drawer/closing rules must not
+   animate their children a second time. Hidden-state rules still conceal them. */
+.detail-backdrop[data-layer-motion],
+.viewer-backdrop[data-layer-motion],
+.xhs-video-backdrop[data-layer-motion],
+.detail-shell[data-layer-motion],
+.viewer-shell[data-layer-motion],
+.xhs-video-shell[data-layer-motion],
+.source-preview-shell[data-layer-motion],
+.inspector-shell[data-layer-motion] {
+    animation: none;
+    transition: none;
+}
+
+.detail-shell[data-layer-motion],
+.viewer-shell[data-layer-motion],
+.xhs-video-shell[data-layer-motion],
+.source-preview-shell[data-layer-motion],
+.inspector-shell[data-layer-motion],
+.detail-shell[data-layer-motion].closing,
+.viewer-shell[data-layer-motion].closing,
+[data-layer-motion="viewer"] .viewer-stage-wrap.closing {
+    transform: none;
+    opacity: 1;
+}
+
+.detail-backdrop[data-modal-layer="detail"][data-layer-motion].closing,
+.detail-backdrop[data-layer-motion].closing,
+.viewer-backdrop[data-layer-motion].closing,
+.xhs-video-backdrop[data-layer-motion].closing {
+    opacity: 1;
+}
+
+[data-layer-motion-active] {
+    will-change: transform, opacity;
+}
+
+.detail-backdrop[data-layer-motion-active],
+.viewer-backdrop[data-layer-motion-active],
+.xhs-video-backdrop[data-layer-motion-active] {
+    will-change: opacity;
+}
+
+[data-layer-motion][data-layer-motion-pending] {
+    visibility: hidden;
+}
+
+/* Conceal a fully closed surface before x-show flushes and releases the fill. */
+.detail-backdrop[data-layer-motion="source"]:not(.open):not(.closing),
+.detail-backdrop[data-layer-motion="task"]:not(.open):not(.closing),
+.xhs-video-backdrop[data-layer-motion]:not(.open):not(.closing),
+.viewer-backdrop[data-layer-motion]:not(.open):not(.closing) {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+[data-layer-motion].closing {
+    pointer-events: none;
+}

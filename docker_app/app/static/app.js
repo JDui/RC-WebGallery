@@ -217,7 +217,10 @@ function galleryApp(initialSettings = {}) {
   let settingsGroupToken = 0;
   const panelRequestTokens = {};
   let taskInspectorToken = 0;
+  const layerMotionOrigins = new Map();
+  const layerMotionGenerations = {};
   return {
+    layerMotionPending: {},
     panelLoading: {},
     panelErrors: {},
     panelLoaded: {},
@@ -560,6 +563,12 @@ function galleryApp(initialSettings = {}) {
     videoFeedPending: null,
     videoFeedRetiring: null,
     videoFeedSwitching: false,
+    videoFeedAnimating: false,
+    videoFeedMotionToken: null,
+    videoFeedMotionKind: 'none',
+    videoFeedMotionMs: 0,
+    videoFeedDragY: 0,
+    videoFeedMotionFromY: 0,
     videoFeedReadyTimer: null,
     videoFeedRetireTimer: null,
     videoFeedPositionTotal: null,
@@ -625,7 +634,11 @@ function galleryApp(initialSettings = {}) {
     postMutationRefreshTimer: null,
     postMutationRefreshExtras: {},
     taskInspector: { open: false, title: "", subtitle: "", body: "" },
+    taskInspectorClosing: false,
+    taskInspectorCloseTimer: null,
     sourcePreview: { open: false, url: "", title: "", subtitle: "", reviewId: null },
+    sourcePreviewClosing: false,
+    sourcePreviewCloseTimer: null,
     taskInspectorLoading: false,
     toast: { open: false, tone: "info", title: "", message: "" },
     toastTimer: null,
@@ -1093,9 +1106,9 @@ function galleryApp(initialSettings = {}) {
       if (this.currentFullscreenElement()) return "fullscreen";
       if (this.mediaContextMenu.open) return "media-menu";
       if (this.viewer.open || (includeClosing && this.viewerClosing)) return "viewer";
-      if (this.sourcePreview.open) return "source";
+      if (this.sourcePreview.open || (includeClosing && this.sourcePreviewClosing)) return "source";
       if (this.videoNote.open || (includeClosing && this.videoNoteClosing)) return "video-note";
-      if (this.taskInspector.open) return "task";
+      if (this.taskInspector.open || (includeClosing && this.taskInspectorClosing)) return "task";
       if (this.detail.open || (includeClosing && this.detailClosing)) return "detail";
       return "";
     },
@@ -1106,6 +1119,8 @@ function galleryApp(initialSettings = {}) {
       if (layer === "viewer") return keyboard && this.viewer.open ? "viewer" : "";
       if (layer === "detail" && this.detailClosing) return "";
       if (layer === "video-note" && this.videoNoteClosing) return "";
+      if (layer === "source" && this.sourcePreviewClosing) return "";
+      if (layer === "task" && this.taskInspectorClosing) return "";
       if (layer) return layer;
       if (this.sidebarDrawerOpen) return "sidebar";
       if (this.compactViewport) return "open-sidebar";
@@ -1303,7 +1318,7 @@ function galleryApp(initialSettings = {}) {
           || this.touchBackLayer() !== gesture.layer || this.touchBackContextKey() !== gesture.location) return;
       const dx = touch.clientX - gesture.x, dy = touch.clientY - gesture.y;
       if (dx >= this.touchBackThreshold() && dx > Math.abs(dy) * 1.4) {
-        this.videoFeedGesture = null;
+        this.cancelVideoFeedGesture();
         this.navigateTouchBack();
       }
     },
@@ -1369,7 +1384,7 @@ function galleryApp(initialSettings = {}) {
       if (!this.compactViewport || !element?.dataset.mediaMenuFolder) return;
       this.cancelMediaLongPress();
       this.cancelTouchBack();
-      this.videoFeedGesture = null;
+      this.cancelVideoFeedGesture();
       this.touchBackClickUntil = Date.now() + 800;
       mediaMenuAnchor = element;
       const rect = element.getBoundingClientRect();
@@ -1400,6 +1415,149 @@ function galleryApp(initialSettings = {}) {
         confirmation?.scrollIntoView({ block: "nearest", inline: "nearest" });
         confirmation?.focus({ preventScroll: true });
       });
+    },
+
+    layerMotionEngine() {
+      return typeof window !== "undefined" ? window.galleryLayerMotion : null;
+    },
+
+    layerMotionElements(key) {
+      const selectors = {
+        detail: [".detail-shell", '[data-modal-layer="detail"]'],
+        viewer: [".viewer-shell", '[data-modal-layer="viewer"]'],
+        video: [".xhs-video-shell", '[data-modal-layer="video-note"]'],
+        source: [".source-preview-shell", '[data-modal-layer="source"]'],
+        task: [".inspector-shell", '[data-modal-layer="task"]'],
+      };
+      const pair = selectors[key];
+      return pair ? { element: document.querySelector(pair[0]), backdrop: document.querySelector(pair[1]) } : {};
+    },
+
+    visibleMotionSource(selector, matches, preferred = null) {
+      const width = window.innerWidth || document.documentElement?.clientWidth || 0;
+      const height = window.innerHeight || document.documentElement?.clientHeight || 0;
+      const elements = [...(document.querySelectorAll?.(selector) || [])];
+      if (preferred) elements.unshift(preferred);
+      for (const element of elements) {
+        if (!matches(element) || element.isConnected === false) continue;
+        const rect = element.getBoundingClientRect?.();
+        if (!rect || rect.width <= 0 || rect.height <= 0 || rect.right <= 0 || rect.bottom <= 0
+            || (width && rect.left >= width) || (height && rect.top >= height)) continue;
+        const style = window.getComputedStyle?.(element);
+        if (style?.visibility === "hidden" || style?.display === "none") continue;
+        return element;
+      }
+      return null;
+    },
+
+    folderMotionSource(folderName, preferred = null) {
+      if (!folderName || this.deletedFolders[folderName]) return null;
+      return this.visibleMotionSource("[data-motion-folder]", element => element.dataset.motionFolder === folderName, preferred);
+    },
+
+    viewerMotionSource(entry) {
+      const folderName = entry?.folder?.folder_name;
+      const pairIndex = entry?.pair?.pair_index;
+      if (!folderName || !pairIndex || this.isGalleryItemDeleted({ folder_name: folderName, pair_index: pairIndex })) return null;
+      if (this.viewerSource === "detail") {
+        if (!this.detail.open || this.detailClosing || this.detail.folder?.folder_name !== folderName) return null;
+        const card = this.visibleMotionSource("[data-detail-key]", element => element.dataset.detailKey === `${folderName}::${pairIndex}`);
+        return card?.querySelector(".detail-thumb") || card;
+      }
+      return this.visibleMotionSource("[data-gallery-key]", element => element.dataset.galleryKey === this.viewerEntryKey(entry));
+    },
+
+    rememberFolderMotionOrigin(key, folderName, trigger = null) {
+      const motion = this.layerMotionEngine();
+      if (!motion) return;
+      const control = trigger?.currentTarget || trigger;
+      const source = this.folderMotionSource(folderName, control?.closest?.("[data-motion-folder]"));
+      layerMotionOrigins.set(key, motion.capture(source, {
+        resolve: () => {
+          const currentFolder = (key === "video" ? this.videoNote.folder : this.detail.folder)?.folder_name || folderName;
+          if (source && currentFolder === folderName) {
+            return source.dataset.motionFolder === currentFolder && !this.deletedFolders[currentFolder] ? source : null;
+          }
+          return this.folderMotionSource(currentFolder);
+        },
+      }));
+    },
+
+    rememberViewerMotionOrigin(entry) {
+      const motion = this.layerMotionEngine();
+      if (!motion) return;
+      layerMotionOrigins.set("viewer", motion.capture(this.viewerMotionSource(entry), {
+        resolve: () => this.viewerMotionSource(this.viewer.pair ? this.viewer : entry),
+      }));
+    },
+
+    rememberControlMotionOrigin(key, control = document.activeElement) {
+      const motion = this.layerMotionEngine();
+      if (!motion) return;
+      const source = control?.matches?.('button, a[href], input, [role="button"]') ? control : null;
+      layerMotionOrigins.set(key, motion.capture(source));
+    },
+
+    motionLayerState(key) {
+      return this[{ video: "videoNote", source: "sourcePreview", task: "taskInspector" }[key] || key];
+    },
+
+    prepareLayerEntrance(key) {
+      const generation = (layerMotionGenerations[key] || 0) + 1;
+      layerMotionGenerations[key] = generation;
+      this.layerMotionPending[key] = !!this.layerMotionEngine();
+      return generation;
+    },
+
+    enterGalleryLayer(key, generation) {
+      if (!generation || !this.layerMotionEngine()) return;
+      this.$nextTick(() => {
+        if (layerMotionGenerations[key] !== generation) return;
+        const state = this.motionLayerState(key);
+        if (!state?.open) { this.layerMotionPending[key] = false; return; }
+        const motion = this.layerMotionEngine();
+        try {
+          Promise.resolve(motion.enter({ key, ...this.layerMotionElements(key), origin: layerMotionOrigins.get(key) })).catch(() => {});
+        } catch (_) {
+          motion.cancel(key);
+        } finally {
+          this.layerMotionPending[key] = false;
+          // Alpine drains nested nextTick callbacks in the same turn. Wait for
+          // its promise so the visibility binding has flushed before focusing.
+          this.$nextTick().then(() => {
+            if (layerMotionGenerations[key] === generation && this.motionLayerState(key)?.open) {
+              this.syncModalAccessibility();
+            }
+          });
+        }
+      });
+    },
+
+    prepareLayerExit(key) {
+      const generation = (layerMotionGenerations[key] || 0) + 1;
+      layerMotionGenerations[key] = generation;
+      this.layerMotionPending[key] = false;
+      return generation;
+    },
+
+    finishGalleryLayer(key, generation, finalize, skipAnimation = false) {
+      const motion = this.layerMotionEngine();
+      const finish = () => {
+        if (layerMotionGenerations[key] !== generation) return;
+        const state = this.motionLayerState(key);
+        if (state?.open) return;
+        finalize();
+      };
+      if (skipAnimation) { motion?.cancel(key); finish(); return true; }
+      if (!motion) return false;
+      try {
+        Promise.resolve(motion.exit({ key, ...this.layerMotionElements(key), origin: layerMotionOrigins.get(key) }))
+          .then(completed => { if (completed) finish(); }, finish);
+      } catch (_) {
+        motion.cancel(key);
+        finish();
+      }
+      return true;
     },
 
     closeGalleryLayers() {
@@ -3913,7 +4071,8 @@ function galleryApp(initialSettings = {}) {
     },
 
     async stepVideoFeed(direction) {
-      if (!this.videoNote.open || this.videoNote.loading || !this.videoNote.video || !this.videoFeed.active || this.videoFeed.busy) return;
+      if ((direction !== 1 && direction !== -1) || !this.videoNote.open || this.videoNote.loading || !this.videoNote.video || !this.videoFeed.active || this.videoFeed.busy) return;
+      this.cancelVideoFeedMotion();
       const token = ++this.videoFeedToken;
       this.videoFeed.busy = true;
       this.videoFeedPositionTotal = this.videoFeed.items.length;
@@ -3955,13 +4114,14 @@ function galleryApp(initialSettings = {}) {
         this.videoFeedPending = { payload, index, token };
         this.videoFeedReadyTimer = window.setTimeout(() => this.failPendingVideo(token), 15000);
         this.$nextTick(() => {
-          const video = document.querySelector('.xhs-video-shell video:not(.is-retiring):not(.is-current)') || this.currentVideoNotePlayer();
+          if (token !== this.videoFeedToken || !this.videoFeedPending) return;
+          const video = document.querySelector('.xhs-video-shell video:not(.is-retiring):not(.is-current)');
           if (video?.readyState >= 2) this.videoNotePlayerReady({ key: this.videoNotePlayerKey(payload.folder, payload.videos[0]) });
         });
       } catch (error) {
         if (token === this.videoFeedToken) this.videoFeedMessage = error.message || '读取视频失败，请重试';
       } finally {
-        if (token === this.videoFeedToken && !this.videoFeedPending) {
+        if (token === this.videoFeedToken && !this.videoFeedPending && !this.videoFeedAnimating) {
           if (this.videoFeedPositionTotal !== null && this.videoFeedPositionTotal !== this.videoFeed.items.length) {
             await this.fadeVideoFeedCaption(() => { this.videoFeedPositionTotal = null; }, token);
           }
@@ -3998,6 +4158,48 @@ function galleryApp(initialSettings = {}) {
       return document.querySelector('.xhs-video-shell video.is-current');
     },
 
+    videoFeedMotionPreference() {
+      if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return 'none';
+      return this.performanceMode === 'low' || document.documentElement?.dataset?.performanceMode === 'low'
+        ? 'fade' : 'slide';
+    },
+
+    videoFeedPlayerOffset(player) {
+      const transform = player && window.getComputedStyle?.(player).transform;
+      if (!transform || transform === 'none') return this.videoFeedDragY;
+      const match = transform.match(/^matrix(3d)?\(([^)]+)\)$/);
+      if (!match) return this.videoFeedDragY;
+      const values = match[2].split(',').map(Number);
+      const offset = values[match[1] ? 13 : 5];
+      return Number.isFinite(offset) ? offset : this.videoFeedDragY;
+    },
+
+    finishVideoFeedMotion(token, playerKey = null, event = null) {
+      if (token !== this.videoFeedMotionToken || token !== this.videoFeedToken || !this.videoNote.open) return;
+      if (playerKey && playerKey !== this.videoNotePlayerKey()) return;
+      if (event && !['video-feed-current-in', 'video-feed-current-fade'].includes(event.animationName)) return;
+      window.clearTimeout(this.videoFeedRetireTimer);
+      this.videoFeedRetireTimer = null;
+      this.videoFeedMotionToken = null;
+      this.videoFeedAnimating = false;
+      this.videoFeedRetiring = null;
+      this.videoFeedMotionFromY = 0;
+      this.videoFeedDragY = 0;
+      this.videoFeedSwitching = false;
+      this.videoFeed.busy = false;
+    },
+
+    cancelVideoFeedMotion() {
+      window.clearTimeout(this.videoFeedRetireTimer);
+      this.videoFeedRetireTimer = null;
+      this.videoFeedMotionToken = null;
+      this.videoFeedAnimating = false;
+      this.videoFeedRetiring = null;
+      this.videoFeedMotionFromY = 0;
+      this.videoFeedSwitching = false;
+      this.cancelVideoFeedGesture();
+    },
+
     async toggleVideoNoteFullscreen() {
       const shell = document.querySelector('.xhs-video-shell');
       if (!shell || !this.videoNote.open) return;
@@ -4028,7 +4230,7 @@ function galleryApp(initialSettings = {}) {
 
     async fadeVideoFeedCaption(update, token) {
       this.videoFeedSwitching = true;
-      if (!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      if (this.videoFeedMotionPreference() !== 'none') {
         await new Promise(resolve => window.setTimeout(resolve, 120));
       }
       if (token !== this.videoFeedToken || !this.videoNote.open) return false;
@@ -4039,18 +4241,27 @@ function galleryApp(initialSettings = {}) {
       return true;
     },
 
-    async videoNotePlayerReady(player) {
+    async videoNotePlayerReady(player, event = null) {
       const pending = this.videoFeedPending;
       if (!pending || pending.committing || player.key !== this.videoNotePlayerKey(pending.payload.folder, pending.payload.videos[0])) return;
+      if (event?.currentTarget && event.currentTarget.readyState < 2) return;
       pending.committing = true;
       window.clearTimeout(this.videoFeedReadyTimer);
       this.videoFeedReadyTimer = null;
-      this.videoFeedSwitching = true;
-      const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-      if (!reduced) await new Promise(resolve => window.setTimeout(resolve, 120));
+      const motion = this.videoFeedMotionPreference();
+      this.videoFeedSwitching = motion !== 'none';
+      if (motion !== 'none') await new Promise(resolve => window.setTimeout(resolve, 70));
       if (pending.token !== this.videoFeedToken || this.videoFeedPending !== pending || !this.videoNote.open) return;
-      this.currentVideoNotePlayer()?.pause();
+      const current = this.currentVideoNotePlayer();
+      this.videoFeedMotionFromY = motion === 'slide' ? this.videoFeedPlayerOffset(current) : 0;
+      this.videoFeedDragY = 0;
+      this.videoFeedGesture = null;
+      current?.pause();
       this.videoFeedRetiring = this.videoNote.video ? { key: this.videoNotePlayerKey(), video: this.videoNote.video } : null;
+      this.videoFeedMotionKind = motion;
+      this.videoFeedMotionMs = motion === 'slide' ? 360 : motion === 'fade' ? 160 : 0;
+      this.videoFeedMotionToken = pending.token;
+      this.videoFeedAnimating = motion !== 'none';
       this.videoFeed.index = pending.index;
       this.videoFeedPositionTotal = null;
       this.videoNote = { open: true, loading: false, folder: pending.payload.folder, video: pending.payload.videos[0], error: '' };
@@ -4058,14 +4269,14 @@ function galleryApp(initialSettings = {}) {
       await this.$nextTick();
       if (pending.token !== this.videoFeedToken || !this.videoNote.open) return;
       this.videoFeedSwitching = false;
-      this.videoFeed.busy = false;
+      if (motion === 'none') this.videoFeed.busy = false;
       this.startVideoNote();
       if (this.narrowViewport) this.showVideoFeedHint();
       window.clearTimeout(this.videoFeedRetireTimer);
-      this.videoFeedRetireTimer = window.setTimeout(() => {
-        this.videoFeedRetiring = null;
-        this.videoFeedRetireTimer = null;
-      }, reduced ? 0 : 240);
+      // Keep both keyed players until the slide ends; the timeout also covers
+      // background tabs, preference changes and browsers that omit animationend.
+      this.videoFeedRetireTimer = window.setTimeout(() => this.finishVideoFeedMotion(pending.token),
+        motion === 'none' ? 0 : this.videoFeedMotionMs + 80);
     },
 
     videoNotePlayerFailed(player) {
@@ -4078,38 +4289,61 @@ function galleryApp(initialSettings = {}) {
     },
 
     startVideoFeedGesture(event) {
-      this.videoFeedGesture = null;
-      if (!(this.compactViewport || this.narrowViewport) || !this.videoFeed.active || event.touches.length !== 1 || event.target.closest('button, a, input, header, .video-feed-caption')) return;
+      this.cancelVideoFeedGesture();
+      if (!(this.compactViewport || this.narrowViewport) || !this.videoFeed.active || this.videoFeed.busy || this.videoNote.loading || event.touches.length !== 1 || event.target.closest('button, a, input, header, .video-feed-caption')) return;
       const touch = event.touches[0];
       const player = this.currentVideoNotePlayer();
       if (player && touch.clientY > player.getBoundingClientRect().bottom - 72) return;
-      this.videoFeedGesture = { x: touch.clientX, y: touch.clientY };
+      this.videoFeedGesture = { id: touch.identifier, x: touch.clientX, y: touch.clientY, locked: false };
+    },
+
+    cancelVideoFeedGesture() {
+      this.videoFeedGesture = null;
+      this.videoFeedDragY = 0;
     },
 
     moveVideoFeedGesture(event) {
-      if (event.touches.length !== 1) { this.videoFeedGesture = null; return; }
-      if (!this.videoFeedGesture) return;
-      const dy = event.touches[0].clientY - this.videoFeedGesture.y;
-      const dx = event.touches[0].clientX - this.videoFeedGesture.x;
-      if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx) && event.cancelable) event.preventDefault();
+      const gesture = this.videoFeedGesture;
+      const touch = event.touches[0];
+      if (event.touches.length !== 1 || !gesture || touch.identifier !== gesture.id) { this.cancelVideoFeedGesture(); return; }
+      const dy = touch.clientY - gesture.y;
+      const dx = touch.clientX - gesture.x;
+      if (!gesture.locked && Math.abs(dx) > 12 && Math.abs(dx) >= Math.abs(dy)) { this.cancelVideoFeedGesture(); return; }
+      if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx) * 1.2) gesture.locked = true;
+      if (!gesture.locked) return;
+      if (this.videoFeedMotionPreference() === 'slide') {
+        const boundary = dy > 0 ? this.videoFeed.index <= 0
+          : this.videoFeed.index >= this.videoFeed.items.length - 1 && this.videoFeed.page >= this.videoFeed.totalPages;
+        const limit = Math.min(120, (window.innerHeight || 720) * 0.18);
+        this.videoFeedDragY = Math.sign(dy) * Math.min(Math.abs(dy) * (boundary ? 0.16 : 0.55), limit);
+      }
+      if (event.cancelable) event.preventDefault();
     },
 
     endVideoFeedGesture(event) {
       const start = this.videoFeedGesture;
-      this.videoFeedGesture = null;
-      if (!start || !event.changedTouches.length) return;
-      const dx = event.changedTouches[0].clientX - start.x;
-      const dy = event.changedTouches[0].clientY - start.y;
+      this.cancelVideoFeedGesture();
+      const touch = start && Array.from(event.changedTouches || []).find(item => item.identifier === start.id);
+      if (!start || !touch || event.touches?.length) return;
+      if (start.locked) {
+        this.touchBackClickUntil = Date.now() + 450;
+        if (event.cancelable) event.preventDefault();
+      }
+      const dx = touch.clientX - start.x;
+      const dy = touch.clientY - start.y;
       if (Math.abs(dy) >= 60 && Math.abs(dy) > Math.abs(dx) * 1.4) this.stepVideoFeed(dy < 0 ? 1 : -1);
     },
 
-    async openFolder(folderName, previewOverride = null) {
+    async openFolder(folderName, previewOverride = null, trigger = null) {
       if (this.deletedFolders[folderName]) return;
+      const openingDetail = !this.detail.open;
+      if (openingDetail) this.rememberFolderMotionOrigin("detail", folderName, trigger);
+      this.rememberFolderMotionOrigin("video", folderName, trigger);
       this.cancelPendingViewerEntry();
       detailFetchController?.abort();
       detailFetchController = null;
       this.detailError = "";
-      this.closeVideoNote();
+      this.closeVideoNote(true);
       if (this.detailCloseTimer) {
         window.clearTimeout(this.detailCloseTimer);
         this.detailCloseTimer = null;
@@ -4129,6 +4363,7 @@ function galleryApp(initialSettings = {}) {
         || (this.duplicateGroups || []).flatMap((group) => group.items || []).find((item) => item.folder_name === folderName)
         || (this.detail.folder?.folder_name === folderName ? this.detail.folder : null);
       const likelyVideo = this.isStandaloneVideoFolder(previewFolder, folderName);
+      const detailMotion = openingDetail && !likelyVideo ? this.prepareLayerEntrance("detail") : 0;
       if (likelyVideo) this.prepareVideoFeed(previewFolder);
       const cached = this.cachedDetail(folderName);
       if (cached && (cached.pairs?.length || cached.videos?.length)) {
@@ -4143,6 +4378,7 @@ function galleryApp(initialSettings = {}) {
           this.resetDetailWindow();
           this.syncBodyLock();
           resetDetailScroll();
+          this.enterGalleryLayer("detail", detailMotion);
           return;
         }
       }
@@ -4161,6 +4397,7 @@ function galleryApp(initialSettings = {}) {
         this.resetDetailWindow();
         this.syncBodyLock();
         resetDetailScroll();
+        this.enterGalleryLayer("detail", detailMotion);
       }
       if (requestId !== this.detailRequestId) {
         return;
@@ -4231,12 +4468,14 @@ function galleryApp(initialSettings = {}) {
     },
 
     openVideoNoteLoading(folder) {
+      const motion = !this.videoNote.open ? this.prepareLayerEntrance("video") : 0;
       this.cancelVideoNoteClose();
       this.closeDetail(true);
       this.pauseCurrentViewerMedia(true);
       this.detail = { open: false, pairs: [], folder: folder || null, videos: [] };
       this.videoNote = { open: true, loading: true, folder: folder || null, video: null, error: '' };
       this.syncBodyLock();
+      this.enterGalleryLayer("video", motion);
     },
 
     openVideoNote(payload) {
@@ -4245,6 +4484,7 @@ function galleryApp(initialSettings = {}) {
       const standalone = this.isStandaloneVideoFolder(folder)
         || (isXhs && payload?.videos?.length > 0 && !folder?.has_livephoto);
       if (!standalone || !payload?.videos?.length) return false;
+      const motion = !this.videoNote.open ? this.prepareLayerEntrance("video") : 0;
       this.cancelVideoNoteClose();
       this.closeDetail(true);
       this.pauseCurrentViewerMedia(true);
@@ -4254,6 +4494,7 @@ function galleryApp(initialSettings = {}) {
         this.showVideoFeedHint();
       }
       this.syncBodyLock();
+      this.enterGalleryLayer("video", motion);
       this.$nextTick(() => this.startVideoNote());
       return true;
     },
@@ -4294,8 +4535,14 @@ function galleryApp(initialSettings = {}) {
 
     closeVideoNote(skipAnimation = false) {
       if (!this.videoNote.open && !this.videoNoteClosing) return;
+      const motionGeneration = this.prepareLayerExit("video");
       this.cancelVideoNoteClose();
-      if (this.videoNoteFullscreen) this.exitCurrentFullscreen();
+      this.cancelVideoFeedMotion();
+      if (this.videoNoteFullscreen) {
+        // Native fullscreen resizes asynchronously; let the browser own that exit.
+        skipAnimation = true;
+        this.exitCurrentFullscreen();
+      }
       this.videoNoteFullscreen = false;
       window.clearTimeout(this.videoFeedReadyTimer);
       window.clearTimeout(this.videoFeedRetireTimer);
@@ -4320,7 +4567,7 @@ function galleryApp(initialSettings = {}) {
       this.videoNoteClosing = !skipAnimation && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
       this.videoNote = { ...this.videoNote, open: false, loading: false, error: '' };
       const finish = () => {
-        if (this.videoNote.open) return;
+        if (this.videoNote.open || layerMotionGenerations.video !== motionGeneration) return;
         video?.removeAttribute('src');
         video?.load();
         this.videoNote = { open: false, loading: false, folder: null, video: null, error: '' };
@@ -4328,8 +4575,9 @@ function galleryApp(initialSettings = {}) {
         this.videoNoteCloseTimer = null;
         this.syncBodyLock();
       };
-      if (this.videoNoteClosing) this.videoNoteCloseTimer = window.setTimeout(finish, 240);
-      else finish();
+      if (!this.finishGalleryLayer("video", motionGeneration, finish, skipAnimation || !this.videoNoteClosing)) {
+        this.videoNoteCloseTimer = window.setTimeout(finish, 240);
+      }
       this.syncBodyLock();
     },
 
@@ -4496,6 +4744,7 @@ function galleryApp(initialSettings = {}) {
       const index = sequence.findIndex((item) => this.viewerEntryKey(item) === `${this.detail.folder?.folder_name}::${pairIndex}`);
       if (index < 0) return;
       this.viewerSource = "detail";
+      if (!this.viewer.open) this.rememberViewerMotionOrigin(sequence[index]);
       this.viewerSequence = sequence;
       this.viewerIndex = index;
       this.openViewerEntry(sequence[index]);
@@ -4604,7 +4853,12 @@ function galleryApp(initialSettings = {}) {
       if (!entry?.pair) {
         return;
       }
-      if (!this.viewer.open) this.viewerToolbarOpen = false;
+      const opening = !this.viewer.open;
+      const layerMotion = opening ? this.prepareLayerEntrance("viewer") : 0;
+      if (opening) {
+        this.viewerToolbarOpen = false;
+        if (!layerMotionOrigins.has("viewer")) this.rememberViewerMotionOrigin(entry);
+      }
       if (this.viewerCloseTimer) {
         window.clearTimeout(this.viewerCloseTimer);
         this.viewerCloseTimer = null;
@@ -4637,6 +4891,7 @@ function galleryApp(initialSettings = {}) {
       this.resetViewerTransform();
       this.setInteracting(320);
       this.syncBodyLock();
+      this.enterGalleryLayer("viewer", layerMotion);
       const viewerToken = this.viewerToken;
       this.$nextTick(() => {
         if (!this.viewer.open || viewerToken !== this.viewerToken) return;
@@ -4694,6 +4949,7 @@ function galleryApp(initialSettings = {}) {
       const itemKey = item.item_key || `${item.folder_name}::${item.pair_index}`;
       const index = sequence.findIndex((entry) => this.viewerEntryKey(entry) === itemKey);
       this.viewerSource = "gallery";
+      if (!this.viewer.open) this.rememberViewerMotionOrigin({ folder: item, pair: item });
       if (index >= 0) {
         this.viewerSequence = sequence;
         this.viewerIndex = index;
@@ -4788,10 +5044,13 @@ function galleryApp(initialSettings = {}) {
     closeDetail(skipAnimation = false) {
       detailFetchController?.abort();
       detailFetchController = null;
-      if (this.viewer.open || this.viewerPendingEntry) {
-        this.closeViewer(skipAnimation);
+      if (this.viewer.open || this.viewerPendingEntry || this.viewerClosing) {
+        // A parent leaving cannot be a stable return target for its child.
+        this.closeViewer(true);
       }
+      const motionGeneration = this.prepareLayerExit("detail");
       if (!this.detail.open && !this.detailClosing) {
+        this.layerMotionEngine()?.cancel("detail");
         return;
       }
       if (this.detailCloseTimer) {
@@ -4803,6 +5062,7 @@ function galleryApp(initialSettings = {}) {
       this.detailClosing = !skipAnimation;
       this.detail = { ...this.detail, open: false };
       const finalizeClose = () => {
+        if (this.detail.open || layerMotionGenerations.detail !== motionGeneration) return;
         document.querySelectorAll(".detail-thumb img").forEach((image) => image.removeAttribute("src"));
         document.querySelectorAll(".detail-thumb video, .detail-video-grid video").forEach((video) => {
           video.pause();
@@ -4817,12 +5077,10 @@ function galleryApp(initialSettings = {}) {
         this.detailCloseTimer = null;
         this.syncBodyLock();
       };
-      if (skipAnimation) {
-        finalizeClose();
-        return;
-      }
       this.syncBodyLock();
-      this.detailCloseTimer = window.setTimeout(finalizeClose, 260);
+      if (!this.finishGalleryLayer("detail", motionGeneration, finalizeClose, skipAnimation)) {
+        this.detailCloseTimer = window.setTimeout(finalizeClose, 260);
+      }
     },
 
     cancelPendingViewerEntry() {
@@ -4833,6 +5091,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     closeViewer(skipAnimation = false) {
+      const motionGeneration = this.prepareLayerExit("viewer");
       this.cancelPendingViewerEntry();
       this.viewerHandoff = null;
       this.cancelViewerSwipe();
@@ -4845,6 +5104,7 @@ function galleryApp(initialSettings = {}) {
       this.viewerToolbarOpen = false;
       this.cancelViewerPreviewRetirement();
       if (!this.viewer.open && !this.viewerClosing) {
+        this.layerMotionEngine()?.cancel("viewer");
         return;
       }
       if (this.viewerCloseTimer) {
@@ -4859,6 +5119,7 @@ function galleryApp(initialSettings = {}) {
       this.viewerClosing = !skipAnimation;
       this.viewer = { ...this.viewer, open: false };
       const finalizeClose = () => {
+        if (this.viewer.open || layerMotionGenerations.viewer !== motionGeneration) return;
         this.viewerImageReady = false;
         this.viewerPreparedPreview = "";
         this.pauseCurrentViewerMedia(true);
@@ -4870,21 +5131,20 @@ function galleryApp(initialSettings = {}) {
         this.viewerNavigationLockedUntil = 0;
         this.viewerClosing = false;
         this.viewerCloseTimer = null;
+        layerMotionOrigins.delete("viewer");
         this.syncBodyLock();
       };
-      if (skipAnimation) {
-        finalizeClose();
-        return;
-      }
       this.syncBodyLock();
-      this.viewerCloseTimer = window.setTimeout(finalizeClose, 240);
+      if (!this.finishGalleryLayer("viewer", motionGeneration, finalizeClose, skipAnimation)) {
+        this.viewerCloseTimer = window.setTimeout(finalizeClose, 240);
+      }
     },
 
     syncBodyLock() {
-      const locked = this.videoNote.open || this.videoNoteClosing || this.detail.open || this.viewer.open || this.detailClosing || this.viewerClosing || this.taskInspector.open || this.sourcePreview.open;
+      const locked = this.videoNote.open || this.videoNoteClosing || this.detail.open || this.viewer.open || this.detailClosing || this.viewerClosing || this.taskInspector.open || this.taskInspectorClosing || this.sourcePreview.open || this.sourcePreviewClosing;
       const html = document.documentElement;
       const body = document.body;
-      body.classList.toggle("detail-layer-open", this.detail.open || this.detailClosing || this.taskInspector.open || this.sourcePreview.open);
+      body.classList.toggle("detail-layer-open", this.detail.open || this.detailClosing || this.taskInspector.open || this.taskInspectorClosing || this.sourcePreview.open || this.sourcePreviewClosing);
       body.classList.toggle("viewer-layer-open", this.videoNote.open || this.videoNoteClosing || this.viewer.open || this.viewerClosing);
       body.classList.toggle("overlay-locked", locked);
       if (locked) {
@@ -5455,6 +5715,7 @@ function galleryApp(initialSettings = {}) {
       }
       const xhsNote = /^xhs_/.test(item?.folder_name || '') || /^https:\/\/www\.xiaohongshu\.com\/(?:explore|discovery\/item)\//.test(url);
       if (this.settings?.review_source_open_mode === "popup" && !xhsNote) {
+        const motion = this.beginSourcePreviewMotion();
         const reviewItem = this.currentView === "review"
           ? (this.reviewItems || []).find((entry) => Number(entry.id) === Number(item?.id))
           : null;
@@ -5466,6 +5727,7 @@ function galleryApp(initialSettings = {}) {
           reviewId: reviewItem ? Number(reviewItem.id) : null,
         };
         this.syncBodyLock();
+        this.enterGalleryLayer("source", motion);
         return;
       }
       this.openExternalUrl(url);
@@ -5481,12 +5743,36 @@ function galleryApp(initialSettings = {}) {
       }
     },
 
-    closeSourcePreview() {
-      if (!this.sourcePreview.open) {
-        return;
-      }
-      this.sourcePreview = { open: false, url: "", title: "", subtitle: "", reviewId: null };
+    beginSourcePreviewMotion() {
+      const opening = !this.sourcePreview.open;
+      window.clearTimeout(this.sourcePreviewCloseTimer);
+      this.sourcePreviewCloseTimer = null;
+      this.sourcePreviewClosing = false;
+      if (!opening) return 0;
+      this.rememberControlMotionOrigin("source");
+      return this.prepareLayerEntrance("source");
+    },
+
+    closeSourcePreview(skipAnimation = false) {
+      if (!this.sourcePreview.open && !this.sourcePreviewClosing) return;
+      const generation = this.prepareLayerExit("source");
+      window.clearTimeout(this.sourcePreviewCloseTimer);
+      this.sourcePreviewCloseTimer = null;
+      this.sourcePreviewClosing = !skipAnimation && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      // Keep the iframe URL mounted until its return animation has completed.
+      this.sourcePreview = { ...this.sourcePreview, open: false };
+      const finish = () => {
+        if (this.sourcePreview.open || layerMotionGenerations.source !== generation) return;
+        this.sourcePreview = { open: false, url: "", title: "", subtitle: "", reviewId: null };
+        this.sourcePreviewClosing = false;
+        this.sourcePreviewCloseTimer = null;
+        layerMotionOrigins.delete("source");
+        this.syncBodyLock();
+      };
       this.syncBodyLock();
+      if (!this.finishGalleryLayer("source", generation, finish, skipAnimation || !this.sourcePreviewClosing)) {
+        this.sourcePreviewCloseTimer = window.setTimeout(finish, 240);
+      }
     },
 
     resolveSourcePreviewReview(action) {
@@ -7201,7 +7487,18 @@ function galleryApp(initialSettings = {}) {
         .join("\n\n");
     },
 
+    beginTaskInspectorMotion() {
+      const opening = !this.taskInspector.open;
+      window.clearTimeout(this.taskInspectorCloseTimer);
+      this.taskInspectorCloseTimer = null;
+      this.taskInspectorClosing = false;
+      if (!opening) return 0;
+      this.rememberControlMotionOrigin("task");
+      return this.prepareLayerEntrance("task");
+    },
+
     openCurrentTaskInspector() {
+      const motion = this.beginTaskInspectorMotion();
       taskInspectorToken += 1;
       this.taskInspector = {
         open: true,
@@ -7211,9 +7508,11 @@ function galleryApp(initialSettings = {}) {
       };
       this.taskInspectorLoading = false;
       this.syncBodyLock();
+      this.enterGalleryLayer("task", motion);
     },
 
     openCurrentAddedItems() {
+      const motion = this.beginTaskInspectorMotion();
       taskInspectorToken += 1;
       const items = this.pullStatus?.stats?.added_items || [];
       this.taskInspector = {
@@ -7224,9 +7523,11 @@ function galleryApp(initialSettings = {}) {
       };
       this.taskInspectorLoading = false;
       this.syncBodyLock();
+      this.enterGalleryLayer("task", motion);
     },
 
     async openTaskInspector(item) {
+      const motion = this.beginTaskInspectorMotion();
       const token = ++taskInspectorToken;
       this.taskInspectorLoading = true;
       this.taskInspector = {
@@ -7236,6 +7537,7 @@ function galleryApp(initialSettings = {}) {
         body: "正在加载日志与执行细节...",
       };
       this.syncBodyLock();
+      this.enterGalleryLayer("task", motion);
       try {
         const payload = await this.api(`/api/tasks/${item.id}`);
         if (token !== taskInspectorToken || !this.taskInspector.open) return;
@@ -7260,6 +7562,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     async openTaskAddedItems(item) {
+      const motion = this.beginTaskInspectorMotion();
       const token = ++taskInspectorToken;
       this.taskInspectorLoading = true;
       this.taskInspector = {
@@ -7269,6 +7572,7 @@ function galleryApp(initialSettings = {}) {
         body: "正在加载本次新增列表...",
       };
       this.syncBodyLock();
+      this.enterGalleryLayer("task", motion);
       try {
         const payload = await this.api(`/api/tasks/${item.id}`);
         if (token !== taskInspectorToken || !this.taskInspector.open) return;
@@ -7294,6 +7598,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     openQueuedTaskInspector(item) {
+      const motion = this.beginTaskInspectorMotion();
       taskInspectorToken += 1;
       this.taskInspector = {
         open: true,
@@ -7311,14 +7616,30 @@ function galleryApp(initialSettings = {}) {
       };
       this.taskInspectorLoading = false;
       this.syncBodyLock();
+      this.enterGalleryLayer("task", motion);
     },
 
-    closeTaskInspector() {
+    closeTaskInspector(skipAnimation = false) {
       taskInspectorToken += 1;
-      // Retain the outgoing contents during the backdrop's leave transition.
-      this.taskInspector = { ...this.taskInspector, open: false };
       this.taskInspectorLoading = false;
+      if (!this.taskInspector.open && !this.taskInspectorClosing) return;
+      const generation = this.prepareLayerExit("task");
+      window.clearTimeout(this.taskInspectorCloseTimer);
+      this.taskInspectorCloseTimer = null;
+      this.taskInspectorClosing = !skipAnimation && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      this.taskInspector = { ...this.taskInspector, open: false };
+      const finish = () => {
+        if (this.taskInspector.open || layerMotionGenerations.task !== generation) return;
+        this.taskInspector = { open: false, title: "", subtitle: "", body: "" };
+        this.taskInspectorClosing = false;
+        this.taskInspectorCloseTimer = null;
+        layerMotionOrigins.delete("task");
+        this.syncBodyLock();
+      };
       this.syncBodyLock();
+      if (!this.finishGalleryLayer("task", generation, finish, skipAnimation || !this.taskInspectorClosing)) {
+        this.taskInspectorCloseTimer = window.setTimeout(finish, 240);
+      }
     },
 
     taskHasAddedItems(item) {
@@ -9822,6 +10143,7 @@ function galleryApp(initialSettings = {}) {
         });
       } else {
         const url = note.url || `https://www.xiaohongshu.com/explore/${note.note_id}`;
+        const motion = this.beginSourcePreviewMotion();
         this.sourcePreview = {
           open: true,
           url,
@@ -9830,6 +10152,7 @@ function galleryApp(initialSettings = {}) {
           reviewId: null,
         };
         this.syncBodyLock();
+        this.enterGalleryLayer("source", motion);
       }
     },
 

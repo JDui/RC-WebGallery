@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-5-detail-preload-2-trackpad-hint-3-responsive-swipe-4-xhs-login-recovery-2-gallery-instant-injection-1-motion-2-detail-close-1-viewer-indicators-1-image-handoff-1-card-dates-1-ui-state-3-paper-palette-1' %}
+    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-5-detail-preload-2-trackpad-hint-3-responsive-swipe-4-xhs-login-recovery-2-gallery-instant-injection-1-motion-2-detail-close-1-viewer-indicators-1-image-handoff-1-card-dates-1-ui-state-3-paper-palette-1-spatial-motion-1' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -12,7 +12,10 @@
     <link rel="stylesheet" href="/theme/liquid-glass.css?v={{ ui_revision }}&th={{ theme_rev }}">
     <link rel="stylesheet" href="/static/responsive-layout.css?v={{ ui_revision }}">
     <link rel="stylesheet" href="/static/progressive-images.css?v={{ ui_revision }}">
+    <link rel="stylesheet" href="/static/layer-motion.css?v={{ ui_revision }}">
+    <link rel="stylesheet" href="/static/video-motion.css?v={{ ui_revision }}">
     <script defer src="/static/progressive-images.js?v={{ ui_revision }}"></script>
+    <script defer src="/static/layer-motion.js?v={{ ui_revision }}"></script>
     <script defer src="/static/app.js?v={{ ui_revision }}"></script>
     <script defer src="/static/ui-help.js?v={{ ui_revision }}"></script>
     <script defer src="/static/liquid-glass.js?v={{ ui_revision }}"></script>
@@ -301,13 +304,14 @@
                                                 @animationend.self="item.__appearing = false"
                                                 data-testid="photo-card"
                                                 :data-gallery-key="galleryItemKey(item)"
+                                                :data-motion-folder="item.__deleted_placeholder ? null : item.folder_name"
                                                 :data-media-menu-folder="item.__deleted_placeholder ? null : item.folder_name"
                                                 :data-gallery-index="item.__gallery_index ?? ''"
                                                 :data-year-key="item.year_key"
                                                 :data-month-key="item.month_key"
                                                 :class="{ live: item.has_livephoto, video: isStandaloneVideoFolder(item, item.folder_name), 'deleted-placeholder-card': item.__deleted_placeholder, 'is-appearing': item.__appearing, 'small-quality': galleryQualityFor(item) === 'small' }"
                                                 :style="item.__deleted_placeholder ? galleryPlaceholderStyle(item) : {}"
-                                                @click="item.__deleted_placeholder ? null : openFolder(item.folder_name, item)"
+                                                @click="item.__deleted_placeholder ? null : openFolder(item.folder_name, item, $event)"
                                                 >
                                                     <template x-if="item.__deleted_placeholder">
                                                         <div class="deleted-placeholder-content">
@@ -348,7 +352,7 @@
                                                     </div>
                                                     <div class="photo-meta">
                                                     <h4 :title="item.title || item.text_prefix" x-text="cardPrimaryText(item)"></h4>
-                                                    <button class="card-open-button" type="button" @click.stop="openFolder(item.folder_name)" :aria-label="`打开动态：${item.title || item.text_prefix || item.folder_name}`"></button>
+                                                    <button class="card-open-button" type="button" @click.stop="openFolder(item.folder_name, item, $event)" :aria-label="`打开动态：${item.title || item.text_prefix || item.folder_name}`"></button>
                                                     <div class="card-byline">
                                                         <span class="card-creator" :title="creatorName(item)" x-text="creatorName(item)"></span>
                                                         <span class="card-date" :title="item.pub_time || '未知时间'" :aria-label="item.pub_time || '未知时间'">
@@ -454,7 +458,7 @@
                                     :style="recentUpdateGridStyle(group)"
                                 >
                                     <template x-for="item in group.items" :key="`${group.task_id}-${item.folder_name}`">
-                                        <article class="photo-card recent-update-card" @click="openFolder(item.folder_name)">
+                                        <article class="photo-card recent-update-card" :data-motion-folder="item.folder_name" @click="openFolder(item.folder_name, item, $event)">
                                             <div class="photo-visual">
                                                 <div class="photo-collage" :class="`tiles-${Math.min(galleryPreviewTiles(item).length, 4) || 1}`" :style="galleryCoverStyle(item)">
                                                     <template x-for="(tile, tileIndex) in galleryPreviewTiles(item)" :key="tileIndex">
@@ -466,7 +470,7 @@
                                             </div>
                                             <div class="photo-meta recent-update-card-meta">
                                                 <h4 :title="item.title || item.text_prefix" x-text="cardPrimaryText(item)"></h4>
-                                                    <button class="card-open-button" type="button" @click.stop="openFolder(item.folder_name)" :aria-label="`打开动态：${item.title || item.text_prefix || item.folder_name}`"></button>
+                                                    <button class="card-open-button" type="button" @click.stop="openFolder(item.folder_name, item, $event)" :aria-label="`打开动态：${item.title || item.text_prefix || item.folder_name}`"></button>
                                                 <div class="card-byline">
                                                     <span class="card-creator" :title="creatorName(item)" x-text="creatorName(item)"></span>
                                                     <span class="card-date" :title="item.pub_time || '未知时间'" :aria-label="item.pub_time || '未知时间'">
@@ -549,7 +553,7 @@
 
                         <div class="duplicate-post-grid">
                             <template x-for="item in group.items" :key="item.folder_name">
-                                <article class="photo-card duplicate-post-card" :class="{ selected: duplicateKeepSelection(group.signature) === item.folder_name }" x-transition.opacity.duration.160ms @click="openFolder(item.folder_name)">
+                                <article class="photo-card duplicate-post-card" :data-motion-folder="item.folder_name" :class="{ selected: duplicateKeepSelection(group.signature) === item.folder_name }" x-transition.opacity.duration.160ms @click="openFolder(item.folder_name, item, $event)">
                                     <div class="photo-visual" x-show="item.preview_tiles?.length">
                                         <div class="photo-collage" :class="`tiles-${Math.min(galleryPreviewTiles(item).length, 4) || 1}`" :style="galleryCoverStyle(item)">
                                             <template x-for="(tile, tileIndex) in galleryPreviewTiles(item)" :key="tileIndex">
@@ -1784,8 +1788,8 @@
             </div>
         </main>
 
-        <div class="detail-backdrop" data-testid="detail-backdrop" data-modal-layer="detail" role="dialog" :aria-label="detail.folder?.title || '动态详情'" tabindex="-1" x-show="detail.open || detailClosing" :class="{ open: detail.open && !detailClosing, closing: detailClosing }" @click.self="closeDetail()" @wheel.prevent.stop @touchmove.prevent.self x-cloak>
-            <section class="detail-shell" :data-media-menu-folder="detail.folder?.folder_name" x-ref="detailShell" x-show="detail.open || detailClosing" :class="{ open: detail.open && !detailClosing, closing: detailClosing }" @wheel.stop @touchmove.stop @scroll.passive="updateDetailHeader($event); scheduleDetailWindowShift()">
+        <div class="detail-backdrop" data-testid="detail-backdrop" data-modal-layer="detail" data-layer-motion="detail" :data-layer-motion-pending="layerMotionPending.detail ? '' : null" role="dialog" :aria-label="detail.folder?.title || '动态详情'" tabindex="-1" x-show="detail.open || detailClosing" :class="{ open: detail.open && !detailClosing, closing: detailClosing }" @click.self="closeDetail()" @wheel.prevent.stop @touchmove.prevent.self x-cloak>
+            <section class="detail-shell" data-layer-motion="detail" :data-media-menu-folder="detail.folder?.folder_name" x-ref="detailShell" x-show="detail.open || detailClosing" :class="{ open: detail.open && !detailClosing, closing: detailClosing }" @wheel.stop @touchmove.stop @scroll.passive="updateDetailHeader($event); scheduleDetailWindowShift()">
                 <div class="detail-sticky-bar">
                     <div class="detail-compact-bar" role="toolbar" aria-label="动态详情操作" x-show="detailHeaderCompact" x-transition.opacity.duration.160ms x-cloak>
                         <strong class="detail-compact-title" :title="detail.folder?.title" x-text="detail.folder?.title || '动态详情'"></strong>
@@ -1918,8 +1922,8 @@
             </section>
         </div>
 
-        <div x-transition.opacity.duration.180ms class="xhs-video-backdrop" data-testid="xhs-video-backdrop" data-modal-layer="video-note" role="dialog" aria-modal="true" aria-label="视频播放器" tabindex="-1" x-show="videoNote.open" :class="{ 'video-feed-active': narrowViewport }" @click.self="closeVideoNote()" @touchstart.passive="startVideoFeedGesture($event)" @touchmove="moveVideoFeedGesture($event)" @touchend="endVideoFeedGesture($event)" @touchcancel="videoFeedGesture = null" x-cloak>
-            <section class="xhs-video-shell" :class="{ 'is-switching': videoFeedSwitching }" :data-media-menu-folder="videoNote.folder?.folder_name" :style="`--feed-direction: ${videoFeedDirection}`">
+        <div class="xhs-video-backdrop" data-testid="xhs-video-backdrop" data-modal-layer="video-note" data-layer-motion="video" :data-layer-motion-pending="layerMotionPending.video ? '' : null" role="dialog" aria-modal="true" aria-label="视频播放器" tabindex="-1" x-show="videoNote.open || videoNoteClosing" :class="{ 'video-feed-active': narrowViewport, open: videoNote.open && !videoNoteClosing, closing: videoNoteClosing }" @click.self="closeVideoNote()" @touchstart.passive="startVideoFeedGesture($event)" @touchmove="moveVideoFeedGesture($event)" @touchend="endVideoFeedGesture($event)" @touchcancel="cancelVideoFeedGesture()" x-cloak>
+            <section class="xhs-video-shell" data-layer-motion="video" :class="{ 'is-switching': videoFeedSwitching, 'is-feed-animating': videoFeedAnimating, 'is-feed-dragging': !!videoFeedGesture?.locked }" :data-media-menu-folder="videoNote.folder?.folder_name" :data-feed-motion="videoFeedMotionKind" :style="`--feed-direction: ${videoFeedDirection}; --feed-duration: ${videoFeedMotionMs}ms; --feed-drag-y: ${videoFeedDragY}px; --feed-start-y: ${videoFeedMotionFromY}px`">
                 <header class="xhs-video-head">
                     <div><h3 x-text="videoNote.folder?.title || '视频笔记'"></h3>
                         <p class="viewer-kicker"><span x-text="displayDate(videoNote.folder?.pub_time)"></span><span> - </span><a class="creator-link" x-show="creatorProfileUrl(videoNote.folder)" :href="creatorProfileUrl(videoNote.folder) || null" target="_blank" rel="noopener noreferrer" x-text="creatorName(videoNote.folder)"></a><span x-show="!creatorProfileUrl(videoNote.folder)" x-text="creatorName(videoNote.folder)"></span></p>
@@ -1945,7 +1949,7 @@
                     <div class="xhs-video-loading" role="status">正在读取视频详情…</div>
                 </template>
                 <template x-for="player in videoNotePlayers()" :key="player.key">
-                    <video data-video-player :class="{ 'is-current': player.key === videoNotePlayerKey(), 'is-retiring': player.key === videoFeedRetiring?.key }" :src="player.video.url" :poster="player.video.cover_url || ''" :loop="settings.video_default_loop !== false" :muted="player.key !== videoNotePlayerKey() || Number(settings.video_default_volume || 0) <= 0" :controls="player.key === videoNotePlayerKey()" :aria-hidden="player.key !== videoNotePlayerKey()" :tabindex="player.key === videoNotePlayerKey() ? 0 : -1" playsinline preload="auto" @loadeddata="videoNotePlayerReady(player)" @canplay="videoNotePlayerReady(player)" @error="videoNotePlayerFailed(player)"></video>
+                    <video data-video-player :data-video-key="player.key" :class="{ 'is-current': player.key === videoNotePlayerKey(), 'is-retiring': player.key === videoFeedRetiring?.key }" :src="player.video.url" :poster="player.video.cover_url || ''" :loop="settings.video_default_loop !== false" :muted="player.key !== videoNotePlayerKey() || Number(settings.video_default_volume || 0) <= 0" :controls="player.key === videoNotePlayerKey() && !videoFeedAnimating" :aria-hidden="player.key !== videoNotePlayerKey()" :tabindex="player.key === videoNotePlayerKey() ? 0 : -1" playsinline preload="auto" @loadeddata="videoNotePlayerReady(player, $event)" @canplay="videoNotePlayerReady(player, $event)" @animationend.self="finishVideoFeedMotion(videoFeedMotionToken, player.key, $event)" @error="videoNotePlayerFailed(player)"></video>
                 </template>
                 <p class="field-copy" role="status" x-show="videoNote.error" x-text="videoNote.error"></p>
                 <div class="video-feed-caption">
@@ -1958,13 +1962,13 @@
                     <button type="button" class="video-feed-step" aria-label="下一条视频" :disabled="videoNote.loading || videoFeed.busy || (videoFeed.index >= videoFeed.items.length - 1 && videoFeed.page >= videoFeed.totalPages)" @click="stepVideoFeed(1)"><svg class="video-switch-icon" aria-hidden="true"><use href="#icon-next"></use></svg></button>
                 </nav>
                 <div class="video-feed-status" role="status" aria-live="polite" x-show="videoFeed.active && (videoFeed.busy || videoFeedMessage || (narrowViewport && videoFeedHintVisible))" x-transition.opacity.duration.400ms x-cloak>
-                    <span x-text="videoFeed.busy ? '正在加载下一条…' : (videoFeedMessage || '上下滑动切换视频')"></span>
+                    <span x-text="videoFeed.busy ? (videoFeedDirection < 0 ? '正在加载上一条…' : '正在加载下一条…') : (videoFeedMessage || '上下滑动切换视频')"></span>
                 </div>
             </section>
         </div>
 
-        <div class="detail-backdrop source-preview-backdrop" data-modal-layer="source" role="dialog" aria-label="原帖预览" tabindex="-1" data-testid="source-preview-backdrop" x-show="sourcePreview.open" x-transition.opacity @click.self="closeSourcePreview()" @wheel.prevent.stop @touchmove.prevent.self x-cloak>
-            <section class="source-preview-shell" x-show="sourcePreview.open" x-transition:enter="drawer-enter" x-transition:enter-start="drawer-enter-start" x-transition:enter-end="drawer-enter-end" x-transition:leave="drawer-leave" x-transition:leave-start="drawer-leave-start" x-transition:leave-end="drawer-leave-end" @wheel.stop @touchmove.stop>
+        <div class="detail-backdrop source-preview-backdrop" data-modal-layer="source" data-layer-motion="source" :data-layer-motion-pending="layerMotionPending.source ? '' : null" role="dialog" aria-label="原帖预览" tabindex="-1" data-testid="source-preview-backdrop" x-show="sourcePreview.open || sourcePreviewClosing" :class="{ open: sourcePreview.open && !sourcePreviewClosing, closing: sourcePreviewClosing }" @click.self="closeSourcePreview()" @wheel.prevent.stop @touchmove.prevent.self x-cloak>
+            <section class="source-preview-shell" data-layer-motion="source" x-show="sourcePreview.open || sourcePreviewClosing" :class="{ open: sourcePreview.open && !sourcePreviewClosing, closing: sourcePreviewClosing }" @wheel.stop @touchmove.stop>
                 <header class="source-preview-head">
                     <div>
                         <h3 x-text="sourcePreview.title || '原始内容'"></h3>
@@ -1992,8 +1996,8 @@
             </section>
         </div>
 
-        <div class="viewer-backdrop" data-testid="viewer-backdrop" data-modal-layer="viewer" role="dialog" aria-label="图片查看器" tabindex="-1" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @click.self="closeViewer()" @wheel.prevent.stop @touchmove.prevent.stop x-cloak>
-            <div class="viewer-shell viewer-shell-full" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @pointermove="viewerPointerNearToolbar($event)" @pointerleave="scheduleViewerToolbarHide()" @click="viewerShellClick($event)" @wheel.prevent.stop @touchmove.prevent.stop>
+        <div class="viewer-backdrop" data-testid="viewer-backdrop" data-modal-layer="viewer" data-layer-motion="viewer" :data-layer-motion-pending="layerMotionPending.viewer ? '' : null" role="dialog" aria-label="图片查看器" tabindex="-1" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @click.self="closeViewer()" @wheel.prevent.stop @touchmove.prevent.stop x-cloak>
+            <div class="viewer-shell viewer-shell-full" data-layer-motion="viewer" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @pointermove="viewerPointerNearToolbar($event)" @pointerleave="scheduleViewerToolbarHide()" @click="viewerShellClick($event)" @wheel.prevent.stop @touchmove.prevent.stop>
                 <div class="viewer-floating viewer-floating-right" :class="{ 'toolbar-open': viewerToolbarOpen }" role="toolbar" aria-label="图片操作" aria-orientation="vertical" tabindex="0" @pointerenter="if ($event.pointerType === 'mouse') revealViewerToolbar()" @focusin="revealViewerToolbar()" @focusout="$nextTick(() => { if (!$el.contains(document.activeElement)) scheduleViewerToolbarHide() })" @click.stop @wheel.prevent.stop @touchmove.prevent.stop>
                     <div class="viewer-toolbar-actions">
                         <template x-if="deletePairConfirmStep < 1">
@@ -2089,8 +2093,8 @@
             </article>
         </div>
 
-        <div class="detail-backdrop" data-modal-layer="task" role="dialog" aria-label="任务详情" tabindex="-1" x-show="taskInspector.open" x-transition.opacity @click.self="closeTaskInspector()" @wheel.prevent.stop @touchmove.prevent.self x-cloak>
-            <section class="inspector-shell" x-show="taskInspector.open" x-transition:enter="drawer-enter" x-transition:enter-start="drawer-enter-start" x-transition:enter-end="drawer-enter-end" x-transition:leave="drawer-leave" x-transition:leave-start="drawer-leave-start" x-transition:leave-end="drawer-leave-end" @wheel.stop @touchmove.stop>
+        <div class="detail-backdrop" data-modal-layer="task" data-layer-motion="task" :data-layer-motion-pending="layerMotionPending.task ? '' : null" role="dialog" aria-label="任务详情" tabindex="-1" x-show="taskInspector.open || taskInspectorClosing" :class="{ open: taskInspector.open && !taskInspectorClosing, closing: taskInspectorClosing }" @click.self="closeTaskInspector()" @wheel.prevent.stop @touchmove.prevent.self x-cloak>
+            <section class="inspector-shell" data-layer-motion="task" x-show="taskInspector.open || taskInspectorClosing" :class="{ open: taskInspector.open && !taskInspectorClosing, closing: taskInspectorClosing }" @wheel.stop @touchmove.stop>
                 <header class="detail-head">
                     <div>
                         <h3 x-text="taskInspector.title"></h3>

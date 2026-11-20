@@ -157,3 +157,90 @@ test('settings refresh preserves edits made while the request is pending',async(
   assert.equal(app.settings.download_sleep,7);
   assert.equal(app.settingsDirty(),true);
 });
+
+function pendingLayerMotion(app) {
+  const entries = [], exits = [];
+  app.layerMotionEngine = () => ({
+    capture: () => ({}),
+    enter: ({key}) => { entries.push(key); return Promise.resolve(true); },
+    exit: ({key}) => new Promise(resolve => exits.push({key, resolve})),
+    cancel() {},
+  });
+  app.syncBodyLock = () => {};
+  app.syncModalAccessibility = () => {};
+  return {entries, exits};
+}
+
+test('source preview keeps its iframe through exit and stale completion cannot clear a reopened preview', async()=>{
+  const {app} = state(false);
+  const {entries, exits} = pendingLayerMotion(app);
+  app.settings.review_source_open_mode = 'popup';
+  app.openReviewSource({original_url:'https://example.test/one', title:'First'});
+  assert.deepEqual(entries, ['source']);
+  app.closeSourcePreview();
+  assert.equal(app.sourcePreview.open, false);
+  assert.equal(app.sourcePreviewClosing, true);
+  assert.equal(app.sourcePreview.url, 'https://example.test/one');
+  assert.equal(app.topOverlayLayer(), 'source');
+  assert.equal(app.touchBackLayer(), '');
+  app.openReviewSource({original_url:'https://example.test/two', title:'Second'});
+  exits[0].resolve(true);
+  await new Promise(setImmediate);
+  assert.equal(app.sourcePreview.open, true);
+  assert.equal(app.sourcePreview.url, 'https://example.test/two');
+  assert.equal(app.sourcePreviewClosing, false);
+  app.closeSourcePreview();
+  exits[1].resolve(true);
+  await new Promise(setImmediate);
+  assert.equal(app.sourcePreview.url, '');
+  assert.equal(app.sourcePreviewClosing, false);
+});
+
+test('task motion starts before loading and closing invalidates data while retaining the outgoing log', async()=>{
+  const {app} = state(false);
+  const {entries, exits} = pendingLayerMotion(app);
+  let finish;
+  app.api = () => new Promise(resolve => {finish = resolve;});
+  app.formatTaskDetail = item => `Log ${item.id}`;
+  const loading = app.openTaskInspector({id:1, task_type:'pull', message:'First'});
+  assert.deepEqual(entries, ['task']);
+  finish({item:{id:1, task_type:'pull', message:'Ready'}});
+  await loading;
+  assert.deepEqual(entries, ['task'], 'loaded payload must not replay the layer entrance');
+  assert.equal(app.taskInspector.body, 'Log 1');
+  app.closeTaskInspector();
+  assert.equal(app.taskInspectorClosing, true);
+  assert.equal(app.taskInspector.body, 'Log 1');
+  app.videoNote.open = false;
+  assert.equal(app.topOverlayLayer(), 'task');
+  assert.equal(app.touchBackLayer(), '');
+  const reopened = app.openTaskAddedItems({id:2, message:'Second'});
+  exits[0].resolve(true);
+  await new Promise(setImmediate);
+  assert.equal(app.taskInspector.open, true);
+  assert.match(app.taskInspector.title, /#2/);
+  app.closeTaskInspector();
+  finish({item:{id:2, details:{added_items:[]}}});
+  await reopened;
+  assert.equal(app.taskInspector.open, false);
+  assert.equal(app.taskInspectorLoading, false);
+  assert.match(app.taskInspector.body, /正在加载/);
+  exits[1].resolve(true);
+  await new Promise(setImmediate);
+  assert.equal(app.taskInspectorClosing, false);
+  assert.equal(app.taskInspector.body, '');
+});
+
+test('reduced-motion source and task closes release content immediately without exit animation', ()=>{
+  const {app} = state(true);
+  const {exits} = pendingLayerMotion(app);
+  app.settings.review_source_open_mode = 'popup';
+  app.openReviewSource({original_url:'https://example.test/one'});
+  app.closeSourcePreview();
+  assert.equal(app.sourcePreview.url, '');
+  app.openCurrentTaskInspector();
+  app.closeTaskInspector();
+  assert.equal(app.taskInspectorClosing, false);
+  assert.equal(app.taskInspector.body, '');
+  assert.equal(exits.length, 0);
+});

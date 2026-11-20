@@ -1,0 +1,75 @@
+/* Video pages keep their old and decoded incoming players during the handoff. */
+.xhs-video-shell[data-feed-motion] {
+    overflow: hidden;
+}
+
+.xhs-video-shell[data-feed-motion] > video[data-video-player] {
+    background: #000;
+    transition: none;
+    animation: none;
+}
+
+.xhs-video-shell[data-feed-motion] > video[data-video-player].is-current {
+    transform: translate3d(0, var(--feed-drag-y, 0px), 0);
+    transition: transform 260ms cubic-bezier(.16, 1, .3, 1);
+}
+
+.xhs-video-shell.is-feed-dragging > video[data-video-player].is-current {
+    transition: none;
+}
+
+.xhs-video-shell.is-feed-animating > video[data-video-player] {
+    pointer-events: none;
+    will-change: transform, opacity;
+}
+
+.xhs-video-shell.is-feed-animating[data-feed-motion="slide"] > video[data-video-player].is-current {
+    animation: video-feed-current-in var(--feed-duration) cubic-bezier(.22, .75, .2, 1) both;
+}
+
+.xhs-video-shell.is-feed-animating[data-feed-motion="slide"] > video[data-video-player].is-retiring {
+    animation: video-feed-previous-out var(--feed-duration) cubic-bezier(.22, .75, .2, 1) both;
+}
+
+.xhs-video-shell.is-feed-animating[data-feed-motion="fade"] > video[data-video-player].is-current {
+    animation: video-feed-current-fade var(--feed-duration) ease-out both;
+}
+
+.xhs-video-shell[data-feed-motion] .video-feed-caption {
+    transition: opacity 100ms ease-out, transform 240ms cubic-bezier(.16, 1, .3, 1);
+    transform: translate3d(0, 0, 0);
+}
+
+.xhs-video-shell.is-switching[data-feed-motion="slide"] .video-feed-caption {
+    transform: translate3d(0, calc(var(--feed-direction, 1) * -10px), 0);
+}
+
+@keyframes video-feed-current-in {
+    from { transform: translate3d(0, calc(var(--feed-direction, 1) * 100% + var(--feed-start-y, 0px)), 0); }
+    to { transform: translate3d(0, 0, 0); }
+}
+
+@keyframes video-feed-previous-out {
+    from { transform: translate3d(0, var(--feed-start-y, 0px), 0); }
+    to { transform: translate3d(0, calc(var(--feed-direction, 1) * -100%), 0); }
+}
+
+@keyframes video-feed-current-fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+html[data-performance-mode="low"] .xhs-video-shell[data-feed-motion] .video-feed-caption {
+    transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .xhs-video-backdrop .xhs-video-shell[data-feed-motion] > video[data-video-player],
+    .xhs-video-backdrop .xhs-video-shell[data-feed-motion] > video[data-video-player].is-current,
+    .xhs-video-backdrop .xhs-video-shell[data-feed-motion] > video[data-video-player].is-retiring,
+    .xhs-video-backdrop .xhs-video-shell[data-feed-motion] .video-feed-caption {
+        animation: none;
+        transition: none;
+        transform: none;
+    }
+}

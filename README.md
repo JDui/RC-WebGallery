@@ -279,9 +279,11 @@ v12.13 参考 VRB 的内网连接实现：浏览器并行请求 JSON 健康接�
 - 设置按用途分组，显示未保存状态、保存反馈与字段校验；改善辅助信息对比度、完整标题提示、订阅日期名称和网格列数说明。
 - 搜索、垃圾桶、订阅及设置中的文本、日期、数字和选择控件共用 `ui-field` 样式，统一边框、圆角、聚焦和禁用状态；桌面侧栏宽度缩为 236px，折叠为 72px，手机抽屉上限为 280px。桌面按钮默认 36px、分段选项 30px，取消固定按钮宽度；说明收纳到悬停提示，支持键盘聚焦、Escape 关闭及触屏点击。设置分组与保存区合并，任务、空状态和订阅卡片使用紧凑间距。
 
-图片加载、查看器交接和导航回归可运行 `node --test docker_app/checks/image_resources.test.cjs docker_app/checks/viewer_interactions.test.cjs docker_app/checks/navigation_motion.test.cjs`。真实模板的慢加载、图片交接与虚拟滚动回归可运行 `python docker_app/checks/image_handoff_browser.py`，需要 Python Playwright、Pillow、Jinja2、Edge 和 FFmpeg；样例服务与截图使用隔离目录，不读取真实图库。Python 回归在 `docker_app` 目录运行 `python3 -m pytest -q`。
+前端回归可运行 `node --test docker_app/checks/*.test.cjs`，覆盖图片交接、视频上下切换、层级来源定位、动画中断及删除确认等逻辑。真实模板的慢加载、图片交接与虚拟滚动回归可运行 `python docker_app/checks/image_handoff_browser.py`，需要 Python Playwright、Pillow、Jinja2、Edge 和 FFmpeg；样例服务与截图使用隔离目录，不读取真实图库。Python 回归在 `docker_app` 目录运行 `python3 -m pytest -q`。
 
 图片更新会在目标图像解码完成后交接显示，手势翻页也会等目标就绪再执行离场动画；元数据刷新不重播整页淡入，虚拟列表回滚不重播卡片首次出现动画。Live Photo 首次播放以静态图垫底，重播或往返换源时保留当前视频帧，待新帧就绪后平滑显示；无可用封面的纯视频会先准备首帧预览，加载失败或取消切换时保留当前内容。
+
+层级动效遵循来源关系：动态详情和视频弹层从对应卡片展开，图片查看器从对应缩略图展开；关闭时重新定位当前内容的来源，来源已删除、被虚拟列表回收或移出可见区域时原地淡出。任务详情和原帖预览从触发控件展开，无可定位控件时使用淡入。视频下一条从下方进入、当前条向上离开，上一条反向；新视频就绪后才交接，触屏拖动不足阈值时回弹。低性能模式使用短淡入淡出，系统减少动画偏好取消大幅位移；关闭、重开及迟到事件均受独立动画代次保护。
 
 界面与内网检测页的圆角统一使用 `docker_app/app/static/ui-tokens.css` 中的令牌：按钮和表单控件 10px、卡片 12px、外框及弹窗 18px、内嵌缩略图和标签 8px。组合按钮外框按内层圆角加内边距计算；开关、进度轨道和圆形状态点保留功能形状。
 

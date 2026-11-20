@@ -27,6 +27,9 @@ docker_app/checks/*
 !docker_app/checks/viewer_interactions.test.cjs
 !docker_app/checks/navigation_motion.test.cjs
 !docker_app/checks/deletion_concurrency.test.cjs
+!docker_app/checks/layer_motion.test.cjs
+!docker_app/checks/layer_navigation.test.cjs
+!docker_app/checks/video_motion.test.cjs
 !docker_app/checks/image_resources.test.cjs
 !docker_app/checks/image_handoff_browser.py
 !docker_app/checks/intranet.test.cjs
