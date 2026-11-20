@@ -529,3 +529,175 @@ test('position hint appears on first open and gesture navigation and cancels the
   timers.get(state.viewerPositionHintTimer)();
   assert.equal(state.viewerPositionHintVisible,false);
 });
+
+test('closing a playing Live Photo retains its paused frame until the layer exit ends', () => {
+  let id=0;const timers=new Map();
+  const canvas={width:1600,height:900};
+  const video={currentTime:6.5,src:'live.mp4',paused:false,pause(){this.paused=true;},
+    removeAttribute(name){if(name==='src')this.src='';},load(){this.released=true;}};
+  const state=app({window:{setTimeout:fn=>{timers.set(++id,fn);return id;},clearTimeout:key=>timers.delete(key)},
+    document:{querySelector:selector=>selector==='.viewer-video-frame'?canvas:null,
+      querySelectorAll:selector=>selector==='.viewer-video'?[video]:[]}});
+  state.syncBodyLock=()=>{};
+  state.viewer={open:true,showVideo:true,pair:{livephoto:{url:'live.mp4'}},folder:{folder_name:'post'}};
+  state.viewerVideoFrameReady=true;
+  state.closeViewer();
+  assert.equal(video.paused,true);assert.equal(video.currentTime,6.5);assert.equal(video.src,'live.mp4');
+  assert.equal(state.viewer.showVideo,true);assert.equal(state.viewerVideoFrameReady,true);
+  assert.equal(canvas.width,1600);assert.equal(state.viewerClosing,true);
+  timers.get(state.viewerCloseTimer)();
+  assert.equal(video.src,'');assert.equal(video.released,true);assert.equal(canvas.width,0);
+  assert.equal(state.viewer.pair,null);assert.equal(state.viewerClosing,false);
+});
+
+test('a queued playback restart cannot change a frame after viewer closing begins', () => {
+  const state=app();state.viewerToken=4;state.viewerClosing=true;state.playbackMode='once';
+  state.viewer={open:false,showVideo:true,pair:{livephoto:{url:'forward'}}};
+  let played=0;
+  const video={dataset:{viewerToken:'4',forward:'forward'},src:'forward',currentTime:8,
+    play(){played+=1;return Promise.resolve();}};
+  state.applyPlaybackMode(video,true);
+  assert.equal(played,0);assert.equal(video.currentTime,8);assert.equal(state.viewer.showVideo,true);
+});
+
+test('a prepared viewer swipe continues from the rendered spring offset without snapping to rest', async () => {
+  const animations=[];const timers=new Map();let id=0,bounceCancelled=false;
+  const media={};
+  const layer=()=>({animate(frames){const animation={frames,cancel(){this.cancelled=true;}};animations.push(animation);return animation;}});
+  const current=layer(),next=layer();
+  const state=app({window:{getComputedStyle:()=>({transform:'matrix(1, 0, 0, 1, 0, -86)'}),
+    matchMedia:()=>({matches:false}),setTimeout:fn=>{timers.set(++id,fn);return id;},clearTimeout:key=>timers.delete(key)},
+    document:{querySelector:selector=>selector==='.viewer-current-frame'?current:selector.includes('viewer-stage-neighbor')?next:media}});
+  state.$nextTick=callback=>callback();state.viewer={open:true,showVideo:false};
+  state.viewerOffsetY=0;state.viewerEdgeCancel=()=>{bounceCancelled=true;};
+  const pending=state.animatePreparedViewerSwipe(1,'ready-thumb');
+  assert.equal(bounceCancelled,true);
+  assert.equal(animations[1].frames[0].transform,'matrix(1, 0, 0, 1, 0, -86)');
+  assert.equal(state.viewerTransitionEnabled,false,'inner CSS transitions must not compete with the sampled parent motion');
+  animations[1].onfinish();await pending;
+  assert.equal(state.viewerSwipeFinish,null);assert.equal(timers.size,0);
+});
+
+test('a partially unavailable swipe animation settles navigation and cancels created effects', async () => {
+  let cancelled=false;
+  const current={animate(){throw Error('animation unavailable');}};
+  const next={animate:()=>({cancel(){cancelled=true;}})};
+  const state=app({window:{matchMedia:()=>({matches:false}),clearTimeout(){}},
+    document:{querySelector:selector=>selector==='.viewer-current-frame'?current:selector.includes('viewer-stage-neighbor')?next:null}});
+  state.$nextTick=callback=>callback();state.viewer={open:true,showVideo:false};
+  await state.animatePreparedViewerSwipe(1,'ready-thumb');
+  assert.equal(cancelled,true);assert.equal(state.viewerSwipeFinish,null);assert.equal(state.viewerVerticalDragging,false);
+});
+
+function hoverLifecycle(reduced=false) {
+  const timers=new Map(),listeners=new Map(),classes=new Set();let id=0;
+  const video={dataset:{src:'hover.mp4',loaded:'1'},src:'hover.mp4',currentTime:5,readyState:4,isConnected:true,
+    classList:{contains:value=>classes.has(value),add:value=>classes.add(value),remove:value=>classes.delete(value)},
+    getAttribute(name){return name==='src'?this.src:null;},removeAttribute(name){if(name==='src')this.src='';else if(name==='data-loaded')delete this.dataset.loaded;},
+    pause(){this.paused=true;},load(){this.loads=(this.loads||0)+1;},play:()=>Promise.resolve(),
+    addEventListener:(name,callback)=>listeners.set(name,callback),removeEventListener:name=>listeners.delete(name)};
+  const image={classList:{remove(){}}};
+  const card={querySelector:selector=>selector==='.hover-preview-video'?video:image};
+  const state=app({window:{setTimeout:fn=>{timers.set(++id,fn);return id;},clearTimeout:key=>timers.delete(key),
+    matchMedia:()=>({matches:reduced}),getComputedStyle:()=>({opacity:'.5'})},document:{hidden:false}});
+  state.hoverPreviewLoadCard=card;
+  return {state,video,card,timers,listeners};
+}
+
+test('hover preview retires its decoder only after the paused frame has faded out', () => {
+  const {state,video,card,timers,listeners}=hoverLifecycle();
+  state.stopHoverPreviewByCard(card);
+  assert.equal(video.paused,true);assert.equal(video.currentTime,5);assert.equal(video.src,'hover.mp4');
+  listeners.get('transitionend')({target:video,propertyName:'transform'});
+  assert.equal(video.src,'hover.mp4');
+  listeners.get('transitionend')({target:video,propertyName:'opacity'});
+  assert.equal(video.src,'');assert.equal(video.loads,1);assert.equal(timers.size,0);assert.equal(listeners.size,0);
+  const reduced=hoverLifecycle(true);reduced.state.stopHoverPreviewByCard(reduced.card);
+  assert.equal(reduced.video.src,'');assert.equal(reduced.timers.size,0);
+});
+
+test('a stale hover retirement cannot clear a restarted preview or cancel its newer retirement', async () => {
+  const {state,video,card,timers}=hoverLifecycle();
+  state.stopHoverPreviewByCard(card);const old=[...timers.values()][0];
+  state.loadHoverPreview(card);await Promise.resolve();
+  assert.equal(video.src,'hover.mp4');assert.equal(timers.size,0);
+  state.stopHoverPreviewByCard(card);assert.equal(timers.size,1);
+  old();assert.equal(video.src,'hover.mp4');assert.equal(timers.size,1);
+  [...timers.values()][0]();assert.equal(video.src,'');assert.equal(timers.size,0);
+});
+
+async function closingPreparedSwipe() {
+  const animations=[],exits=[],entries=[],origins=[],timers=new Map();let id=0;
+  const resources={prepare:()=>({promise:Promise.resolve(true),cancel(){}}),warm(){}};
+  const layer=()=>({animate(frames){const animation={frames,currentTime:80,
+    pause(){this.paused=true;},cancel(){this.cancelled=true;}};animations.push(animation);return animation;}});
+  const current=layer(),neighbor=layer(),media={};
+  const state=app({window:{innerHeight:900,matchMedia:()=>({matches:false}),
+    getComputedStyle:()=>({transform:'none'}),setTimeout:fn=>{timers.set(++id,fn);return id;},clearTimeout:key=>timers.delete(key),
+    galleryImageResources:resources},
+    document:{querySelector:selector=>selector==='.viewer-current-frame'?current:selector.includes('viewer-stage-neighbor')?neighbor:
+      selector==='.viewer-stage-image:not(.hidden)'?media:null,querySelectorAll:()=>[]}});
+  state.layerMotionEngine=()=>({capture:()=>{const origin={id:origins.length+1};origins.push(origin);return origin;},
+    enter:options=>{entries.push(options);return Promise.resolve(true);},exit:()=>new Promise(resolve=>exits.push(resolve)),cancel(){}});
+  state.$nextTick=callback=>Promise.resolve(callback?.());
+  for (const method of ['syncBodyLock','syncModalAccessibility','setInteracting','scheduleIdleWork','loadViewerOriginal']) state[method]=()=>{};
+  state.viewerSequence=[1,2,3].map(index=>({folder:{folder_name:'post'},pair:{item_key:`post::${index}`,pair_index:index,
+    image:{url:`original-${index}`,small_thumb_url:`thumb-${index}`}}}));
+  state.viewer={open:true,showVideo:false,...state.viewerSequence[0]};state.viewerToken=1;
+  state.viewerHandoff={key:'post::1',url:'thumb-1'};
+  const changing=state.openViewerEntry(state.viewerSequence[1],true,false,'',1);
+  await new Promise(setImmediate);
+  const completed=animations[1].onfinish;
+  state.closeViewer();
+  return {state,animations,exits,changing,completed,resources,entries,origins};
+}
+
+test('closing during a prepared image handoff freezes both pixels until parent teardown and rejects late completion', async () => {
+  const {state,animations,exits,changing,completed}=await closingPreparedSwipe();
+  assert.equal(state.viewer.open,false);assert.equal(state.viewerClosing,true);
+  assert.equal(state.viewerSwipeHeld,true);assert.equal(state.viewerVerticalDragging,true);
+  assert.equal(state.viewerSwipePreview.url,'thumb-2');assert.equal(state.viewerHandoff.url,'thumb-1');
+  assert.ok(animations.every(animation=>animation.paused&&!animation.cancelled));
+  completed();await changing;
+  assert.equal(state.viewer.pair.pair_index,1,'late slide completion cannot commit the cancelled destination');
+  assert.equal(state.viewerSwipePreview.url,'thumb-2','the decoded neighbor remains mounted for the parent exit');
+  exits[0](true);await new Promise(setImmediate);
+  assert.equal(state.viewer.pair,null);assert.equal(state.viewerSwipeHeld,false);
+  assert.equal(state.viewerSwipePreview,null);assert.equal(state.viewerHandoff,null);
+  assert.ok(animations.every(animation=>animation.cancelled));
+});
+
+test('reopening after a frozen image handoff releases its effects and ignores the obsolete parent exit', async () => {
+  const {state,animations,exits,changing,completed}=await closingPreparedSwipe();
+  await changing;
+  await state.openViewerEntry(state.viewerSequence[2]);
+  assert.equal(state.viewer.open,true);assert.equal(state.viewer.pair.pair_index,3);
+  assert.equal(state.viewerSwipeHeld,false);assert.equal(state.viewerSwipePreview,null);
+  assert.ok(animations.every(animation=>animation.cancelled));
+  completed();exits[0](true);await new Promise(setImmediate);
+  assert.equal(state.viewer.open,true);assert.equal(state.viewer.pair.pair_index,3);
+  assert.equal(state.viewerClosing,false);
+});
+
+test('an old viewer exit preserves the source and sequence of a newer reopen that is still decoding', async () => {
+  const {state,exits,changing,resources,entries,origins}=await closingPreparedSwipe();
+  await changing;
+  let ready;
+  resources.prepare=()=>({promise:new Promise(resolve=>{ready=resolve;}),cancel(){}});
+  const target={folder_name:'new-post',item_key:'new-post::8',pair_index:8,
+    image:{url:'new-original',small_thumb_url:'new-thumb'}};
+  state.gallery.items=[target];
+  const open=state.openViewerEntry;let reopening;
+  state.openViewerEntry=function(...args){reopening=open.apply(this,args);return reopening;};
+  state.openGalleryPair(target);
+  assert.equal(state.viewerPendingEntry.pair.item_key,'new-post::8');
+  assert.equal(origins.length,1);
+  exits[0](true);await new Promise(setImmediate);
+  assert.equal(state.viewer.pair,null,'old pixels may be released while the new thumbnail is pending');
+  assert.equal(state.viewerSource,'gallery');assert.equal(state.viewerSequence.length,1);
+  assert.equal(state.viewerSequence[0].pair.item_key,'new-post::8');
+  ready(true);await reopening;
+  assert.equal(state.viewer.open,true);assert.equal(state.viewer.pair.item_key,'new-post::8');
+  assert.equal(state.viewerSource,'gallery');assert.equal(origins.length,1,'retain the actual click origin captured before decoding');
+  assert.equal(entries.at(-1).origin.id,origins[0].id);
+});

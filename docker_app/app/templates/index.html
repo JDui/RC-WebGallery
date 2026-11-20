@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-5-detail-preload-2-trackpad-hint-3-responsive-swipe-4-xhs-login-recovery-2-gallery-instant-injection-1-motion-2-detail-close-1-viewer-indicators-1-image-handoff-1-card-dates-1-ui-state-3-paper-palette-1-spatial-motion-1' %}
+    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-5-detail-preload-2-trackpad-hint-3-responsive-swipe-4-xhs-login-recovery-2-gallery-instant-injection-1-motion-2-detail-close-1-viewer-indicators-1-image-handoff-1-card-dates-1-ui-state-3-paper-palette-1-spatial-motion-2' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -659,7 +659,7 @@
                             </div>
                         </div>
                         <div class="panel-card-actions">
-                            <button class="secondary-button" @click="openReviewSource(item)" data-tooltip="查看原始动态" aria-label="查看原始动态">原帖</button>
+                            <button class="secondary-button" @click="openReviewSource(item, $event)" data-tooltip="查看原始动态" aria-label="查看原始动态">原帖</button>
                             <button class="primary-button" @click="approveReview(item.id)" x-text="reviewApproveLabel(item)"></button>
                             <button class="secondary-button" @click="rejectReview(item.id)">永久忽略</button>
                         </div>
@@ -753,8 +753,8 @@
                         </div>
                     </div>
                     <div class="panel-card-actions">
-                        <button class="secondary-button" @click="openCurrentTaskInspector()" data-tooltip="查看任务日志与详情" aria-label="查看任务日志与详情">日志</button>
-                        <button class="secondary-button" x-show="currentTaskHasAddedItems()" @click="openCurrentAddedItems()" x-cloak data-tooltip="查看本次任务新增的内容" aria-label="查看本次任务新增的内容">新增内容</button>
+                        <button class="secondary-button" @click="openCurrentTaskInspector($event)" data-tooltip="查看任务日志与详情" aria-label="查看任务日志与详情">日志</button>
+                        <button class="secondary-button" x-show="currentTaskHasAddedItems()" @click="openCurrentAddedItems($event)" x-cloak data-tooltip="查看本次任务新增的内容" aria-label="查看本次任务新增的内容">新增内容</button>
                     </div>
                     <div class="panel-card-actions" x-show="pullStatus.running" x-cloak>
                         <button class="secondary-button" :disabled="!pullStatus.running || pullStatus.paused" @click="pauseTask()">暂停</button>
@@ -774,7 +774,7 @@
                                         <small x-text="`${taskModeLabel(item.kind)} · ${displayDate(item.queued_at)}`"></small>
                                     </div>
                                     <div class="button-row confirm-row">
-                                        <button class="secondary-button" @click="openQueuedTaskInspector(item)">细节</button>
+                                        <button class="secondary-button" @click="openQueuedTaskInspector(item, $event)">细节</button>
                                         <button class="secondary-button danger-button confirm-anchor" @click="askCancelQueuedTask(item.queue_id)" x-text="queuedTaskCancelLabel(item)"></button>
                                     </div>
                                 </div>
@@ -798,8 +798,8 @@
                             </div>
                         </div>
                         <div class="panel-card-actions">
-                            <button class="secondary-button" @click="openTaskInspector(item)" data-tooltip="查看任务日志与详情" aria-label="查看任务日志与详情">日志</button>
-                            <button class="secondary-button" x-show="taskHasAddedItems(item)" @click="openTaskAddedItems(item)" x-cloak data-tooltip="查看本次任务新增的内容" aria-label="查看本次任务新增的内容">新增内容</button>
+                            <button class="secondary-button" @click="openTaskInspector(item, $event)" data-tooltip="查看任务日志与详情" aria-label="查看任务日志与详情">日志</button>
+                            <button class="secondary-button" x-show="taskHasAddedItems(item)" @click="openTaskAddedItems(item, $event)" x-cloak data-tooltip="查看本次任务新增的内容" aria-label="查看本次任务新增的内容">新增内容</button>
                         </div>
                         <div class="panel-card-actions" x-show="canRetryTask(item)" x-cloak>
                             <button class="secondary-button" @click="retryTask(item)">重试</button>
@@ -857,7 +857,7 @@
                                         </div>
                                     </div>
                                     <div class="panel-card-actions" x-show="pendingRestoreTrashId !== item.id">
-                                        <button class="secondary-button" @click="openTrashSource(item)" data-tooltip="查看原始动态" aria-label="查看原始动态">原帖</button>
+                                        <button class="secondary-button" @click="openTrashSource(item, $event)" data-tooltip="查看原始动态" aria-label="查看原始动态">原帖</button>
                                         <button class="secondary-button" @click="askRestoreTrash(item.id)" data-tooltip="解除采集拦截，选择等待下次拉取或立即重新拉取">恢复</button>
                                     </div>
                                     <div class="panel-card-actions" x-show="pendingRestoreTrashId === item.id" x-cloak>
@@ -1510,8 +1510,8 @@
                                 <p class="field-copy" x-show="xhsSourceDirty(source)">设置未保存</p>
                                 <div class="site-preview-list xhs-notes" x-show="xhsNotes[source.id]" x-cloak>
                                     <template x-for="note in xhsNotes[source.id] || []" :key="note.note_id">
-                                        <div class="site-preview-row">
-                                            <button type="button" class="xhs-note-title" @click="openXhsNote(source, note)" x-text="note.title"></button>
+                                        <div class="site-preview-row" :data-motion-folder="note.folder_name || null">
+                                            <button type="button" class="xhs-note-title" @click="openXhsNote(source, note, $event)" x-text="note.title"></button>
                                             <small x-text="`发布：${note.pub_date ? formatDateYMD(note.pub_date) : '未知'} · 首见：${formatDateTime(note.first_seen_at)}`"></small>
                                             <small x-text="(note.note_type === 'video' ? '视频 · ' : note.note_type === 'livephoto' ? '实况 · ' : '') + (note.download_status === 'ready' ? '已归档' : note.download_status === 'partial' ? '静态图已归档，实况待重试' : note.download_status === 'blocked' ? '已手动排除' : note.download_status === 'failed' ? '下载失败' : '等待下载') + (note.error_category ? ' · ' + note.error_category : '')"></small>
                                         </div>
@@ -1836,7 +1836,7 @@
                         <button class="favorite-button detail-favorite-button" :class="{ active: detail.folder?.is_favorite }" :aria-pressed="detail.folder?.is_favorite" :disabled="!!favoritePending[detail.folder?.folder_name]" @click.stop="toggleFavorite(detail.folder, $event)" aria-label="收藏">
                             <svg class="favorite-icon" aria-hidden="true"><use href="#icon-favorites"></use></svg>
                         </button>
-                        <button class="secondary-button detail-source-button" @click="openReviewSource(detail.folder)" data-tooltip="查看原始动态" aria-label="查看原始动态">原帖</button>
+                        <button class="secondary-button detail-source-button" @click="openReviewSource(detail.folder, $event)" data-tooltip="查看原始动态" aria-label="查看原始动态">原帖</button>
                         <div class="detail-trash-slot" title="移除整组动态、阻止再次采集并清理本地文件；垃圾桶仅保留记录">
                             <template x-if="pendingTrashFolder !== detail.folder?.folder_name">
                                 <button class="secondary-button danger-button detail-trash-button" @click="askTrashCurrentFolder()" x-text="detail.folder?.folder_name?.startsWith('xhs_') ? '删除并取消点赞' : '移入垃圾桶'"></button>
@@ -1932,7 +1932,7 @@
                         <button type="button" class="secondary-button video-note-favorite" data-testid="video-favorite" :class="{ active: videoNote.folder?.is_favorite }" :aria-pressed="!!videoNote.folder?.is_favorite" :aria-label="videoNote.folder?.is_favorite ? '取消收藏视频' : '收藏视频'" :disabled="!!(videoNote.loading || videoFeed.busy || !videoNote.folder || favoritePending[videoNote.folder?.folder_name])" @click="toggleFavorite(videoNote.folder, $event)">
                             <svg class="favorite-icon" aria-hidden="true"><use href="#icon-favorites"></use></svg>
                         </button>
-                        <button type="button" class="secondary-button" @click="openReviewSource(videoNote.folder)" :disabled="!reviewSourceUrl(videoNote.folder)">原贴</button>
+                        <button type="button" class="secondary-button" @click="openReviewSource(videoNote.folder, $event)" :disabled="!reviewSourceUrl(videoNote.folder)">原贴</button>
                         <div class="video-delete-slot" x-show="!compactViewport || pendingTrashFolder === videoNote.folder?.folder_name">
                             <template x-if="!compactViewport && pendingTrashFolder !== videoNote.folder?.folder_name">
                                 <button type="button" class="secondary-button danger-button" data-testid="video-delete" @click="askTrashFolder(videoNote.folder?.folder_name)" :aria-label="videoNote.folder?.folder_name?.startsWith('xhs_') ? '删除视频并取消点赞' : '删除视频（移入垃圾桶）'" :title="videoNote.folder?.folder_name?.startsWith('xhs_') ? '删除视频并取消点赞' : '移入垃圾桶并清理本地文件'">删除</button>
@@ -1949,7 +1949,7 @@
                     <div class="xhs-video-loading" role="status">正在读取视频详情…</div>
                 </template>
                 <template x-for="player in videoNotePlayers()" :key="player.key">
-                    <video data-video-player :data-video-key="player.key" :class="{ 'is-current': player.key === videoNotePlayerKey(), 'is-retiring': player.key === videoFeedRetiring?.key }" :src="player.video.url" :poster="player.video.cover_url || ''" :loop="settings.video_default_loop !== false" :muted="player.key !== videoNotePlayerKey() || Number(settings.video_default_volume || 0) <= 0" :controls="player.key === videoNotePlayerKey() && !videoFeedAnimating" :aria-hidden="player.key !== videoNotePlayerKey()" :tabindex="player.key === videoNotePlayerKey() ? 0 : -1" playsinline preload="auto" @loadeddata="videoNotePlayerReady(player, $event)" @canplay="videoNotePlayerReady(player, $event)" @animationend.self="finishVideoFeedMotion(videoFeedMotionToken, player.key, $event)" @error="videoNotePlayerFailed(player)"></video>
+                    <video x-retire-video data-video-player :data-video-key="player.key" :class="{ 'is-current': player.key === videoNotePlayerKey(), 'is-retiring': player.key === videoFeedRetiring?.key }" :src="player.video.url" :poster="player.video.cover_url || ''" :loop="settings.video_default_loop !== false" :muted="player.key !== videoNotePlayerKey() || Number(settings.video_default_volume || 0) <= 0" :controls="player.key === videoNotePlayerKey() && !videoFeedAnimating" :aria-hidden="player.key !== videoNotePlayerKey()" :tabindex="player.key === videoNotePlayerKey() ? 0 : -1" playsinline preload="auto" @loadeddata="videoNotePlayerReady(player, $event)" @canplay="videoNotePlayerReady(player, $event)" @animationend.self="finishVideoFeedMotion(videoFeedMotionToken, player.key, $event)" @error="videoNotePlayerFailed(player)"></video>
                 </template>
                 <p class="field-copy" role="status" x-show="videoNote.error" x-text="videoNote.error"></p>
                 <div class="video-feed-caption">

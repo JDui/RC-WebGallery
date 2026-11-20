@@ -166,10 +166,14 @@
         if (!duration || !image.animate) { finishFade(); return; }
         image.dataset.imageTransition = "1";
         image.style.willChange = "opacity";
-        animation = image.animate([{opacity: 0}, {opacity: 1}], {duration, easing: "ease-out"});
-        animation.onfinish = finishFade;
-        // 页面隐藏或动画事件丢失时也必须完成淡入收尾。
-        finishTimer = env.setTimeout(finishFade, duration + 80);
+        try {
+          animation = image.animate([{opacity: 0}, {opacity: 1}], {duration, easing: "ease-out"});
+          animation.onfinish = animation.oncancel = finishFade;
+          // 页面隐藏或动画事件丢失时也必须完成淡入收尾。
+          finishTimer = env.setTimeout(finishFade, duration + 80);
+        } catch (_) {
+          finishFade();
+        }
       }
       const controller = {
         setSource(value) {
@@ -199,6 +203,11 @@
           if (suspended) {
             ++epoch;
             pending?.cancel(); pending = null; loading = false;
+            // The mounted replacement may still be decoding. Keep the last
+            // committed pixels when hiding a page without releasing its image.
+            if (committing && !animation && !release) {
+              if (committed) image.src = committed; else clearImage(image);
+            }
             finishFade();
             if (release) {
               committed = "";
@@ -258,8 +267,11 @@
     });
     root.Alpine.directive("retire-video", (element, _, {cleanup}) => {
       cleanup(() => {
+        element.__hoverPlayRequest = (element.__hoverPlayRequest || 0) + 1;
+        element.__playbackRequest = (element.__playbackRequest || 0) + 1;
+        element.__hoverRetireCancel?.();
         element.pause();
-        element.onended = element.onerror = element.onloadeddata = element.oncanplay = null;
+        element.onended = element.onerror = element.onloadeddata = element.oncanplay = element.onpause = null;
         element.removeAttribute("src");
         element.removeAttribute("poster");
         element.load();

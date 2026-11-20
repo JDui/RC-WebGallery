@@ -6,6 +6,7 @@
     filter: none;
     transform: none;
     animation: none;
+    transition: none;
 }
 .photo-collage-tile img.progressive-image-old,
 .asset-visual img.progressive-image-old,

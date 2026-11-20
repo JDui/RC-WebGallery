@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 const {createManager} = require('../app/static/progressive-images.js');
 function harness({reduced = false, viewport = false, transition = true} = {}) {
   let serial = 0;
@@ -209,4 +212,59 @@ test('a previously seen replacement still overlaps the old pixels smoothly', asy
   const count=h.animations.length;h.controller.setSource('first');await h.loaded('first');
   assert.equal(h.animations.length,count+1);assert.equal(h.image.siblings[0].src,'second');
   h.manager.dispose();assert.equal(h.timers.size,0);
+});
+
+test('a failed animation API completes the replacement and never blocks later sources', async () => {
+  const h=harness();await h.show('first');
+  h.image.animate=()=>{throw Error('animation unavailable');};
+  h.controller.setSource('second');await h.loaded('second');h.manager.flush();
+  assert.equal(h.image.src,'second');assert.equal(h.image.siblings.length,0);
+  assert.equal(h.image.style.opacity,undefined);assert.equal(h.image.style.willChange,undefined);
+  h.controller.setSource('third');await h.loaded('third');h.manager.flush();
+  assert.equal(h.image.src,'third');assert.equal(h.timers.size,0);
+});
+
+test('externally cancelled image fades release the old pixels and drain the newest queued source', async () => {
+  const h=harness();await h.show('first');
+  h.controller.setSource('second');await h.loaded('second');
+  h.controller.setSource('third');h.animations.at(-1).oncancel();
+  await h.loaded('third');assert.equal(h.image.src,'third');
+  h.manager.dispose();assert.equal(h.image.siblings.length,0);assert.equal(h.timers.size,0);
+});
+
+test('page hiding during mounted decode retains the committed frame until resume', async () => {
+  const h=harness();await h.show('first');
+  const decode=h.image.decode;let finishDecode;
+  h.image.decode=()=>new Promise(resolve=>{finishDecode=resolve;});
+  h.controller.setSource('second');await h.loaded('second');
+  assert.equal(h.image.src,'second');assert.equal(h.image.siblings.length,1);
+  h.controller.suspend(true);h.manager.flush();
+  assert.equal(h.image.src,'first','hidden-page suspension restores the last committed frame');
+  assert.equal(h.image.siblings.length,0);
+  finishDecode();await h.tick();
+  assert.equal(h.image.src,'first','late mounted decode cannot overwrite the restored frame');
+  h.image.decode=decode;h.controller.suspend(false);await h.loaded('second');
+  assert.equal(h.image.src,'second');
+  h.manager.dispose();assert.equal(h.timers.size,0);
+});
+
+test('the actual video teardown directive cancels hover retirement and releases removed feed players', () => {
+  const listeners=new Map(),directives=new Map();
+  const env={Alpine:{directive:(name,callback)=>directives.set(name,callback)},
+    addEventListener(){},setTimeout,clearTimeout};
+  const context=vm.createContext({window:env,document:{addEventListener:(name,callback)=>listeners.set(name,callback)},console});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../app/static/progressive-images.js'),'utf8'),context);
+  listeners.get('alpine:init')();
+  const events=[];
+  const video={__hoverPlayRequest:2,__playbackRequest:5,__hoverRetireCancel:()=>events.push('cancel-retirement'),
+    pause:()=>events.push('pause'),removeAttribute:name=>events.push(`remove:${name}`),load:()=>events.push('release'),
+    onended(){},onerror(){},onloadeddata(){},oncanplay(){},onpause(){}};
+  let dispose;directives.get('retire-video')(video,{}, {cleanup:callback=>{dispose=callback;}});
+  dispose();
+  assert.deepEqual(events,['cancel-retirement','pause','remove:src','remove:poster','release']);
+  assert.equal(video.__hoverPlayRequest,3);assert.equal(video.__playbackRequest,6);
+  assert.equal(video.onpause,null);assert.equal(video.onloadeddata,null);
+  const html=fs.readFileSync(path.join(__dirname,'../app/templates/index.html'),'utf8');
+  const feed=html.match(/<video\b(?=[^>]*data-video-player)[^>]*>/)?.[0];
+  assert.ok(feed?.includes('x-retire-video'),'feed players must use the tested teardown directive');
 });

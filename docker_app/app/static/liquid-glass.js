@@ -19,7 +19,7 @@
   const pointerVariables = ["--glass-pointer-x", "--glass-pointer-y"];
   const pendingSwitches = new Set();
   const pendingPointers = new Map();
-  const animations = new Set();
+  const animations = new Map();
   const removers = [];
   const switchDisplays = new Map();
   let switches = [];
@@ -86,21 +86,29 @@
 
   function animate(element, keyframes, options) {
     if (!element || !visible(element) || typeof element.animate !== "function") return;
-    const animation = element.animate(keyframes, options);
-    animations.add(animation);
-    const forget = () => animations.delete(animation);
+    let animation;
+    try { animation = element.animate(keyframes, options); } catch (_) { return; }
+    animations.set(element, animation);
+    const forget = () => {
+      if (animations.get(element) === animation) animations.delete(element);
+    };
     animation.addEventListener("finish", forget, { once: true });
     animation.addEventListener("cancel", forget, { once: true });
   }
 
   function animateEntrance(section) {
+    const interrupted = new Map();
+    animations.forEach((animation, element) => {
+      const style = window.getComputedStyle(element);
+      interrupted.set(element, { opacity: style.opacity, transform: style.transform });
+    });
     cancelAnimations();
     if (!section || reducedMotion?.matches) return;
     const lowPerformance = root.dataset.performanceMode === "low";
     // The view's CSS transition already owns its opacity. A second animation
     // overrides it and can flash the outgoing or incoming panel.
     if (!section.hasAttribute('x-transition:enter')) {
-      animate(section, [{ opacity: 0.45 }, { opacity: 1 }], {
+      animate(section, [{ opacity: interrupted.get(section)?.opacity || 0.45 }, { opacity: 1 }], {
         duration: lowPerformance ? 180 : 280,
         easing: "cubic-bezier(.2,.75,.25,1)",
       });
@@ -115,10 +123,11 @@
       { opacity: 0.55, transform: "translateY(6px)" },
       { opacity: 1, transform: "translateY(0)" },
     ];
-    copy.forEach((element, index) => animate(element, copyFrames, {
+    copy.forEach((element, index) => animate(element, [interrupted.get(element) || copyFrames[0], copyFrames[1]], {
       duration: lowPerformance ? 180 : 300,
-      delay: lowPerformance ? 0 : index * 12,
+      delay: lowPerformance || interrupted.has(element) ? 0 : index * 12,
       easing: "cubic-bezier(.2,.75,.25,1)",
+      fill: "backwards",
     }));
   }
 
@@ -126,17 +135,29 @@
     if (!started) return;
     const measurements = Array.from(pendingSwitches, measureSwitch);
     pendingSwitches.clear();
+    const pointerMeasurements = [];
+    pendingPointers.forEach((point, element) => {
+      if (point.x !== undefined) { pointerMeasurements.push({ element, point }); return; }
+      if (!element.isConnected) return;
+      const rect = element.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const position = (value, size) => `${Math.max(0, Math.min(100, value / size * 100)).toFixed(1)}%`;
+      pointerMeasurements.push({ element, point: {
+        x: position(point.clientX - rect.left, rect.width),
+        y: position(point.clientY - rect.top, rect.height),
+      } });
+    });
+    pendingPointers.clear();
     measurements.forEach(({ element, values }) => {
       if (values) {
         values.forEach((value, index) => setVariable(element, switchVariables[index], value));
       }
       element.classList.toggle("glass-switch-ready", Boolean(values));
     });
-    pendingPointers.forEach((point, element) => {
+    pointerMeasurements.forEach(({ point, element }) => {
       setVariable(element, pointerVariables[0], point.x);
       setVariable(element, pointerVariables[1], point.y);
     });
-    pendingPointers.clear();
     if (entranceRequested) {
       const nextSection = currentSection();
       if (nextSection !== activeSection || pendingNavigationKey !== activeNavigationKey) {
@@ -258,7 +279,8 @@
     switches = Array.from(document.querySelectorAll(".mode-switch"));
     surfaces = Array.from(document.querySelectorAll(".sidebar, .topbar"));
     const workspace = document.querySelector(".workspace");
-    sections = workspace ? Array.from(workspace.children).filter((element) => element.tagName === "SECTION") : [];
+    const viewStack = workspace?.querySelector(".view-stack") || workspace;
+    sections = viewStack ? Array.from(viewStack.children).filter((element) => element.tagName === "SECTION") : [];
     activeSection = currentSection();
     activeNavigationKey = pendingNavigationKey;
     installSwitchObservers();
@@ -269,12 +291,9 @@
     surfaces.forEach((element) => {
       listen(element, "pointermove", (event) => {
         if (!motionAllowed() || !finePointer?.matches || event.pointerType === "touch") return;
-        const rect = element.getBoundingClientRect();
-        if (!rect.width || !rect.height) return;
-        const position = (value, size) => `${Math.max(0, Math.min(100, value / size * 100)).toFixed(1)}%`;
         pendingPointers.set(element, {
-          x: position(event.clientX - rect.left, rect.width),
-          y: position(event.clientY - rect.top, rect.height),
+          clientX: event.clientX,
+          clientY: event.clientY,
         });
         scheduleFrame();
       }, { passive: true });

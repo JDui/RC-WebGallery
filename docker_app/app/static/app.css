@@ -539,6 +539,7 @@ video {
         z-index: 14;
         width: var(--layout-sidebar-width);
         height: var(--layout-sidebar-height);
+        transition: transform var(--duration-base) var(--ease-fluid), box-shadow var(--duration-base) var(--ease-fluid);
     }
 
     html.layout-pinned .workspace {

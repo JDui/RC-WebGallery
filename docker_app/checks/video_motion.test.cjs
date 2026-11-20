@@ -172,3 +172,37 @@ test('vertical dragging follows the touch, reverses, and settles without stealin
   app.endVideoFeedGesture({ changedTouches: [{ identifier: 7, clientX: 200, clientY: 220 }], touches: [], cancelable: true, preventDefault() {} });
   assert.equal(stepped, 1); assert.equal(app.videoFeedDragY, 0);
 });
+
+function managedClose(app) {
+  const exits=[];
+  app.layerMotionEngine=()=>({enter:()=>Promise.resolve(true),exit:()=>new Promise(resolve=>exits.push(resolve)),cancel(){}});
+  app.syncBodyLock=app.syncModalAccessibility=app.pauseCurrentViewerMedia=()=>{};
+  return exits;
+}
+
+test('closing halfway through a video slide retains both keyed frames until the parent exit completes', async () => {
+  const {app,commit}=setup();await commit(1);
+  const exits=managedClose(app),token=app.videoFeedMotionToken;
+  app.closeVideoNote();
+  assert.equal(app.videoNoteClosing,true);assert.equal(app.videoFeedAnimating,true);
+  assert.equal(app.videoFeedRetiring.video.url,'current.mp4');assert.equal(app.videoNotePlayers().length,2);
+  app.finishVideoFeedMotion(token);
+  assert.equal(app.videoFeedAnimating,true,'obsolete slide completion must not snap a closing surface');
+  exits[0](true);await new Promise(setImmediate);
+  assert.equal(app.videoNoteClosing,false);assert.equal(app.videoFeedAnimating,false);
+  assert.equal(app.videoFeedRetiring,null);assert.equal(app.videoNote.video,null);
+});
+
+test('reopening a closing video discards the old slide while stale parent completion leaves the new session intact', async () => {
+  for (const loading of [true,false]) {
+    const {app,commit}=setup();await commit(1);
+    const exits=managedClose(app);app.closeVideoNote();
+    const folder={folder_name:'reopened',video_count:1,image_count:0};
+    if (loading) app.openVideoNoteLoading(folder);
+    else app.openVideoNote({folder,videos:[{url:'reopened.mp4'}]});
+    assert.equal(app.videoFeedAnimating,false);assert.equal(app.videoFeedRetiring,null);
+    exits[0](true);await new Promise(setImmediate);
+    assert.equal(app.videoNote.open,true);assert.equal(app.videoNoteClosing,false);
+    assert.equal(app.videoNote.folder.folder_name,'reopened');assert.equal(app.videoNote.loading,loading);
+  }
+});

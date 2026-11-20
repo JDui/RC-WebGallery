@@ -30,6 +30,9 @@ docker_app/checks/*
 !docker_app/checks/layer_motion.test.cjs
 !docker_app/checks/layer_navigation.test.cjs
 !docker_app/checks/video_motion.test.cjs
+!docker_app/checks/chrome_motion.test.cjs
+!docker_app/checks/layout_stability.test.cjs
+!docker_app/checks/card_reflow.test.cjs
 !docker_app/checks/image_resources.test.cjs
 !docker_app/checks/image_handoff_browser.py
 !docker_app/checks/intranet.test.cjs

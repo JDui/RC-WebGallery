@@ -157,6 +157,39 @@ test('an interrupted entrance reverses from its rendered transform and cannot fi
   frame();
 });
 
+test('growing top-aligned content keeps its entry position and reverses to the correct source center', async () => {
+  for (const key of ['detail', 'task']) {
+    const { motion, element, card, finish, frame } = setup();
+    const origin = motion.capture(card);
+    const entering = motion.enter({ key, element, origin });
+    const pivot = element.animations[0].keyframes[0].transformOrigin;
+    const positionAtHalfScale = height => {
+      const value = pivot.split(' ')[1];
+      const originY = value.endsWith('%') ? Number.parseFloat(value) * height / 100 : Number.parseFloat(value);
+      return element.rect.top + (1 - .5) * originY - 70;
+    };
+    const before = positionAtHalfScale(element.rect.height);
+    element.rect.height = 1200;
+    assert.equal(positionAtHalfScale(element.rect.height), before, 'a larger payload must not move the scaled shell top');
+    element.computed.transform = 'matrix(0.5, 0, 0, 0.5, -150, -70)';
+    element.computed.transformOrigin = pivot;
+    element.computed.opacity = '.6';
+    const exiting = motion.exit({ key, element, origin });
+    assert.equal(await entering, false);
+    const [start, end] = element.animations[1].keyframes;
+    assert.equal(start.transformOrigin, pivot, 'reversal keeps the rendered pivot');
+    assert.equal(start.transform, 'matrix(0.5, 0, 0, 0.5, -150, -70)');
+    const [, tx, ty, scale] = end.transform.match(/translate3d\(([-\d.]+)px, ([-\d.]+)px, 0\) scale\(([-\d.]+)\)/).map(Number);
+    const [px, py] = end.transformOrigin.split(' ').map(Number.parseFloat);
+    const centerX = element.rect.left + tx + (1 - scale) * px + scale * element.rect.width / 2;
+    const centerY = element.rect.top + ty + (1 - scale) * py + scale * element.rect.height / 2;
+    assert.ok(Math.abs(centerX - (origin.rect.left + origin.rect.width / 2)) < .01);
+    assert.ok(Math.abs(centerY - (origin.rect.top + origin.rect.height / 2)) < .01,
+      'return translation accounts for the retained pivot after the shell grew');
+    finish(element); assert.equal(await exiting, true); frame();
+  }
+});
+
 test('reopening cancels an exit and stale cleanup never removes the new animation owner', async () => {
   const { motion, element, card, finish, frame } = setup();
   const origin = motion.capture(card);
@@ -211,6 +244,21 @@ test('a broken animation API or missing completion cannot strand a layer or leak
   frame();
   assert.equal(element.getAttribute('data-layer-motion-active'), null);
   finish(element);
+});
+
+test('an independently cancelled player completes the layer lifecycle while explicit cancellation stays interrupted', async () => {
+  const { motion, element, backdrop, card, frame, timers } = setup();
+  const origin = motion.capture(card);
+  const exiting = motion.exit({ key: 'detail', element, backdrop, origin });
+  element.animations.at(-1).cancel();
+  assert.equal(await exiting, true, 'unexpected player rejection must let the caller hide and unlock its layer');
+  frame();
+  assert.equal(element.getAttribute('data-layer-motion-active'), null);
+  assert.equal(backdrop.getAttribute('data-layer-motion-active'), null);
+  assert.equal(timers.size, 0);
+  const interrupted = motion.exit({ key: 'detail', element, backdrop, origin });
+  motion.cancel('detail');
+  assert.equal(await interrupted, false, 'a superseded operation must not finalize its replacement');
 });
 
 test('cancelAll settles every layer once and removes pending animation work', async () => {

@@ -9,9 +9,14 @@
   let anchor = null;
   let previousDescription = null;
   let hideTimer;
+  const anchorObserver = new MutationObserver(() => {
+    if (anchor && (!anchor.isConnected || anchor.closest("[inert]") || !anchor.getClientRects().length
+        || window.getComputedStyle(anchor).visibility === "hidden")) hide();
+  });
 
   const hide = () => {
     clearTimeout(hideTimer);
+    anchorObserver.disconnect();
     if (anchor) {
       if (previousDescription === null) anchor.removeAttribute("aria-describedby");
       else anchor.setAttribute("aria-describedby", previousDescription);
@@ -29,6 +34,12 @@
       anchor = target;
       previousDescription = anchor.getAttribute("aria-describedby");
       anchor.setAttribute("aria-describedby", [previousDescription, tooltip.id].filter(Boolean).join(" "));
+      // Observe only the source chain while open. Media transforms elsewhere in
+      // the page must not force a tooltip visibility measurement each frame.
+      for (let element = anchor; element; element = element.parentElement) {
+        anchorObserver.observe(element, { attributes: true, childList: true,
+          attributeFilter: ["style", "class", "inert", "hidden"] });
+      }
     }
     tooltip.textContent = text;
     tooltip.hidden = false;
@@ -49,7 +60,11 @@
 
   document.addEventListener("pointerover", (event) => {
     if (tooltip.contains(event.target)) clearTimeout(hideTimer);
-    else if (targetFor(event)) show(targetFor(event));
+    else {
+      const target = targetFor(event);
+      if (target && target !== anchor) show(target);
+      else if (target) clearTimeout(hideTimer);
+    }
   });
   document.addEventListener("pointerout", (event) => {
     if (anchor?.contains(event.target) || tooltip.contains(event.target)) deferHide(event.relatedTarget);
@@ -72,10 +87,8 @@
       event.stopImmediatePropagation();
     }
   }, true);
-  document.addEventListener("scroll", hide, { capture: true, passive: true });
+  document.addEventListener("scroll", (event) => {
+    if (!tooltip.contains(event.target)) hide();
+  }, { capture: true, passive: true });
   window.addEventListener("resize", hide, { passive: true });
-  // Views and modal layers can hide a focused help control without removing it.
-  new MutationObserver(() => {
-    if (anchor && (!anchor.isConnected || anchor.closest("[inert]") || !anchor.getClientRects().length)) hide();
-  }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ["style", "inert", "hidden"] });
 })();

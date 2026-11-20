@@ -81,12 +81,25 @@
     return visibleRect(element);
   }
 
-  function originTransform(origin, destination) {
-    const x = origin.left + origin.width / 2 - destination.left - destination.width / 2;
-    const y = origin.top + origin.height / 2 - destination.top - destination.height / 2;
+  function originTransform(origin, destination, pivot) {
     // Uniform scale preserves media proportions throughout the transition.
     const scale = Math.max(.035, Math.min(1, origin.width / destination.width, origin.height / destination.height));
+    const center = pivot || { x: destination.width / 2, y: destination.height / 2 };
+    const x = origin.left + origin.width / 2 - destination.left - scale * destination.width / 2 - (1 - scale) * center.x;
+    const y = origin.top + origin.height / 2 - destination.top - scale * destination.height / 2 - (1 - scale) * center.y;
     return `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0) scale(${scale.toFixed(5)})`;
+  }
+
+  function stablePivot(key, destination, interrupted, previous) {
+    if (key !== "detail" && key !== "task") return null;
+    // These shells are top-aligned and grow when their payload arrives. A
+    // percentage pivot would move the entire scaled shell as its height grows.
+    const sampled = interrupted?.transformOrigin?.trim().split(/\s+/);
+    if (sampled?.length >= 2 && sampled.slice(0, 2).every(value => /^-?[\d.]+px$/.test(value))) {
+      const x = Number.parseFloat(sampled[0]), y = Number.parseFloat(sampled[1]);
+      if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+    }
+    return (interrupted && previous?.pivot) || { x: destination.width / 2, y: destination.height / 2 };
   }
 
   function preference(phase) {
@@ -100,6 +113,7 @@
     const style = styleOf(element);
     const opacity = Number.parseFloat(style.opacity);
     return { transform: style.transform && style.transform !== "none" ? style.transform : fullTransform,
+      transformOrigin: style.transformOrigin,
       opacity: Number.isFinite(opacity) ? opacity : 1 };
   }
 
@@ -157,14 +171,16 @@
     if (!destination || typeof element.animate !== "function") return Promise.resolve(true);
     const settings = preference(phase);
     const source = settings.spatial ? (phase === "enter" ? origin?.rect : returnRect(origin)) : null;
-    const local = source ? originTransform(source, destination) : fullTransform;
+    const pivot = stablePivot(key, destination, interrupted, previous);
+    const transformOrigin = pivot ? `${pivot.x}px ${pivot.y}px` : "50% 50%";
+    const local = source ? originTransform(source, destination, pivot) : fullTransform;
     const opening = phase === "enter";
     const start = interrupted ? { ...interrupted, transform: settings.spatial ? interrupted.transform : fullTransform }
       : { transform: opening ? local : fullTransform, opacity: opening ? (source ? .18 : 0) : 1 };
     const end = { transform: opening ? fullTransform : local, opacity: opening ? 1 : 0 };
     let resolve;
     const result = new Promise(done => { resolve = done; });
-    const record = { key, element, backdrop, phase, animations: [], resolve,
+    const record = { key, element, backdrop, phase, pivot, animations: [], resolve,
       timer: null, releaseFrame: null, releaseWithRaf: false, settled: false, released: false };
     active.set(key, record);
     [element, backdrop].forEach(target => {
@@ -172,7 +188,7 @@
     });
     try {
       record.animations.push(element.animate([
-        { ...start, transformOrigin: "50% 50%" }, { ...end, transformOrigin: "50% 50%" },
+        { ...start, transformOrigin }, { ...end, transformOrigin },
       ], { duration: settings.duration, easing, fill: "both" }));
       if (backdrop && backdrop !== element && typeof backdrop.animate === "function") {
         record.animations.push(backdrop.animate([
@@ -181,7 +197,10 @@
       }
       const completions = record.animations.map(animation => animation.finished);
       if (completions.every(promise => promise && typeof promise.then === "function")) {
-        Promise.all(completions).then(() => settle(record, true), () => settle(record, false));
+        // Explicit cancellation settles the record before cancelling its players.
+        // An independent player cancellation must still complete the caller's
+        // close lifecycle, otherwise its lock and mounted content remain forever.
+        Promise.all(completions).then(() => settle(record, true), () => settle(record, true));
       }
       // A browser can omit animation completion while backgrounding or replacing a layer.
       record.timer = window.setTimeout(() => settle(record, true), settings.duration + 120);

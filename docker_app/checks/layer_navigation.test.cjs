@@ -45,7 +45,7 @@ function setup() {
     (index ? detailCards : cards).set(index ? `${folder}::${index}` : folder, element);
     return element;
   }
-  return { app, calls, exits, timers, player, card, cards, detailCards, motion };
+  return { app, calls, exits, timers, player, card, cards, detailCards, motion, window: context.window, document };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const folder = name => ({ folder_name: name, title: name, image_count: 1, asset_count: 1 });
@@ -85,6 +85,27 @@ test('a stale detail exit cannot clear a reopened detail or its pending entrance
   assert.equal(app.detail.folder.folder_name, 'second');
   assert.equal(calls.filter(call => call.key === 'detail').length, 2);
   assert.equal(app.layerMotionPending.detail, false);
+});
+
+test('an entrance frame queued before close cannot reveal or clear a newer opening', async () => {
+  const { app, calls, exits, card, window } = setup();
+  const frames = [];
+  window.requestAnimationFrame = callback => { frames.push(callback); return frames.length; };
+  card('first'); card('second');
+  app.cachedDetail = name => ({ folder: folder(name), pairs: [pair(1)], videos: [] });
+  await app.openFolder('first', folder('first'));
+  assert.equal(calls.length, 0);
+  app.closeDetail();
+  await app.openFolder('second', folder('second'));
+  frames.shift()();
+  assert.equal(calls.length, 0, 'stale frame does not animate the new shell');
+  assert.equal(app.layerMotionPending.detail, true, 'stale frame must preserve the new mount guard');
+  frames.shift()();
+  assert.equal(calls.length, 1);
+  assert.equal(app.layerMotionPending.detail, false);
+  exits[0].resolve(true); await tick();
+  assert.equal(app.detail.open, true);
+  assert.equal(app.detail.folder.folder_name, 'second');
 });
 
 test('repeated copies of a post preserve the actual clicked source and reject recycled identities', async () => {
@@ -166,6 +187,27 @@ test('closing the parent removes a nested viewer without targeting a disappearin
   exits[0].resolve(true); await tick();
 });
 
+test('auxiliary layers use the actual trigger and programmatic opens never reuse unrelated keyboard focus', async () => {
+  for (const kind of ['task', 'source']) {
+    const { app, calls, document } = setup();
+    const previousFocus = { matches: () => true };
+    const clicked = { matches: () => true };
+    document.activeElement = previousFocus;
+    app.settings.review_source_open_mode = 'popup';
+    const open = kind === 'task'
+      ? trigger => app.openCurrentTaskInspector(trigger)
+      : trigger => app.openTrashSource({ folder: { original_url: 'https://example.test/post' } }, trigger);
+    const close = () => kind === 'task' ? app.closeTaskInspector(true) : app.closeSourcePreview(true);
+    open({ currentTarget: clicked });
+    assert.equal(calls[0].key, kind);
+    assert.equal(calls[0].origin.element, clicked, 'click origin does not depend on browser button-focus behavior');
+    close();
+    open();
+    assert.equal(calls[1].origin.element, null, 'an absent trigger fades instead of expanding from old focus');
+    await tick();
+  }
+});
+
 test('an unexpected synchronous animation failure cannot strand a closing layer', () => {
   const { app, motion } = setup();
   app.detail = { open: true, folder: folder('post'), pairs: [pair(1)], videos: [] };
@@ -176,43 +218,76 @@ test('an unexpected synchronous animation failure cannot strand a closing layer'
   assert.equal(app.detail.folder, null);
 });
 
-test('layer focus waits for the bundled Alpine visibility binding to flush', async () => {
+test('layer entrance waits for bundled Alpine x-show before measuring and focusing', async () => {
   class Element {
-    constructor() { this.attributes = new Map(); this.tagName = 'DIV'; }
+    constructor() {
+      this.attributes = new Map(); this.tagName = 'DIV';
+      const properties = new Map();
+      this.style = {
+        get length() { return properties.size; },
+        get display() { return properties.get('display') || ''; },
+        setProperty(name, value) { properties.set(name, value); },
+        removeProperty(name) { properties.delete(name); },
+        clear() { properties.clear(); },
+      };
+    }
     getAttribute(name) { return this.attributes.get(name) ?? null; }
     setAttribute(name, value) { this.attributes.set(name, String(value)); }
-    removeAttribute(name) { this.attributes.delete(name); }
+    removeAttribute(name) { this.attributes.delete(name); if (name === 'style') this.style.clear(); }
     hasAttribute(name) { return this.attributes.has(name); }
+    getBoundingClientRect() { return { width: this.style.display === 'none' ? 0 : 900 }; }
   }
+  const { app, calls, motion, window, document } = setup();
+  const frames = [];
+  window.Element = Element;
+  window.requestAnimationFrame = callback => { frames.push(callback); return frames.length; };
+  document.visibilityState = 'visible';
+  document.createElement = () => new Element();
   let initializing = true;
   const context = vm.createContext({
-    window: { Element }, Element,
-    document: { createElement: () => new Element() },
+    window, document, Element,
     MutationObserver: class { observe() {} disconnect() {} takeRecords() { return []; } },
     queueMicrotask(callback) { if (!initializing) queueMicrotask(callback); },
-    setTimeout, clearTimeout, console,
+    requestAnimationFrame: window.requestAnimationFrame, setTimeout, clearTimeout, console,
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/static/vendor/alpinejs.min.js'), 'utf8'), context);
   initializing = false;
   const Alpine = context.window.Alpine;
-  const { app } = setup();
   const scope = Alpine.reactive(app);
   scope.$nextTick = Alpine.nextTick;
-  const backdrop = new Element();
+  const backdrop = new Element(), shell = new Element();
+  shell.parentNode = backdrop;
   Alpine.addScopeToNode(backdrop, scope);
-  const dispose = Alpine.bind(backdrop, { ':data-layer-motion-pending': "layerMotionPending.detail ? '' : null" });
+  Alpine.addScopeToNode(shell, scope);
+  const disposeBackdrop = Alpine.bind(backdrop, {
+    'x-show': 'detail.open || detailClosing',
+    ':data-layer-motion-pending': "layerMotionPending.detail ? '' : null",
+  });
+  const disposeShell = Alpine.bind(shell, { 'x-show': 'detail.open || detailClosing' });
+  scope.layerMotionElements = () => ({ element: shell, backdrop });
+  motion.enter = options => {
+    calls.push(options.element.getBoundingClientRect().width);
+    return Promise.resolve(true);
+  };
   const hiddenAtFocus = [];
-  scope.syncModalAccessibility = () => hiddenAtFocus.push(backdrop.hasAttribute('data-layer-motion-pending'));
+  scope.syncModalAccessibility = () => hiddenAtFocus.push(backdrop.hasAttribute('data-layer-motion-pending') || shell.style.display === 'none');
   try {
+    assert.equal(shell.style.display, 'none');
     scope.detail.open = true;
     const generation = scope.prepareLayerEntrance('detail');
     await Alpine.nextTick();
     assert.equal(backdrop.hasAttribute('data-layer-motion-pending'), true);
+    assert.equal(shell.style.display, 'none', 'Alpine nextTick does not run the scheduled x-show frame');
     scope.enterGalleryLayer('detail', generation);
     await Alpine.nextTick();
+    assert.equal(calls.length, 0, 'do not measure an unmounted shell before its x-show frame');
+    assert.equal(backdrop.hasAttribute('data-layer-motion-pending'), true, 'retain the flash guard until animation can begin');
+    frames.splice(0).forEach(callback => callback());
+    await Alpine.nextTick();
     await tick();
+    assert.deepEqual(calls, [900], 'the managed animation starts from measurable layout');
     assert.deepEqual(hiddenAtFocus, [false], 'focus must run after the hidden attribute is removed');
   } finally {
-    dispose();
+    disposeShell(); disposeBackdrop();
   }
 });
