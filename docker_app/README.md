@@ -1,12 +1,12 @@
-# RC-WebGallery｜Docker 部署说明 v12.13
+# RC-WebGallery｜Docker 部署说明 v12.14
 
 RC-WebGallery 是面向个人收藏与自托管场景的多来源媒体归档图库。当前来源包括 B 站动态与 Live Photo、小红书本人点赞笔记，以及 RSS、Sitemap 或 HTML 列表页形式的通用站点；不同来源共用任务中心、索引、筛选和图库界面。
 
-## v12.13 更新
+## v12.14 更新
 
-- 纸白底色、石墨文字与雾蓝强调色；提供五组预设，保留自定义配色。
-- 收敛导航、卡片和控件的渐变、描边与阴影，移除视频卡片流动彩边。
-- 整合页面加载状态、设置草稿保护、移动导航和并发删除反馈修复。
+- 详情、图片查看器和视频弹层按来源位置进出，视频切换按浏览方向交接。
+- 修复动画中断、图片与视频帧交接、瀑布流重排和滚动锚点跳动。
+- 对齐顶栏与工作区，调整卡片操作、设置控件和弹层边界，修复详情图片删除确认。
 
 ## 启动
 
@@ -20,11 +20,11 @@ AMD64 NAS 可以直接使用 [docker-compose.nas-amd64.yml](docker-compose.nas-a
 
 建议流程：
 
-1. 导入镜像包：`docker load -i zzs-bili-gallery_v12.13_amd64.tar`，并解压同版本部署包，保留其中目录关系。
+1. 导入镜像包：`docker load -i zzs-bili-gallery_v12.14_amd64.tar`，并解压同版本部署包，保留其中目录关系。
 2. 在默认 Compose 中保留你原有的两个配置、数据挂载路径；升级时使用随包的新版本 Compose。
 3. 在部署包根目录执行 `docker compose -f docker_app/docker-compose.nas-amd64.yml up -d`。
 
-小红书浏览器会随主服务自动启动，直接在网页中扫码使用。主应用通过 `7860` 网页端口提供界面；当前 v12.13 本地包的镜像 tar 与镜像标签仍沿用历史名称 `zzs-bili-gallery`。本次产物在仓库 `dist/` 中，不创建新 Release。
+小红书浏览器会随主服务自动启动，直接在网页中扫码使用。主应用通过 `7860` 网页端口提供界面；当前 v12.14 本地包的镜像 tar 与镜像标签仍沿用历史名称 `zzs-bili-gallery`。本次产物在仓库 `dist/` 中，不创建新 Release。
 
 默认挂载说明：
 
@@ -78,6 +78,6 @@ AMD64 NAS 可以直接使用 [docker-compose.nas-amd64.yml](docker-compose.nas-a
 - `storage/data/images`
 - `storage/data/livephoto`
 
-## v12.13 网络访问
+## 网络访问
 
 设置页新增 HTTPS 自动转 HTTP 开关与 HTTP 端口，默认关闭。内网检测参考 VRB，使用健康 JSON 与 GIF 并行探测，每个窗口对同一目标尝试一次；新增“连接内网”按钮。协议跳转保留页面位置，遇到强制 HTTPS 时避免循环。配置与浏览器限制详见[网络访问说明](../README.md#内网自动跳转)。
