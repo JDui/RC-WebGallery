@@ -1898,7 +1898,7 @@
                                     </template>
                                     <template x-if="pairDeletePending(detail.folder?.folder_name, pair.pair_index)">
                                         <div class="mini-confirm-row single-confirm">
-                                            <button class="mini-confirm-button danger" :disabled="pairDeletingKeys[pairDeleteKey(detail.folder?.folder_name, pair.pair_index)]" @click="confirmDeletePair(detail.folder?.folder_name, pair.pair_index)">确认</button>
+                                            <button class="mini-confirm-button danger" :disabled="!!pairDeletingKeys[pairDeleteKey(detail.folder?.folder_name, pair.pair_index)]" @click="confirmDeletePair(detail.folder?.folder_name, pair.pair_index)">确认</button>
                                         </div>
                                     </template>
                                 </div>

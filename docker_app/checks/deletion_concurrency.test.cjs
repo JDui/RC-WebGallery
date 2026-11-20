@@ -46,6 +46,54 @@ const liveKeys = state => Array.from(state.gallery.items.filter(item => !item.__
 const pairKeys = state => Array.from(state.detail.pairs, pair => pair.pair_index);
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test('detail confirmation binding enables idle pairs and disables only their pending deletion', async () => {
+  // Keep Alpine's evaluator and boolean-attribute handling intact; only DOM
+  // attribute storage is stubbed so this regression needs no browser process.
+  class Element {
+    constructor() { this.attributes = new Map(); this.tagName = 'BUTTON'; }
+    getAttribute(name) { return this.attributes.get(name) ?? null; }
+    setAttribute(name, value) { this.attributes.set(name, String(value)); }
+    removeAttribute(name) { this.attributes.delete(name); }
+    hasAttribute(name) { return this.attributes.has(name); }
+  }
+  let initializing = true;
+  const context = vm.createContext({
+    window: { Element }, Element,
+    document: { createElement: () => new Element() },
+    MutationObserver: class { observe() {} disconnect() {} takeRecords() { return []; } },
+    // Skip automatic document startup, then preserve reactive effect scheduling.
+    queueMicrotask(callback) { if (!initializing) queueMicrotask(callback); },
+    setTimeout, clearTimeout, console,
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/static/vendor/alpinejs.min.js'), 'utf8'), context);
+  initializing = false;
+  const Alpine = context.window.Alpine;
+  const { state } = setup();
+  const scope = Alpine.reactive({ ...state, pair: state.detail.pairs[0] });
+  const html = fs.readFileSync(path.join(__dirname, '../app/templates/index.html'), 'utf8');
+  const markup = html.match(/<button\b[^>]*@click="confirmDeletePair\([^\"]*\)"[^>]*>/)?.[0];
+  const expression = markup?.match(/:disabled="([^\"]+)"/)?.[1];
+  assert.ok(expression, 'detail confirmation must expose its disabled binding');
+  const button = new Element();
+  Alpine.addScopeToNode(button, scope);
+  const dispose = Alpine.bind(button, { ':disabled': expression });
+  try {
+    assert.equal(button.hasAttribute('disabled'), false, 'idle confirmation is clickable');
+    const key = scope.pairDeleteKey('post', 1);
+    scope.pairDeletingKeys[key] = true;
+    await tick();
+    assert.equal(button.hasAttribute('disabled'), true, 'matching deletion blocks repeated clicks');
+    delete scope.pairDeletingKeys[key];
+    await tick();
+    assert.equal(button.hasAttribute('disabled'), false, 'cleared deletion enables confirmation again');
+    scope.pairDeletingKeys[scope.pairDeleteKey('post', 2)] = true;
+    await tick();
+    assert.equal(button.hasAttribute('disabled'), false, 'another pair can be confirmed independently');
+  } finally {
+    dispose();
+  }
+});
+
 test('rapid pair deletes accept both clicks, serialize writes, and roll back only the failed image', async () => {
   const { state } = setup();
   const first = deferred(), second = deferred(), calls = [];
