@@ -43,11 +43,19 @@
     }
     tooltip.textContent = text;
     tooltip.hidden = false;
+    const viewport = window.visualViewport;
+    const viewportLeft = viewport?.offsetLeft || 0;
+    const viewportTop = viewport?.offsetTop || 0;
+    const viewportWidth = viewport?.width || document.documentElement.clientWidth || window.innerWidth;
+    const viewportHeight = viewport?.height || window.innerHeight;
+    tooltip.style.maxWidth = `${Math.max(0, Math.min(320, viewportWidth - 24))}px`;
+    tooltip.style.maxHeight = `${Math.max(0, viewportHeight - 24)}px`;
     const box = anchor.getBoundingClientRect();
     const size = tooltip.getBoundingClientRect();
-    const left = Math.max(12, Math.min(box.left + (box.width - size.width) / 2, window.innerWidth - size.width - 12));
+    const left = Math.max(viewportLeft + 12, Math.min(box.left + (box.width - size.width) / 2, viewportLeft + viewportWidth - size.width - 12));
     const below = box.bottom + 8;
-    const top = below + size.height <= window.innerHeight - 12 ? below : Math.max(12, box.top - size.height - 8);
+    const preferredTop = below + size.height <= viewportTop + viewportHeight - 12 ? below : box.top - size.height - 8;
+    const top = Math.max(viewportTop + 12, Math.min(preferredTop, viewportTop + viewportHeight - size.height - 12));
     tooltip.style.left = `${left}px`;
     tooltip.style.top = `${top}px`;
   };
@@ -91,4 +99,6 @@
     if (!tooltip.contains(event.target)) hide();
   }, { capture: true, passive: true });
   window.addEventListener("resize", hide, { passive: true });
+  window.visualViewport?.addEventListener("resize", hide, { passive: true });
+  window.visualViewport?.addEventListener("scroll", hide, { passive: true });
 })();

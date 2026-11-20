@@ -1,4 +1,68 @@
 /* Shared toolbar and action anchors keep controls in predictable places. */
+.gallery-item-card .photo-footer {
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-end;
+    gap: 8px;
+    min-width: 0;
+    margin-top: 8px;
+}
+.gallery-item-card .photo-footer .photo-stats {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-top: 0;
+    padding-right: 0;
+    overflow-wrap: anywhere;
+}
+.gallery-item-card .photo-footer .card-trash-zone {
+    position: static;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+}
+.gallery-item-card .photo-footer .card-trash-zone:not(:has(button)) { display: none; }
+.gallery-item-card .photo-footer .mini-confirm-row,
+.gallery-item-card .photo-footer .mini-confirm-button {
+    min-width: 0;
+    max-width: 100%;
+}
+.gallery-item-card .photo-footer .mini-confirm-button {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+@media (min-width: 1101px) and (min-aspect-ratio: 11/10) {
+    .gallery-item-card .photo-footer { min-height: 34px; }
+    .topbar > .topbar-left { flex: 1 1 0; min-width: 0; }
+    .topbar > .topbar-actions {
+        flex: 0 1 auto;
+        min-width: 0;
+        max-width: 45%;
+        justify-content: flex-end;
+    }
+    .topbar .status-pill { min-width: 0; max-width: 280px; line-height: 1.4; }
+    .topbar .status-pill .status-dot { flex: 0 0 8px; }
+    .topbar .status-pill > span:last-child {
+        min-width: 0;
+        max-height: 4.2em;
+        overflow-y: auto;
+        overflow-wrap: anywhere;
+    }
+}
+@media (max-width: 1100px), (max-aspect-ratio: 11/10) {
+    .workspace .gallery-heading > .gallery-toolbar { flex-wrap: wrap; }
+    .workspace .gallery-sort-controls { flex: 1 1 168px; flex-wrap: wrap; }
+    .workspace .gallery-toolbar > .time-filter-toggle {
+        flex: 0 1 auto;
+        max-width: 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+}
+@media (max-width: 760px), (max-width: 1100px) and (orientation: portrait) {
+    .gallery-page .photo-footer > .photo-stats,
+    .gallery-page .photo-footer:not(:has(button)) { display: none; }
+}
+
 .workspace .page-toolbar {
     align-items: center;
     gap: 8px;
@@ -180,6 +244,7 @@
     margin-bottom: 10px;
 }
 .inspector-shell .detail-head h3 { margin: 0; font-size: 17px; }
+.inspector-shell .detail-head > div:first-child { min-width: 0; overflow-wrap: anywhere; }
 .inspector-shell .detail-copy { margin: 4px 0 0; font-size: 12px; }
 .inspector-shell .detail-head > .button-row { justify-content: flex-end; }
 .source-preview-head { gap: 8px; padding: 10px 12px; }
@@ -189,9 +254,10 @@
     .inspector-shell { max-height: calc(100dvh - 12px); padding: 12px; }
     .inspector-shell .detail-head .secondary-button { min-height: 30px; padding: 4px 7px; font-size: 11px; }
     .inspector-shell .task-log-pre { padding: 10px; margin: 0; font-size: 11px; }
-    .source-preview-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+    .source-preview-head { display: grid; grid-template-columns: minmax(0, 1fr); }
     .source-preview-head h3 { margin: 0; font-size: 16px; }
     .source-preview-head .detail-copy { margin-top: 4px; font-size: 11px; }
+    .source-preview-head .source-preview-actions { width: 100%; gap: 6px; }
 }
 
 .favorite-button { display: grid; place-items: center; padding: 0; }
@@ -217,6 +283,15 @@
 .workspace .panel-view[data-testid="section-tasks"] > .panel-card,
 .workspace .panel-view[data-testid="section-logs"] > .panel-card {
     grid-template-columns: minmax(0, 1fr) auto;
+}
+.workspace .panel-view[data-testid="section-tasks"] > .task-queue-card > .panel-card-main {
+    grid-column: 1 / -1;
+}
+@media (max-width: 1100px), (max-aspect-ratio: 11/10) {
+    .workspace .panel-view[data-testid="section-tasks"] > .panel-card,
+    .workspace .panel-view[data-testid="section-logs"] > .panel-card {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
 
 /* The desktop player uses the available viewport; portrait playback stays edge to edge. */
@@ -285,6 +360,52 @@
     min-width: 0;
     max-width: 100%;
     justify-content: flex-end;
+}
+.workspace .settings-card,
+.workspace .settings-card .interface-settings-grid > * {
+    min-width: 0;
+}
+.workspace .settings-card .field-copy,
+.workspace .settings-error,
+.workspace .inline-tag {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+.workspace .thumbnail-settings-card {
+    container-name: thumbnail-settings;
+    container-type: inline-size;
+}
+/* Settings cards can be narrow even when the outer viewport is wide. */
+@container thumbnail-settings (max-width: 520px) {
+    .workspace .interface-settings-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .workspace .thumbnail-level-row {
+        grid-template-columns: 40px repeat(2, minmax(0, 1fr));
+    }
+    .workspace .thumbnail-level-row label:has(> .ui-field) {
+        display: block;
+    }
+    .workspace .thumbnail-level-row label > .ui-field {
+        margin-top: 3px;
+    }
+    .workspace .thumbnail-level-row > .secondary-button,
+    .workspace .thumbnail-level-row > .confirm-row {
+        grid-column: 1 / -1;
+        justify-self: end;
+        width: auto;
+    }
+}
+@container (max-width: 520px) {
+    .workspace .settings-icon-reset-row {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .workspace .settings-icon-reset-row .button-row {
+        width: 100%;
+        min-width: 0;
+        justify-content: flex-end;
+    }
 }
 @media (max-width: 1100px), (max-aspect-ratio: 11/10) {
     .workspace .subscription-policy-grid { grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)); }
@@ -382,6 +503,8 @@
     right: max(10px, env(safe-area-inset-right));
     width: max-content; max-width: min(180px, calc(100vw - 24px));
     max-height: calc(100dvh - 32px); overflow-y: auto; overflow-x: hidden;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
     flex-direction: column; flex-wrap: nowrap; justify-content: flex-start;
     opacity: 0; visibility: visible; pointer-events: none;
     transform: translate(calc(100% + 12px), -50%);
@@ -392,6 +515,7 @@
 }
 .viewer-floating.viewer-floating-right .viewer-toolbar-actions {
     flex-direction: column; flex-wrap: nowrap; justify-content: flex-start;
+    flex: 0 0 auto;
     opacity: 1; visibility: visible; pointer-events: inherit;
     max-width: 160px; max-height: none; overflow: visible; transform: none;
 }

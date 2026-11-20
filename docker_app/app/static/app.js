@@ -209,10 +209,13 @@ function galleryApp(initialSettings = {}) {
   let detailFetchController = null;
   const folderMutationQueues = new Map();
   let webkitFullscreenVideo = null;
+  let fullscreenOverlayExitPromise = null;
+  let sourcePreviewRequestToken = 0;
   let mediaLongPressTimer = null;
   let mediaLongPressStart = null;
   let mediaLongPressOpened = false;
   let mediaMenuAnchor = null;
+  let mediaMenuOpenRequest = 0;
   let settingsGroupAnimation = null;
   let settingsGroupToken = 0;
   let galleryWindowShiftToken = 0;
@@ -235,7 +238,7 @@ function galleryApp(initialSettings = {}) {
     trackpadBackLayer: "",
     trackpadBackHintTimer: null,
     touchBackClickUntil: 0,
-    mediaContextMenu: { open: false, folderName: "", pairIndex: null, x: 12, y: 12 },
+    mediaContextMenu: { open: false, positioned: false, folderName: "", pairIndex: null, x: 12, y: 12 },
     category: "all",
     navItems: [
       { key: "all", label: "全部项目", short: "全", copy: "所有图片与动态内容" },
@@ -1075,12 +1078,12 @@ function galleryApp(initialSettings = {}) {
     },
 
     updateViewportMode() {
+      if (this.mediaContextMenu.open) this.closeMediaContextMenu();
       const nextCompact = window.matchMedia("(max-width: 1100px), (max-aspect-ratio: 11/10)").matches;
       this.compactViewport = nextCompact;
       this.narrowViewport = window.matchMedia("(max-width: 760px), (max-width: 1100px) and (orientation: portrait)").matches;
       if (!nextCompact) {
         this.sidebarDrawerOpen = false;
-        this.closeMediaContextMenu();
       }
       this.galleryColumnCache = null;
       this.detailColumnCache = null;
@@ -1123,6 +1126,46 @@ function galleryApp(initialSettings = {}) {
           : element.webkitExitFullscreen?.();
         result?.catch?.(() => {});
       } catch (error) { void error; }
+    },
+
+    exitFullscreenForOverlay() {
+      if (!this.currentFullscreenElement()) return Promise.resolve();
+      if (fullscreenOverlayExitPromise) return fullscreenOverlayExitPromise;
+      const pending = new Promise((resolve, reject) => {
+        const events = ["fullscreenchange", "webkitfullscreenchange", "webkitendfullscreen"];
+        let settled = false;
+        let timer = null;
+        const finish = error => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timer);
+          events.forEach(name => document.removeEventListener(name, check, name === "webkitendfullscreen"));
+          if (error) reject(error);
+          else resolve();
+        };
+        const check = () => { if (!this.currentFullscreenElement()) finish(); };
+        events.forEach(name => document.addEventListener(name, check, name === "webkitendfullscreen"));
+        timer = window.setTimeout(() => {
+          if (this.currentFullscreenElement()) finish(new Error("Fullscreen exit did not complete"));
+          else finish();
+        }, 1500);
+        try {
+          const element = this.currentFullscreenElement();
+          let result;
+          if (document.fullscreenElement && typeof document.exitFullscreen === "function") result = document.exitFullscreen();
+          else if (document.webkitFullscreenElement && typeof document.webkitExitFullscreen === "function") result = document.webkitExitFullscreen();
+          else if (typeof element?.webkitExitFullscreen === "function") result = element.webkitExitFullscreen();
+          else throw new Error("Fullscreen exit is unavailable");
+          Promise.resolve(result).then(check, error => finish(error || new Error("Fullscreen exit failed")));
+        } catch (error) {
+          finish(error);
+        }
+      });
+      const result = pending.finally(() => {
+        if (fullscreenOverlayExitPromise === result) fullscreenOverlayExitPromise = null;
+      });
+      fullscreenOverlayExitPromise = result;
+      return result;
     },
 
     topOverlayLayer(includeClosing = true) {
@@ -1395,6 +1438,11 @@ function galleryApp(initialSettings = {}) {
       }, { capture: true, passive: false });
       document.addEventListener("touchcancel", () => this.cancelMediaLongPress(), { capture: true, passive: true });
       document.addEventListener("scroll", () => this.cancelMediaLongPress(), { capture: true, passive: true });
+      const dismissMovedMenu = () => {
+        if (this.mediaContextMenu.open) this.closeMediaContextMenu();
+      };
+      window.visualViewport?.addEventListener("resize", dismissMovedMenu, { passive: true });
+      window.visualViewport?.addEventListener("scroll", dismissMovedMenu, { passive: true });
     },
 
     cancelMediaLongPress() {
@@ -1408,19 +1456,70 @@ function galleryApp(initialSettings = {}) {
       this.cancelMediaLongPress();
       this.cancelTouchBack();
       this.cancelVideoFeedGesture();
+      const request = ++mediaMenuOpenRequest;
+      sourcePreviewRequestToken += 1;
+      if (this.currentFullscreenElement()) {
+        const context = this.touchBackContextKey();
+        const folderName = element.dataset.mediaMenuFolder;
+        const pairIndex = element.dataset.mediaMenuPair;
+        return this.exitFullscreenForOverlay().then(() => {
+          if (request !== mediaMenuOpenRequest || context !== this.touchBackContextKey()
+              || !element.isConnected || element.dataset.mediaMenuFolder !== folderName
+              || element.dataset.mediaMenuPair !== pairIndex) return;
+          this.openMediaContextMenu(element, x, y);
+        }, () => {
+          if (request === mediaMenuOpenRequest && context === this.touchBackContextKey() && this.videoNote.open) {
+            this.videoNote.error = "无法退出全屏，请先退出全屏再打开内容操作。";
+          }
+        });
+      }
       this.touchBackClickUntil = Date.now() + 800;
       mediaMenuAnchor = element;
       const rect = element.getBoundingClientRect();
-      this.mediaContextMenu = { open: true, folderName: element.dataset.mediaMenuFolder,
+      this.mediaContextMenu = { open: true, positioned: false, folderName: element.dataset.mediaMenuFolder,
         pairIndex: Number(element.dataset.mediaMenuPair) || null,
-        x: Math.max(12, Math.min(x || rect.left + 16, window.innerWidth - 232)),
-        y: Math.max(12, Math.min(y || rect.top + 16, window.innerHeight - 112)) };
-      this.$nextTick(() => this.$refs.mediaContextDelete?.focus({ preventScroll: true }));
+        x: Number.isFinite(x) ? x : rect.left + 16,
+        y: Number.isFinite(y) ? y : rect.top + 16 };
+      const menu = this.mediaContextMenu;
+      // x-show becomes measurable on its display frame. Keep the panel hidden
+      // until its actual wrapped size has been fitted inside the visible viewport.
+      this.$nextTick(() => window.requestAnimationFrame(() => {
+        if (this.mediaContextMenu !== menu || !menu.open) return;
+        if (!element.isConnected || element.dataset.mediaMenuFolder !== menu.folderName
+            || (Number(element.dataset.mediaMenuPair) || null) !== menu.pairIndex) {
+          this.closeMediaContextMenu();
+          return;
+        }
+        this.positionMediaContextMenu();
+        this.$nextTick(() => {
+          if (this.mediaContextMenu === menu && menu.open && menu.positioned) {
+            this.$refs.mediaContextDelete?.focus({ preventScroll: true });
+          }
+        });
+      }));
+    },
+
+    positionMediaContextMenu() {
+      const panel = this.$refs.mediaContextPanel;
+      if (!this.mediaContextMenu.open || !panel) return;
+      const viewport = window.visualViewport;
+      const left = viewport?.offsetLeft || 0;
+      const top = viewport?.offsetTop || 0;
+      const width = viewport?.width || document.documentElement.clientWidth || window.innerWidth;
+      const height = viewport?.height || window.innerHeight;
+      panel.style.maxWidth = `${Math.max(0, width - 24)}px`;
+      panel.style.maxHeight = `${Math.max(0, height - 24)}px`;
+      const size = panel.getBoundingClientRect();
+      this.mediaContextMenu.x = Math.max(left + 12, Math.min(this.mediaContextMenu.x, left + width - size.width - 12));
+      this.mediaContextMenu.y = Math.max(top + 12, Math.min(this.mediaContextMenu.y, top + height - size.height - 12));
+      this.mediaContextMenu.positioned = true;
     },
 
     closeMediaContextMenu() {
+      mediaMenuOpenRequest += 1;
       this.cancelMediaLongPress();
       this.mediaContextMenu.open = false;
+      this.mediaContextMenu.positioned = false;
       mediaMenuAnchor = null;
     },
 
@@ -2411,6 +2510,7 @@ function galleryApp(initialSettings = {}) {
       const rootStyle = getComputedStyle(root);
       const shellStyle = getComputedStyle(shell);
       const shellRect = shell.getBoundingClientRect();
+      const workspaceRect = workspace.getBoundingClientRect();
       const sidebarFallback = lengthValue(
         rootStyle.getPropertyValue(this.sidebarCollapsed ? "--sidebar-collapsed" : "--sidebar-width"),
         this.sidebarCollapsed ? 72 : 236,
@@ -2420,9 +2520,13 @@ function galleryApp(initialSettings = {}) {
       const insetLeft = Math.round(shellRect.left + lengthValue(shellStyle.paddingLeft, 20));
       const insetRight = Math.round(Math.max(12, lengthValue(shellStyle.paddingRight, 20)));
       const columnGap = lengthValue(shellStyle.columnGap, 20);
-      const sidebarHeight = Math.max(240, Math.round(window.innerHeight - insetTop * 2));
-      const topbarLeft = Math.round(insetLeft + sidebarWidth + columnGap);
-      const topbarWidth = Math.max(320, Math.round(window.innerWidth - topbarLeft - insetRight));
+      const sidebarHeight = Math.max(0, Math.round(window.innerHeight - insetTop * 2));
+      // The workspace already excludes the scrollbar gutter and any modal body
+      // width adjustment. Share its actual edges, including fractional pixels.
+      const topbarLeft = Number.isFinite(workspaceRect.left)
+        ? workspaceRect.left : insetLeft + sidebarWidth + columnGap;
+      const topbarWidth = Math.max(0, workspaceRect.width
+        || shellRect.left + shellRect.width - insetRight - topbarLeft);
 
       this.setRootStyleVar("--layout-sidebar-left", `${insetLeft}px`);
       this.setRootStyleVar("--layout-sidebar-top", `${insetTop}px`);
@@ -2434,6 +2538,7 @@ function galleryApp(initialSettings = {}) {
       root.classList.add("layout-pinned");
 
       const topbarHeight = Math.ceil(topbar.getBoundingClientRect().height || 0);
+      this.setRootStyleVar("--page-toolbar-top", `${insetTop + topbarHeight + 6}px`);
       const measuredReserve = Math.max(44, topbarHeight + 10);
       const reserve = this.headerCompact && this.layoutTopbarReserve
         ? Math.max(this.layoutTopbarReserve, measuredReserve)
@@ -5810,22 +5915,45 @@ function galleryApp(initialSettings = {}) {
       }
       const xhsNote = /^xhs_/.test(item?.folder_name || '') || /^https:\/\/www\.xiaohongshu\.com\/(?:explore|discovery\/item)\//.test(url);
       if (this.settings?.review_source_open_mode === "popup" && !xhsNote) {
-        const motion = this.beginSourcePreviewMotion(trigger);
         const reviewItem = this.currentView === "review"
           ? (this.reviewItems || []).find((entry) => Number(entry.id) === Number(item?.id))
           : null;
-        this.sourcePreview = {
-          open: true,
+        return this.openSourcePreviewLayer({
           url,
           title: item?.folder_name_candidate || item?.title || "原始内容",
           subtitle: url,
           reviewId: reviewItem ? Number(reviewItem.id) : null,
-        };
+        }, trigger);
+      }
+      sourcePreviewRequestToken += 1;
+      this.closeMediaContextMenu();
+      this.openExternalUrl(url);
+    },
+
+    openSourcePreviewLayer(payload, trigger = null) {
+      const token = ++sourcePreviewRequestToken;
+      this.closeMediaContextMenu();
+      // Native event.currentTarget is cleared after dispatch. Keep the control,
+      // then measure its new position after the fullscreen viewport has exited.
+      const control = trigger?.currentTarget || trigger;
+      const context = this.touchBackContextKey();
+      const current = () => token === sourcePreviewRequestToken && context === this.touchBackContextKey();
+      const open = () => {
+        if (!current() || this.currentFullscreenElement()) return false;
+        const motion = this.beginSourcePreviewMotion(control);
+        this.sourcePreview = { open: true, ...payload };
         this.syncBodyLock();
         this.enterGalleryLayer("source", motion);
-        return;
-      }
-      this.openExternalUrl(url);
+        return true;
+      };
+      if (!this.currentFullscreenElement()) return open();
+      return this.exitFullscreenForOverlay().then(open, () => {
+        if (!current()) return false;
+        const message = "退出全屏后才能预览原帖，请退出全屏后重试。";
+        if (this.videoNote.open) this.videoNote.error = message;
+        this.notify("error", "无法打开原帖预览", message);
+        return false;
+      });
     },
 
     openExternalUrl(url) {
@@ -5849,6 +5977,7 @@ function galleryApp(initialSettings = {}) {
     },
 
     closeSourcePreview(skipAnimation = false) {
+      sourcePreviewRequestToken += 1;
       if (!this.sourcePreview.open && !this.sourcePreviewClosing) return;
       const generation = this.prepareLayerExit("source");
       window.clearTimeout(this.sourcePreviewCloseTimer);
@@ -6507,7 +6636,7 @@ function galleryApp(initialSettings = {}) {
     viewerNeighborStyle(direction) {
       const url = this.viewerNeighborUrl(direction);
       return {
-        transform: `translate3d(0, ${this.viewerOffsetY + direction * window.innerHeight}px, 0)`,
+        transform: `translate3d(0, calc(${this.viewerOffsetY}px + ${direction * 100}%), 0)`,
         backgroundImage: url ? `url(${JSON.stringify(url)})` : "none",
       };
     },
@@ -10259,16 +10388,12 @@ function galleryApp(initialSettings = {}) {
         }, trigger);
       } else {
         const url = note.url || `https://www.xiaohongshu.com/explore/${note.note_id}`;
-        const motion = this.beginSourcePreviewMotion(trigger);
-        this.sourcePreview = {
-          open: true,
+        return this.openSourcePreviewLayer({
           url,
           title: note.title || note.note_id,
           subtitle: url,
           reviewId: null,
-        };
-        this.syncBodyLock();
-        this.enterGalleryLayer("source", motion);
+        }, trigger);
       }
     },
 

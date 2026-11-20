@@ -50,7 +50,8 @@ function setup({ ResizeObserver } = {}) {
     scrollTo(x, y) { window.scrollY = typeof x === 'object' ? x.top : y; },
   };
   const context = vm.createContext({ window, document, localStorage: { getItem: () => null, setItem() {} },
-    Date, Intl, URLSearchParams, AbortController, console, ResizeObserver });
+    Date, Intl, URLSearchParams, AbortController, console, ResizeObserver,
+    getComputedStyle: element => window.getComputedStyle(element) });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../app/static/app.js'), 'utf8'), context);
   app = context.galleryApp();
   app.gallery = { items: Array.from({ length: 12 }, (_, index) => ({ item_key: `item-${index}` })), page_size: 2 };
@@ -278,4 +279,49 @@ test('modal scroll locking retains responsive width and restores the exact previ
   assert.equal(body.style.paddingRight, '3px');
   assert.equal(app.bodyLockTop, null);
   assert.equal(window.scrollY, 500);
+});
+
+function fixedLayoutFixture({ viewportWidth = 1440, viewportHeight = 900, shellWidth = 1425,
+  workspaceLeft = 228, workspaceWidth = 1181, sidebarWidth = 196 } = {}) {
+  const state = setup();
+  const { app, document, window } = state;
+  const values = new Map();
+  document.documentElement.style = {
+    getPropertyValue: name => values.get(name) || '',
+    setProperty: (name, value) => values.set(name, value),
+    removeProperty: name => values.delete(name),
+  };
+  const shell = { getBoundingClientRect: () => ({ left: 0, width: shellWidth }) };
+  const workspace = { getBoundingClientRect: () => ({ left: workspaceLeft, width: workspaceWidth }) };
+  const topbar = { getBoundingClientRect: () => ({ height: 56 }) };
+  app.$refs = { shell, workspace, topbar };
+  window.innerWidth = viewportWidth;
+  window.innerHeight = viewportHeight;
+  window.matchMedia = () => ({ matches: true });
+  window.getComputedStyle = element => element === shell
+    ? { paddingTop: '16px', paddingLeft: '16px', paddingRight: '16px', columnGap: '16px',
+      gridTemplateColumns: `${sidebarWidth}px ${workspaceWidth}px` }
+    : element === topbar ? { top: '22px' } : { getPropertyValue: () => `${sidebarWidth}px` };
+  return { ...state, values };
+}
+
+for (const geometry of [
+  { name: 'reserved scrollbar', workspaceLeft: 228, workspaceWidth: 1181 },
+  { name: 'collapsed sidebar', workspaceLeft: 88, workspaceWidth: 1321, sidebarWidth: 56 },
+  { name: 'fractional tracks and modal width', workspaceLeft: 228.5, workspaceWidth: 1165.25, shellWidth: 1409.75 },
+]) {
+  test(`fixed topbar shares workspace edges with ${geometry.name}`, () => {
+    const { app, values } = fixedLayoutFixture(geometry);
+    app.updateFixedLayoutMetrics();
+    assert.equal(values.get('--layout-topbar-left'), `${geometry.workspaceLeft}px`);
+    assert.equal(values.get('--layout-topbar-width'), `${geometry.workspaceWidth}px`);
+    assert.equal(values.get('--page-toolbar-top'), '78px', 'sticky actions use the newly pinned header position');
+  });
+}
+
+test('a short desktop viewport keeps the entire sidebar inside its vertical insets', () => {
+  const { app, values } = fixedLayoutFixture({ viewportHeight: 200 });
+  app.updateFixedLayoutMetrics();
+  assert.equal(values.get('--layout-sidebar-top'), '16px');
+  assert.equal(values.get('--layout-sidebar-height'), '168px', 'the old 240px floor must not put navigation below the viewport');
 });

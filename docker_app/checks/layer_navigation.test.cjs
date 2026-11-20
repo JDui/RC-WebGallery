@@ -51,6 +51,36 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const folder = name => ({ folder_name: name, title: name, image_count: 1, asset_count: 1 });
 const pair = index => ({ pair_index: index, image: { url: `original-${index}`, small_thumb_url: `thumb-${index}` } });
 
+function fullscreenFixture({ webkit = false } = {}) {
+  const fixture = setup();
+  const { app, document } = fixture;
+  const listeners = new Map();
+  document.addEventListener = (name, callback) => {
+    if (!listeners.has(name)) listeners.set(name, new Set());
+    listeners.get(name).add(callback);
+  };
+  document.removeEventListener = (name, callback) => listeners.get(name)?.delete(callback);
+  const shell = { classList: { contains: name => name === 'xhs-video-shell' } };
+  document[webkit ? 'webkitFullscreenElement' : 'fullscreenElement'] = shell;
+  let resolveExit, rejectExit, exitCount = 0;
+  document[webkit ? 'webkitExitFullscreen' : 'exitFullscreen'] = () => {
+    exitCount += 1;
+    if (webkit) return undefined;
+    return new Promise((resolve, reject) => { resolveExit = resolve; rejectExit = reject; });
+  };
+  app.videoNote = { open: true, folder: folder('video'), video: { url: 'video.mp4' }, error: '' };
+  app.settings.review_source_open_mode = 'popup';
+  return {
+    ...fixture, listeners, exitCount: () => exitCount,
+    complete() {
+      document[webkit ? 'webkitFullscreenElement' : 'fullscreenElement'] = null;
+      listeners.get(webkit ? 'webkitfullscreenchange' : 'fullscreenchange')?.forEach(callback => callback());
+      resolveExit?.();
+    },
+    fail() { rejectExit(new Error('fullscreen exit rejected')); },
+  };
+}
+
 test('detail enters once from its card and does not replay when the full payload arrives', async () => {
   const { app, calls, exits, card } = setup();
   const first = card('first'), second = card('second');
@@ -206,6 +236,93 @@ test('auxiliary layers use the actual trigger and programmatic opens never reuse
     assert.equal(calls[1].origin.element, null, 'an absent trigger fades instead of expanding from old focus');
     await tick();
   }
+});
+
+test('a source preview waits for native fullscreen exit and retains the clicked control', async () => {
+  const { app, calls, complete, exitCount, listeners } = fullscreenFixture();
+  const clicked = { matches: () => true };
+  const event = { currentTarget: clicked };
+  const opening = app.openReviewSource({ original_url: 'https://example.test/post', title: 'Native post' }, event);
+  event.currentTarget = null;
+  assert.equal(exitCount(), 1);
+  assert.equal(app.sourcePreview.open, false, 'a body sibling must not mount below native fullscreen');
+  assert.equal(calls.length, 0);
+  complete();
+  assert.equal(await opening, true);
+  assert.equal(app.sourcePreview.title, 'Native post');
+  assert.equal(calls[0].origin.element, clicked, 'event cleanup cannot discard the actual source control');
+  assert.ok([...listeners.values()].every(callbacks => callbacks.size === 0), 'native exit listeners are released');
+});
+
+test('a WebKit fullscreen exit without a Promise waits for its real completion event', async () => {
+  const { app, calls, complete, exitCount } = fullscreenFixture({ webkit: true });
+  const opening = app.openReviewSource({ original_url: 'https://example.test/post' });
+  await tick();
+  assert.equal(exitCount(), 1);
+  assert.equal(app.sourcePreview.open, false);
+  assert.equal(calls.length, 0);
+  complete();
+  assert.equal(await opening, true);
+  assert.equal(app.sourcePreview.open, true);
+});
+
+test('the latest source request wins a shared native exit and pending close cancels reopening', async () => {
+  const { app, calls, complete, exitCount } = fullscreenFixture();
+  const first = app.openReviewSource({ original_url: 'https://example.test/first' });
+  app.closeSourcePreview();
+  const clicked = { matches: () => true };
+  const second = app.openReviewSource({ original_url: 'https://example.test/second' }, { currentTarget: clicked });
+  assert.equal(exitCount(), 1, 'pending overlay requests share one native exit');
+  complete();
+  assert.equal(await first, false);
+  assert.equal(await second, true);
+  assert.equal(app.sourcePreview.url, 'https://example.test/second');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].origin.element, clicked);
+
+  const cancelled = fullscreenFixture();
+  const pending = cancelled.app.openReviewSource({ original_url: 'https://example.test/cancelled' });
+  cancelled.app.closeSourcePreview();
+  cancelled.complete();
+  assert.equal(await pending, false);
+  assert.equal(cancelled.app.sourcePreview.open, false);
+  assert.equal(cancelled.calls.length, 0);
+});
+
+test('closing the video while its native exit is pending cannot reopen an orphan source layer', async () => {
+  const { app, calls, complete } = fullscreenFixture();
+  const opening = app.openReviewSource({ original_url: 'https://example.test/post' });
+  app.closeVideoNote(true);
+  complete();
+  assert.equal(await opening, false);
+  assert.equal(app.sourcePreview.open, false);
+  assert.equal(calls.length, 0);
+});
+
+test('failed or stalled native fullscreen exit keeps its source error visible inside the player', async () => {
+  for (const kind of ['rejected', 'stalled']) {
+    const { app, calls, fail, timers, listeners } = fullscreenFixture();
+    const opening = app.openReviewSource({ original_url: 'https://example.test/post' });
+    if (kind === 'rejected') fail();
+    else [...timers.values()][0]();
+    assert.equal(await opening, false);
+    assert.equal(app.sourcePreview.open, false);
+    assert.match(app.videoNote.error, /退出全屏/);
+    assert.equal(app.toast.tone, 'error');
+    assert.equal(calls.length, 0);
+    assert.ok([...listeners.values()].every(callbacks => callbacks.size === 0));
+  }
+});
+
+test('a stale native exit failure cannot replace feedback after the source request was cancelled', async () => {
+  const { app, fail } = fullscreenFixture();
+  const opening = app.openReviewSource({ original_url: 'https://example.test/post' });
+  app.closeSourcePreview();
+  app.videoNote.error = 'new feedback';
+  fail();
+  assert.equal(await opening, false);
+  assert.equal(app.videoNote.error, 'new feedback');
+  assert.equal(app.toast.open, false);
 });
 
 test('an unexpected synchronous animation failure cannot strand a closing layer', () => {

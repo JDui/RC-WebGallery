@@ -198,3 +198,35 @@ test('scrolling a long help tooltip preserves it while scrolling the page dismis
   state.document.fire('scroll', { target: state.document });
   assert.equal(tooltip.hidden, true);
 });
+
+test('help fits its measured box inside the viewport content width, excluding the scrollbar', () => {
+  const state = fixture('ui-help.js'), button = new Element('BUTTON');
+  state.root.clientWidth = 1265;
+  button.rect = { left: 1240, top: 680, bottom: 710, width: 20, height: 30 };
+  state.body.append(button); button.setAttribute('data-tooltip', 'Help'); state.run();
+  const tooltip = state.body.children.at(-1);
+  state.document.fire('click', { target: button });
+  assert.equal(tooltip.style.left, '1053px');
+  assert.equal(tooltip.style.top, '592px');
+});
+
+test('help constrains its size and position to the visual viewport above an on-screen keyboard', () => {
+  const state = fixture('ui-help.js'), button = new Element('BUTTON');
+  const viewport = new Target();
+  Object.assign(viewport, { offsetLeft: 40, offsetTop: 200, width: 260, height: 180 });
+  state.window.visualViewport = viewport;
+  button.rect = { left: 270, top: 340, bottom: 370, width: 20, height: 30 };
+  state.body.append(button); button.setAttribute('data-tooltip', 'Help'); state.run();
+  const tooltip = state.body.children.at(-1);
+  state.document.fire('click', { target: button });
+  assert.equal(tooltip.style.maxWidth, '236px');
+  assert.equal(tooltip.style.maxHeight, '156px');
+  assert.equal(tooltip.style.left, '88px');
+  assert.equal(tooltip.style.top, '252px');
+  for (const event of ['resize', 'scroll']) {
+    state.document.fire('click', { target: button });
+    viewport.fire(event);
+    assert.equal(tooltip.hidden, true, 'moving the visible viewport must not leave detached help floating');
+    assert.equal(button.hasAttribute('aria-describedby'), false);
+  }
+});

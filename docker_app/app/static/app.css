@@ -1943,10 +1943,6 @@ html.is-interacting .detail-card {
     .card-date-format-0 { display: inline; }
 }
 
-@media (min-width: 1101px) and (min-aspect-ratio: 11/10) {
-    .gallery-item-card .card-byline { padding-right: 26px; }
-}
-
 @media (max-width: 760px), (max-width: 1100px) and (orientation: portrait) {
     .gallery-page .card-byline { font-size: 10px; gap: 4px; }
 }
@@ -2253,17 +2249,19 @@ html.is-interacting .detail-card {
 }
 
 .recent-updates-timeline {
+    --timeline-inset: 30px;
+    --timeline-axis: 9px;
     position: relative;
     display: grid;
     gap: 18px;
-    padding-left: 30px;
+    padding-left: var(--timeline-inset);
 }
 
 .recent-updates-timeline::before {
     position: absolute;
     top: 14px;
     bottom: 14px;
-    left: 8px;
+    left: calc(var(--timeline-axis) - 1px);
     width: 2px;
     content: "";
     border-radius: var(--radius-pill);
@@ -2278,7 +2276,7 @@ html.is-interacting .detail-card {
 .recent-update-rail {
     position: absolute;
     top: 22px;
-    left: -30px;
+    left: calc(var(--timeline-axis) - var(--timeline-inset) - 9px);
     z-index: 1;
     display: grid;
     width: 18px;
@@ -2881,6 +2879,7 @@ html.is-interacting .detail-card {
     appearance: none;
     width: 44px;
     height: 24px;
+    padding: 0;
     border-radius: var(--radius-pill);
     border: 1px solid rgba(120, 134, 156, 0.24);
     background: rgba(205, 214, 228, 0.82);
@@ -2938,10 +2937,10 @@ html.is-interacting .detail-card {
     background: rgba(4, 8, 14, 0.96);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-    z-index: 1700;
+    z-index: var(--layer-viewer, 1700);
     overflow: hidden;
     overscroll-behavior: contain;
-    touch-action: none;
+    touch-action: pan-y;
     opacity: 1;
     animation: backdrop-in var(--duration-fast) var(--ease-fluid);
     transition: opacity var(--duration-fast) var(--ease-soft);
@@ -2957,7 +2956,7 @@ html.is-interacting .detail-card {
     background: rgba(238, 243, 248, 0.72);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-    z-index: 60;
+    z-index: var(--layer-detail, 60);
     overflow: hidden;
     overscroll-behavior: contain;
     opacity: 1;
@@ -2966,11 +2965,14 @@ html.is-interacting .detail-card {
 }
 
 .source-preview-backdrop {
-    /* 必须高于 .xhs-video-backdrop(150)：播放页点「原贴」时预览要盖在视频之上 */
-    z-index: 160;
+    z-index: var(--layer-source, 160);
     align-items: center;
     padding: 30px;
     background: rgba(22, 31, 46, 0.28);
+}
+
+.detail-backdrop[data-modal-layer="task"] {
+    z-index: var(--layer-task, 70);
 }
 
 .viewer-backdrop.closing,
@@ -3001,7 +3003,7 @@ html.is-interacting .detail-card {
 .detail-shell {
     width: 100%;
     max-width: 1680px;
-    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
     margin: 0 auto;
     overflow: auto;
     border-radius: var(--radius-panel);
@@ -3049,8 +3051,10 @@ html.is-interacting .detail-card {
 }
 
 .inspector-shell {
+    width: min(980px, 100%);
+    min-width: 0;
     max-width: 980px;
-    max-height: calc(100vh - 52px);
+    max-height: calc(100dvh - 32px);
     margin: 0 auto;
     overflow: auto;
     border-radius: var(--radius-panel);
@@ -3064,9 +3068,11 @@ html.is-interacting .detail-card {
 
 .source-preview-shell {
     display: grid;
-    grid-template-rows: auto minmax(320px, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    min-width: 0;
+    min-height: 0;
     width: min(1080px, calc(100vw - 60px));
-    height: min(760px, calc(100vh - 60px));
+    height: min(760px, calc(100dvh - 60px));
     margin: 0 auto;
     overflow: hidden;
     border-radius: var(--radius-panel);
@@ -3081,11 +3087,15 @@ html.is-interacting .detail-card {
     justify-content: space-between;
     gap: 16px;
     min-width: 0;
+    min-height: 0;
+    max-height: min(45dvh, 240px);
+    overflow-y: auto;
     padding: 18px 20px 14px;
     border-bottom: 1px solid rgba(214, 223, 235, 0.82);
 }
 
 .source-preview-head > div:first-child {
+    flex: 1 1 auto;
     min-width: 0;
 }
 
@@ -3094,6 +3104,10 @@ html.is-interacting .detail-card {
     font-size: 20px;
     line-height: 1.2;
     overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 
 .source-preview-head .detail-copy {
@@ -3101,6 +3115,16 @@ html.is-interacting .detail-card {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.source-preview-head .source-preview-actions {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+}
+
+.source-preview-actions > button {
+    flex: 0 0 auto;
 }
 
 .source-preview-frame {
@@ -3407,9 +3431,9 @@ html.is-interacting .detail-card {
     position: relative;
     display: grid;
     place-items: center;
-    min-height: 100vh;
-    height: 100vh;
-    width: 100vw;
+    min-height: 0;
+    height: 100dvh;
+    width: 100%;
     gap: 0;
     padding: 0;
     overflow: hidden;
@@ -3585,8 +3609,8 @@ html.is-interacting .detail-card {
 .viewer-video {
     position: absolute;
     inset: 0;
-    width: 100vw;
-    height: 100vh;
+    width: 100%;
+    height: 100%;
     object-fit: contain;
     transition: transform var(--duration-base) var(--ease-fluid), opacity var(--duration-fast) var(--ease-soft);
     will-change: transform;
@@ -3873,20 +3897,24 @@ html.is-interacting .detail-card {
 
 .toast-stack {
     position: fixed;
-    right: 24px;
-    bottom: 24px;
-    z-index: 90;
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(12px, env(safe-area-inset-bottom));
+    width: min(360px, calc(100% - 24px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    overflow-y: auto;
+    z-index: var(--layer-toast, 1800);
 }
 
 .toast {
-    min-width: 280px;
-    max-width: 360px;
+    min-width: 0;
+    width: 100%;
     padding: 16px 18px;
     border-radius: var(--radius-card);
     background: rgba(26, 35, 48, 0.9);
     color: #fff;
     box-shadow: 0 26px 38px rgba(17, 24, 39, 0.26);
     animation: toast-in var(--duration-base) var(--ease-fluid);
+    overflow-wrap: anywhere;
 }
 
 .toast strong,
@@ -3903,6 +3931,7 @@ html.is-interacting .detail-card {
 }
 
 .toast-close {
+    flex: 0 0 28px;
     width: 28px;
     height: 28px;
     border-radius: var(--radius-control);
@@ -4362,15 +4391,8 @@ html.is-interacting .detail-card {
     }
 
     .recent-updates-timeline {
-        padding-left: 22px;
-    }
-
-    .recent-updates-timeline::before {
-        left: 5px;
-    }
-
-    .recent-update-rail {
-        left: -22px;
+        --timeline-inset: 22px;
+        --timeline-axis: 6px;
     }
 
     .recent-update-group-main {
@@ -5525,9 +5547,9 @@ html.is-interacting .detail-card {
 
     .source-preview-shell {
         width: calc(100vw - 20px);
-        height: calc(100vh - 20px);
+        height: calc(100dvh - 20px);
         border-radius: var(--radius-panel);
-        grid-template-rows: auto minmax(260px, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
     }
 
     .source-preview-head {
@@ -5538,7 +5560,7 @@ html.is-interacting .detail-card {
 
     .source-preview-head .detail-copy {
         max-width: none;
-        white-space: normal;
+        white-space: nowrap;
     }
 
     .task-detail-grid,
@@ -5621,7 +5643,7 @@ html.is-interacting .detail-card {
 .xhs-video-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 150;
+    z-index: var(--layer-video, 150);
     display: grid;
     place-items: center;
     padding: 20px;
@@ -5725,7 +5747,7 @@ details.settings-card[open] > summary::after { content: "⌃"; }
 .settings-card .settings-card.danger-sub-card[open] > summary { margin-bottom: 12px; }
 .settings-grid .settings-card .settings-card.danger-sub-card { margin-bottom: 10px; }
 
-.detail-sticky-bar { position: sticky; top: -18px; height: 0; z-index: 30; }
+.detail-sticky-bar { position: sticky; top: 0; height: 0; z-index: 30; }
 .detail-compact-bar {
     position: absolute; inset: 0 -2px auto;
     display: flex; align-items: center; gap: 6px;
@@ -5734,8 +5756,7 @@ details.settings-card[open] > summary::after { content: "⌃"; }
     background: var(--surface-strong); box-shadow: var(--shadow-card);
 }
 .detail-compact-title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; }
-.detail-compact-bar .viewer-icon-button { width: 30px; height: 30px; min-height: 30px; padding: 5px; }
-@media (max-width: 760px) { .detail-sticky-bar { top: -10px; } }
+.detail-compact-bar .viewer-icon-button { flex: 0 0 30px; width: 30px; height: 30px; min-height: 30px; padding: 5px; }
 
 .creator-link { color: inherit; text-decoration: none; cursor: pointer; }
 .creator-link:hover { text-decoration: underline; text-underline-offset: 3px; }
@@ -5786,13 +5807,16 @@ details.settings-card[open] > summary::after { content: "⌃"; }
 .media-context-menu {
     position: fixed;
     inset: 0;
-    z-index: 19000;
-    touch-action: none;
+    z-index: var(--layer-media-menu, 19000);
+    touch-action: pan-y;
 }
 
 .media-context-menu-panel {
     position: absolute;
     width: min(220px, calc(100vw - 24px));
+    max-height: calc(100dvh - 24px);
+    overflow: auto;
+    overscroll-behavior: contain;
     padding: 8px;
     border: 1px solid var(--line);
     border-radius: var(--radius-control);
@@ -5817,6 +5841,8 @@ details.settings-card[open] > summary::after { content: "⌃"; }
     cursor: pointer;
 }
 .media-context-menu-panel button:hover { background: var(--accent-soft); }
+.media-context-menu-panel button > span { min-width: 0; overflow-wrap: anywhere; }
+.media-context-menu-panel .trash-icon { flex: 0 0 auto; }
 
 @media (max-width: 1100px), (max-aspect-ratio: 11/10) {
     html, body { overscroll-behavior-x: contain; }

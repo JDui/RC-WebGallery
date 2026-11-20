@@ -10,4 +10,13 @@
     --radius-lg: var(--radius-card);
     --radius-md: var(--radius-control);
     --radius-sm: var(--radius-inset);
+    /* Dialog layers share the shell stacking context; help is a body portal. */
+    --layer-detail: 60;
+    --layer-task: 70;
+    --layer-video: 150;
+    --layer-source: 160;
+    --layer-viewer: 1700;
+    --layer-toast: 1800;
+    --layer-media-menu: 19000;
+    --layer-help: 1800;
 }

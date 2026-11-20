@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-5-detail-preload-2-trackpad-hint-3-responsive-swipe-4-xhs-login-recovery-2-gallery-instant-injection-1-motion-2-detail-close-1-viewer-indicators-1-image-handoff-1-card-dates-1-ui-state-3-paper-palette-1-spatial-motion-2' %}
+    {% set ui_revision = app_version ~ '-creators-random-db-v3-touch-layers-3-xhs-authors-2-sort-pill-1-vertical-viewer-trackpad-2-unified-covers-1-viewer-loading-5-detail-preload-2-trackpad-hint-3-responsive-swipe-4-xhs-login-recovery-2-gallery-instant-injection-1-motion-2-detail-close-1-viewer-indicators-1-image-handoff-1-card-dates-1-ui-state-3-paper-palette-1-spatial-motion-2-gui-layout-1' %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ app_title }}</title>
@@ -338,18 +338,6 @@
                                                     <button class="favorite-button" :class="{ active: item.is_favorite }" :aria-pressed="item.is_favorite" :disabled="!!favoritePending[item.folder_name]" @click.stop="toggleFavorite(item, $event)" aria-label="收藏">
                                                         <svg class="favorite-icon" aria-hidden="true"><use href="#icon-favorites"></use></svg>
                                                     </button>
-                                                    <div class="card-trash-zone" @click.stop>
-                                                        <template x-if="!compactViewport && pendingTrashFolder !== item.folder_name">
-                                                            <button class="mini-trash-button" @click="askTrashFolder(item.folder_name)" :aria-label="item.folder_name?.startsWith('xhs_') ? '删除并取消点赞' : '移入垃圾桶'">
-                                                                <svg class="trash-icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
-                                                            </button>
-                                                        </template>
-                                                        <template x-if="pendingTrashFolder === item.folder_name">
-                                                            <div class="mini-confirm-row single-confirm">
-                                                                <button class="mini-confirm-button danger" @click="trashFolderCard(item.folder_name)" :title="item.folder_name?.startsWith('xhs_') ? '删除并取消点赞' : '移除整组动态并阻止再次采集，本地文件将被清理'" x-text="item.folder_name?.startsWith('xhs_') ? '删除并取消点赞' : '确认移入'"></button>
-                                                            </div>
-                                                        </template>
-                                                    </div>
                                                     <div class="photo-meta">
                                                     <h4 :title="item.title || item.text_prefix" x-text="cardPrimaryText(item)"></h4>
                                                     <button class="card-open-button" type="button" @click.stop="openFolder(item.folder_name, item, $event)" :aria-label="`打开动态：${item.title || item.text_prefix || item.folder_name}`"></button>
@@ -361,10 +349,24 @@
                                                             </template>
                                                         </span>
                                                     </div>
-                                                    <div class="photo-stats">
-                                                        <span x-show="item.image_count > 0 && !item.video_count" x-text="`${item.image_count} 张照片`"></span>
-                                                        <span x-show="item.video_count > 0" x-text="`${item.video_count} 条视频`"></span>
-                                                        <span x-show="item.livephoto_count > 0" x-text="`${item.livephoto_count} 条 Live Photo`"></span>
+                                                    <div class="photo-footer">
+                                                        <div class="photo-stats">
+                                                            <span x-show="item.image_count > 0 && !item.video_count" x-text="`${item.image_count} 张照片`"></span>
+                                                            <span x-show="item.video_count > 0" x-text="`${item.video_count} 条视频`"></span>
+                                                            <span x-show="item.livephoto_count > 0" x-text="`${item.livephoto_count} 条 Live Photo`"></span>
+                                                        </div>
+                                                        <div class="card-trash-zone" @click.stop>
+                                                            <template x-if="!compactViewport && pendingTrashFolder !== item.folder_name">
+                                                                <button class="mini-trash-button" @click="askTrashFolder(item.folder_name)" :aria-label="item.folder_name?.startsWith('xhs_') ? '删除并取消点赞' : '移入垃圾桶'">
+                                                                    <svg class="trash-icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
+                                                                </button>
+                                                            </template>
+                                                            <template x-if="pendingTrashFolder === item.folder_name">
+                                                                <div class="mini-confirm-row single-confirm">
+                                                                    <button class="mini-confirm-button danger" @click="trashFolderCard(item.folder_name)" :title="item.folder_name?.startsWith('xhs_') ? '删除并取消点赞' : '移除整组动态并阻止再次采集，本地文件将被清理'" x-text="item.folder_name?.startsWith('xhs_') ? '删除并取消点赞' : '确认移入'"></button>
+                                                                </div>
+                                                            </template>
+                                                        </div>
                                                     </div>
                                                 </div>
                                                     </div>
@@ -755,11 +757,9 @@
                     <div class="panel-card-actions">
                         <button class="secondary-button" @click="openCurrentTaskInspector($event)" data-tooltip="查看任务日志与详情" aria-label="查看任务日志与详情">日志</button>
                         <button class="secondary-button" x-show="currentTaskHasAddedItems()" @click="openCurrentAddedItems($event)" x-cloak data-tooltip="查看本次任务新增的内容" aria-label="查看本次任务新增的内容">新增内容</button>
-                    </div>
-                    <div class="panel-card-actions" x-show="pullStatus.running" x-cloak>
-                        <button class="secondary-button" :disabled="!pullStatus.running || pullStatus.paused" @click="pauseTask()">暂停</button>
-                        <button class="secondary-button" :disabled="!pullStatus.running || !pullStatus.paused" @click="resumeTask()">继续</button>
-                        <button class="secondary-button danger-button" :disabled="!pullStatus.running" @click="cancelTask()">取消</button>
+                        <button class="secondary-button" x-show="pullStatus.running" x-cloak :disabled="!pullStatus.running || pullStatus.paused" @click="pauseTask()">暂停</button>
+                        <button class="secondary-button" x-show="pullStatus.running" x-cloak :disabled="!pullStatus.running || !pullStatus.paused" @click="resumeTask()">继续</button>
+                        <button class="secondary-button danger-button" x-show="pullStatus.running" x-cloak :disabled="!pullStatus.running" @click="cancelTask()">取消</button>
                     </div>
                 </article>
                 <article class="panel-card task-queue-card" x-show="queuedTasks.length > 0" x-cloak>
@@ -800,9 +800,7 @@
                         <div class="panel-card-actions">
                             <button class="secondary-button" @click="openTaskInspector(item, $event)" data-tooltip="查看任务日志与详情" aria-label="查看任务日志与详情">日志</button>
                             <button class="secondary-button" x-show="taskHasAddedItems(item)" @click="openTaskAddedItems(item, $event)" x-cloak data-tooltip="查看本次任务新增的内容" aria-label="查看本次任务新增的内容">新增内容</button>
-                        </div>
-                        <div class="panel-card-actions" x-show="canRetryTask(item)" x-cloak>
-                            <button class="secondary-button" @click="retryTask(item)">重试</button>
+                            <button class="secondary-button" x-show="canRetryTask(item)" x-cloak @click="retryTask(item)">重试</button>
                         </div>
                     </article>
                 </template>
@@ -1964,6 +1962,15 @@
                 <div class="video-feed-status" role="status" aria-live="polite" x-show="videoFeed.active && (videoFeed.busy || videoFeedMessage || (narrowViewport && videoFeedHintVisible))" x-transition.opacity.duration.400ms x-cloak>
                     <span x-text="videoFeed.busy ? (videoFeedDirection < 0 ? '正在加载上一条…' : '正在加载下一条…') : (videoFeedMessage || '上下滑动切换视频')"></span>
                 </div>
+                <div class="toast-stack" data-testid="fullscreen-toast" x-show="toast.open && videoNoteFullscreen" x-cloak aria-live="polite" aria-atomic="true" data-gesture-ignore @click.stop @wheel.stop @touchstart.stop @touchmove.stop @touchend.stop>
+                    <article class="toast" :class="toast.tone">
+                        <div class="toast-head">
+                            <strong x-text="toast.title"></strong>
+                            <button class="toast-close" @click="closeToast()" aria-label="关闭提示">×</button>
+                        </div>
+                        <p x-show="toast.message" x-text="toast.message"></p>
+                    </article>
+                </div>
             </section>
         </div>
 
@@ -1971,8 +1978,8 @@
             <section class="source-preview-shell" data-layer-motion="source" x-show="sourcePreview.open || sourcePreviewClosing" :class="{ open: sourcePreview.open && !sourcePreviewClosing, closing: sourcePreviewClosing }" @wheel.stop @touchmove.stop>
                 <header class="source-preview-head">
                     <div>
-                        <h3 x-text="sourcePreview.title || '原始内容'"></h3>
-                        <p class="detail-copy" x-text="sourcePreview.subtitle"></p>
+                        <h3 :title="sourcePreview.title || '原始内容'" x-text="sourcePreview.title || '原始内容'"></h3>
+                        <p class="detail-copy" :title="sourcePreview.subtitle" x-text="sourcePreview.subtitle"></p>
                     </div>
                     <div class="button-row source-preview-actions">
                         <template x-if="sourcePreview.reviewId">
@@ -1998,7 +2005,7 @@
 
         <div class="viewer-backdrop" data-testid="viewer-backdrop" data-modal-layer="viewer" data-layer-motion="viewer" :data-layer-motion-pending="layerMotionPending.viewer ? '' : null" role="dialog" aria-label="图片查看器" tabindex="-1" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @click.self="closeViewer()" @wheel.prevent.stop @touchmove.prevent.stop x-cloak>
             <div class="viewer-shell viewer-shell-full" data-layer-motion="viewer" x-show="viewer.open || viewerClosing" :class="{ open: viewer.open && !viewerClosing, closing: viewerClosing }" @pointermove="viewerPointerNearToolbar($event)" @pointerleave="scheduleViewerToolbarHide()" @click="viewerShellClick($event)" @wheel.prevent.stop @touchmove.prevent.stop>
-                <div class="viewer-floating viewer-floating-right" :class="{ 'toolbar-open': viewerToolbarOpen }" role="toolbar" aria-label="图片操作" aria-orientation="vertical" tabindex="0" @pointerenter="if ($event.pointerType === 'mouse') revealViewerToolbar()" @focusin="revealViewerToolbar()" @focusout="$nextTick(() => { if (!$el.contains(document.activeElement)) scheduleViewerToolbarHide() })" @click.stop @wheel.prevent.stop @touchmove.prevent.stop>
+                <div class="viewer-floating viewer-floating-right" :class="{ 'toolbar-open': viewerToolbarOpen }" role="toolbar" aria-label="图片操作" aria-orientation="vertical" tabindex="0" data-gesture-ignore @pointerenter="if ($event.pointerType === 'mouse') revealViewerToolbar()" @focusin="revealViewerToolbar()" @focusout="$nextTick(() => { if (!$el.contains(document.activeElement)) scheduleViewerToolbarHide() })" @click.stop @wheel.stop @touchmove.stop>
                     <div class="viewer-toolbar-actions">
                         <template x-if="deletePairConfirmStep < 1">
                             <button type="button" class="secondary-button danger-button viewer-icon-button" @click="askDeleteViewerPair()" aria-label="删除当前图片" data-tooltip="永久删除当前图片，不可恢复"><svg class="viewer-control-icon" aria-hidden="true"><use href="#icon-trash"></use></svg></button>
@@ -2074,7 +2081,7 @@
         </div>
 
         <div class="media-context-menu" data-modal-layer="media-menu" data-testid="media-context-menu" role="dialog" aria-label="内容操作" tabindex="-1" x-show="mediaContextMenu.open" @click.self="closeMediaContextMenu()" @wheel.prevent.stop @touchmove.prevent.stop x-cloak>
-            <div class="media-context-menu-panel" role="menu" :style="{ left: `${mediaContextMenu.x}px`, top: `${mediaContextMenu.y}px` }" @click.stop>
+            <div class="media-context-menu-panel" x-ref="mediaContextPanel" role="menu" :style="{ left: `${mediaContextMenu.x}px`, top: `${mediaContextMenu.y}px`, visibility: mediaContextMenu.positioned ? 'visible' : 'hidden' }" @click.stop @wheel.stop @touchmove.stop>
                 <small x-text="mediaContextMenu.pairIndex ? '图片操作' : '动态操作'"></small>
                 <button type="button" role="menuitem" x-ref="mediaContextDelete" data-testid="media-menu-delete" @click="chooseMediaContextDelete()">
                     <svg class="trash-icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
@@ -2083,7 +2090,7 @@
             </div>
         </div>
 
-        <div class="toast-stack" x-show="toast.open" x-transition.opacity x-cloak aria-live="polite" aria-atomic="true">
+        <div class="toast-stack" data-testid="global-toast" x-show="toast.open && !videoNoteFullscreen" x-transition.opacity x-cloak aria-live="polite" aria-atomic="true">
             <article class="toast" :class="toast.tone">
                 <div class="toast-head">
                     <strong x-text="toast.title"></strong>
